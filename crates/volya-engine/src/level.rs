@@ -1411,6 +1411,11 @@ fn resolve_surfaces(
     })
 }
 
+/// Keeps a chunk of geometry as it is made: the platform's renderer
+/// ([`NewGameLoad::keep_geometry_with`]); gives back a chunk it can't keep.
+pub type GeometryKeeper =
+    Arc<dyn Fn(objects::GeometryChunk) -> Option<objects::GeometryChunk> + Send + Sync>;
+
 /// A new game's level being loaded stage by stage
 /// (docs/behavior/loading-screen.md section 5): [`NewGameLoad::run`] does
 /// the part of each stage's work this engine has, in the stages' order;
@@ -1458,6 +1463,10 @@ pub struct NewGameLoad {
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
     spawned: Option<objects::Spawned>,
+    /// Keeps each chunk of the objects' own geometry as it is made
+    /// ([`NewGameLoad::keep_geometry_with`]); without it the chunks wait
+    /// with the objects.
+    keep_geometry: Option<GeometryKeeper>,
     /// Per model, per mesh: its surface.
     mesh_surfaces: Vec<Vec<Option<u32>>>,
     objects_not_drawn: Vec<(String, String)>,
@@ -1656,6 +1665,12 @@ impl NewGameLoad {
             .into_iter()
             .filter_map(|p| crate::core::file_cache::file_size(tree, &p).map(|size| (p, size)))
             .collect()
+    }
+
+    /// Has `keep` keep each chunk of the level's own models' geometry as
+    /// `st_client_spawning` makes it ([`objects::spawn`]).
+    pub fn keep_geometry_with(&mut self, keep: Option<GeometryKeeper>) {
+        self.keep_geometry = keep;
     }
 
     /// The game type's prefetched models, for a load that skips
@@ -2043,8 +2058,28 @@ impl NewGameLoad {
                 self.sound = Some(sound);
                 self.weather = Some(weather);
                 let level_objects = std::mem::take(&mut self.level_objects);
-                let spawned =
-                    objects::spawn(tree, data, &dir, &level_objects, self.prefetched.as_ref())?;
+                let mut pending = Vec::new();
+                let keeper = self.keep_geometry.clone();
+                let mut keep = |c: objects::GeometryChunk| {
+                    let left = match &keeper {
+                        Some(k) => k(c),
+                        None => Some(c),
+                    };
+                    if let Some(mut c) = left {
+                        c.vertices.shrink_to_fit();
+                        c.indices.shrink_to_fit();
+                        pending.push(c);
+                    }
+                };
+                let mut spawned = objects::spawn(
+                    tree,
+                    data,
+                    &dir,
+                    &level_objects,
+                    self.prefetched.as_ref(),
+                    &mut keep,
+                )?;
+                spawned.chunks = pending;
                 // The artefacts online at the start are created as the
                 // client creates its objects (artefact-idle-effects.md 3.1),
                 // with their models' bones, on the effects' clock.

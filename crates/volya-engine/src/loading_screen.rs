@@ -34,7 +34,7 @@ use crate::core::text::StringTable;
 use crate::core::vfs::Vfs;
 use crate::data::{self, Assets, GameData};
 use crate::draw::Ctx;
-use crate::level::{LevelScreen, LevelWorld, NewGameLoad};
+use crate::level::{GeometryKeeper, LevelScreen, LevelWorld, NewGameLoad};
 use crate::objects::{GeometryChunk, Prefetched, Prefetching};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
@@ -466,6 +466,12 @@ impl Loading {
     /// The game type's prefetched models, once made or given.
     pub fn prefetched(&self) -> Option<&Arc<Prefetched>> {
         self.load.prefetched()
+    }
+
+    /// Has `keep` keep each chunk of the level's own models' geometry as
+    /// it is made ([`NewGameLoad::keep_geometry_with`]).
+    pub fn keep_geometry_with(&mut self, keep: Option<GeometryKeeper>) {
+        self.load.keep_geometry_with(keep);
     }
 
     /// Whether the loading waits under `st_prefetching_objects` for the

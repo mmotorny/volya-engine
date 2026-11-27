@@ -206,8 +206,8 @@ impl Spares {
 /// The objects' geometry of `level`, taken (once), with the static
 /// world's detail windows after the objects' own, and the world's draws:
 /// its static draws, then its objects'. The prefetched models' geometry its
-/// objects draw is to be kept by `renderer`: what no platform kept yet is
-/// kept now.
+/// objects draw, and the chunks of their own models', are to be kept by
+/// `renderer`: what no platform kept yet is kept now.
 fn world_geometry(
     renderer: &Renderer,
     level: &LevelWorld,
@@ -219,6 +219,16 @@ fn world_geometry(
         if renderer.kept_geometry_set() != Some(p.set()) {
             return Err("the prefetched models' geometry is not kept".into());
         }
+    }
+    for c in level.objects.take_chunks() {
+        renderer.keep_geometry(c.set, c.index, &c.vertices, &c.indices);
+    }
+    let own = (level.objects.draws.iter()).any(|d| {
+        d.kept
+            .is_some_and(|c| c & crate::render::world::LEVEL_CHUNK != 0)
+    });
+    if own && renderer.level_geometry_set() != Some(level.objects.set) {
+        return Err("the objects' own geometry is not kept".into());
     }
     let mut objects = level
         .objects
@@ -904,10 +914,12 @@ impl Presenter {
     }
 
     /// Frees what was prepared for a load that was abandoned (#262): its
-    /// geometry being uploaded and its prepared textures.
+    /// geometry being uploaded, its objects' own geometry kept and its
+    /// prepared textures.
     pub fn abandon_prepared(&mut self, renderer: &Renderer) {
         self.prepared = None;
         renderer.clear_prepared();
+        renderer.release_level_geometry();
     }
 
     /// Uploads about `budget` more bytes of `level`'s geometry before it

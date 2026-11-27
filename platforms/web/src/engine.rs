@@ -159,6 +159,15 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
             // geometry are uploaded while it loads, a piece at a time
             // (#113, #184, #355).
             app.set_prepare_textures(crate::textures::wanted());
+            // The objects' own geometry is kept by the renderer as it is
+            // made, a chunk at a time (#788).
+            app.set_geometry_keeper(Some(std::sync::Arc::new(|c| {
+                crate::gpu::with_renderer(|r| {
+                    r.keep_geometry(c.set, c.index, &c.vertices, &c.indices)
+                })
+                .is_none()
+                .then_some(c)
+            })));
             app.resized(native);
             app.set_saved_games(saves);
             // The page's full screen as it last said (`rs_fullscreen`).

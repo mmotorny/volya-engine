@@ -156,6 +156,12 @@ fn loading_stage_memory() {
     );
     game_blocks.1 = BLOCKS.load(Ordering::Relaxed);
     let mut load = NewGameLoad::default();
+    // As the platform keeps them: each chunk of the objects' own geometry
+    // kept by its renderer (here dropped) as it is made (#788).
+    load.keep_geometry_with(Some(std::sync::Arc::new(|c| {
+        drop(c);
+        None
+    })));
     let base = CURRENT.load(Ordering::Relaxed);
     let mut highest = 0;
     // `* phase cmem` as each caption begins.
@@ -290,8 +296,9 @@ fn loading_stage_memory() {
         k(memory_manager::RENDER.in_use_bytes()),
         k(memory_manager::in_use_bytes()) as i64 - k(h_before) as i64
     );
-    // What the steady level holds besides: the objects' geometry goes
-    // once uploaded; the configuration and the string tables stay.
+    // What the steady level holds besides: the objects' geometry (their
+    // detail windows) goes once uploaded; the configuration and the string
+    // tables stay.
     let freed = |what: &str, f: &mut dyn FnMut()| {
         let (before, blocks) = (
             CURRENT.load(Ordering::Relaxed),

@@ -153,6 +153,11 @@ async fn gpu_done(wait_ms: &mut f64) -> Result<(), JsValue> {
 /// Starts preparing the textures the loading waits for, if it does and no
 /// preparation runs (called after each frame).
 pub fn poll() {
+    // The objects' own geometry kept for a load left before its world was
+    // made (#788).
+    if crate::engine::load().is_none() {
+        crate::gpu::with_renderer(|r| r.release_level_geometry());
+    }
     if RUNNING.with(|r| *r.borrow()) {
         return;
     }

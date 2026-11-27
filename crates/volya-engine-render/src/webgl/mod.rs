@@ -344,6 +344,9 @@ pub struct Renderer {
     /// Geometry kept while the game type stays ([`Renderer::keep_geometry`]):
     /// the prefetched models'.
     kept_geometry: RefCell<KeptGeometry>,
+    /// A level's own models' geometry, kept as it loads until its world is
+    /// made ([`world::LEVEL_CHUNK`]).
+    level_geometry: RefCell<KeptGeometry>,
     /// Bytes of texture data written so far.
     texture_bytes: Cell<u64>,
     /// Bytes of world geometry written so far.
@@ -423,6 +426,7 @@ impl Renderer {
             prepared: Default::default(),
             kept: Default::default(),
             kept_geometry: Default::default(),
+            level_geometry: Default::default(),
             texture_bytes: Default::default(),
             geometry_bytes: Default::default(),
             // Made with the renderer, before any level: what lives across
@@ -498,9 +502,17 @@ impl Renderer {
     /// ([`WorldDraw::kept`]): `vertices` model vertices
     /// ([`world::MODEL_VERTEX_BYTES`] each), `indices` 16-bit (little
     /// endian), each counted from the chunk's first vertex. Another set's
-    /// chunks go first: one set is kept at a time.
+    /// chunks go first: one set is kept at a time. A chunk numbered with
+    /// [`world::LEVEL_CHUNK`] is a level's own, the `level` owner's, kept
+    /// beside them until a world is made ([`Renderer::begin_geometry`]).
     pub fn keep_geometry(&self, set: u64, chunk: u32, vertices: &[u8], indices: &[u8]) {
-        let mut kept = self.kept_geometry.borrow_mut();
+        let level = chunk & world::LEVEL_CHUNK != 0;
+        let (slot, owner) = if level {
+            (&self.level_geometry, Owner::Level)
+        } else {
+            (&self.kept_geometry, Owner::Prefetched)
+        };
+        let mut kept = slot.borrow_mut();
         if kept.set != Some(set) {
             *kept = KeptGeometry {
                 set: Some(set),
@@ -508,7 +520,7 @@ impl Renderer {
             };
         }
         let gl = &self.gl;
-        let chunk_buffers = gl.owning(Owner::Prefetched, || KeptChunk {
+        let chunk_buffers = gl.owning(owner, || KeptChunk {
             vertices: gl.buffer_with(BufferKind::Vertex, vertices),
             indices: gl.buffer_with(BufferKind::Index, indices),
             vertex_count: (vertices.len() / world::MODEL_VERTEX_BYTES) as u32,
@@ -519,7 +531,7 @@ impl Renderer {
         // Handed to the GPU at once, as a world's pieces are.
         crate::stats::submit();
         gl.flush();
-        let at = chunk as usize;
+        let at = (chunk & !world::LEVEL_CHUNK) as usize;
         if kept.chunks.len() <= at {
             kept.chunks.resize(at + 1, None);
         }
@@ -542,14 +554,27 @@ impl Renderer {
         (chunks.count(), bytes)
     }
 
+    /// The set of a level's own geometry kept ([`world::LEVEL_CHUNK`]),
+    /// if any.
+    pub fn level_geometry_set(&self) -> Option<u64> {
+        self.level_geometry.borrow().set
+    }
+
+    /// Releases a level's own geometry kept, for a level abandoned before
+    /// its world is made.
+    pub fn release_level_geometry(&self) {
+        *self.level_geometry.borrow_mut() = KeptGeometry::default();
+    }
+
     /// Kept chunk `chunk`, if any.
     pub(crate) fn kept_chunk(&self, chunk: u32) -> Option<KeptChunk> {
-        self.kept_geometry
-            .borrow()
-            .chunks
-            .get(chunk as usize)
-            .cloned()
-            .flatten()
+        let slot = if chunk & world::LEVEL_CHUNK != 0 {
+            &self.level_geometry
+        } else {
+            &self.kept_geometry
+        };
+        let at = (chunk & !world::LEVEL_CHUNK) as usize;
+        slot.borrow().chunks.get(at).cloned().flatten()
     }
 
     /// The buffers, textures and vertex arrays its context holds now

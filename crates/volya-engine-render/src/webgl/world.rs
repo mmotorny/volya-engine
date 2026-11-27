@@ -958,6 +958,8 @@ impl Renderer {
                 chunks.insert(at, (c, chunk));
             }
         }
+        // The world holds the level's own chunks it draws from now on.
+        self.release_level_geometry();
         for d in draws {
             let [first, count] = d.windows.map(|w| w as usize);
             let windows_fit = (objects.windows.get(first..first.saturating_add(count)))
@@ -1097,7 +1099,11 @@ impl Renderer {
         }
         // The objects' buffers follow the level's.
         let (object_vb, object_ib) = (vertex_buffers.len() as u32, index_buffers.len() as u32);
-        let mut object_buffer_bytes = 0;
+        // The level's own chunks are the world's.
+        let mut object_buffer_bytes: u64 = (chunks.iter())
+            .filter(|(c, _)| c & LEVEL_CHUNK != 0)
+            .map(|(_, k)| k.vertices.size() + k.indices.size())
+            .sum();
         let mut object_bases = vec![0];
         if !objects.vertices.is_empty() {
             // Whole 16-byte vertices: a multiple of 4 bytes, as buffers need.

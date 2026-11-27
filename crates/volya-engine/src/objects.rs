@@ -14,10 +14,10 @@
 //! the switch pass, the models (taken from the game type's prefetched ones,
 //! [`Prefetched`], where they hold the file), their surfaces, the light
 //! inputs. Each model file is read once and shared by every object showing
-//! it; the vertices of the models not prefetched go into one buffer for all
-//! of them, which the presenter uploads with the static world and then
-//! drops; the prefetched ones are drawn from the geometry the renderer
-//! keeps.
+//! it; the meshes of the models not prefetched are placed in chunks of the
+//! level's own geometry as they are laid out, each kept by the platform's
+//! renderer once full (or by the presenter with the world); the prefetched
+//! ones are drawn from the geometry the renderer keeps for the game type.
 
 use std::collections::HashMap;
 use std::io;
@@ -32,7 +32,7 @@ use crate::core::object_light;
 use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
-use crate::render::world::{DetailWindow, ObjectGeometry, model_vertex};
+use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, model_vertex};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
@@ -581,12 +581,14 @@ struct PrefetchedModel {
 /// indices count from its first vertex (WebGL 2 has no base vertex).
 pub const CHUNK_VERTICES: usize = 1 << 16;
 
-/// A chunk of the prefetched models' geometry, for the renderer to keep:
-/// whole meshes' model vertices, and their indices, 16-bit little-endian,
-/// each counted from the chunk's first vertex (padded to whole words).
+/// A chunk of the prefetched models' geometry, or of a level's own models'
+/// (its index with [`LEVEL_CHUNK`]), for the renderer to keep: whole
+/// meshes' model vertices, and their indices, 16-bit little-endian, each
+/// counted from the chunk's first vertex (padded to whole words).
 #[derive(Debug, Default)]
 pub struct GeometryChunk {
-    /// The [`Prefetched`] whose chunk it is ([`Prefetched::set`]).
+    /// The [`Prefetched`] or [`Spawned`] whose chunk it is
+    /// ([`Prefetched::set`], [`Spawned::set`]).
     pub set: u64,
     pub index: u32,
     pub vertices: Vec<u8>,
@@ -610,10 +612,97 @@ pub struct Prefetching {
     made: Prefetched,
     /// By located path, lower-cased: the model's index.
     by_path: HashMap<String, usize>,
-    /// The chunk being filled.
-    open: GeometryChunk,
+    chunks: Chunks,
     /// One model's layout at a time.
     scratch: ObjectGeometry,
+}
+
+/// Meshes placed in chunks of kept geometry as they are laid out, one
+/// chunk open at a time, each handed on once full.
+#[derive(Debug)]
+struct Chunks {
+    /// The chunk being filled.
+    open: GeometryChunk,
+    /// The chunks handed on, and the bytes of their vertices and indices.
+    count: u32,
+    vertices: u64,
+    indices: u64,
+}
+
+impl Chunks {
+    /// Chunks of set `set`, numbered from `first`.
+    fn new(set: u64, first: u32) -> Self {
+        Self {
+            open: GeometryChunk {
+                set,
+                index: first,
+                ..Default::default()
+            },
+            count: 0,
+            vertices: 0,
+            indices: 0,
+        }
+    }
+
+    /// Places `mesh` of the file at `path`, laid out in `scratch` by
+    /// [`add_model`], in the open chunk, first handing that to `keep` if
+    /// the mesh doesn't fit beside its vertices; whether it handed one.
+    fn place(
+        &mut self,
+        path: &str,
+        mesh: &mut MeshRange,
+        scratch: &ObjectGeometry,
+        keep: &mut dyn FnMut(GeometryChunk),
+    ) -> io::Result<bool> {
+        let bytes = crate::render::world::MODEL_VERTEX_BYTES;
+        let count = mesh.vertex_count as usize;
+        let mut kept = false;
+        if self.open.vertex_count() + count > CHUNK_VERTICES && !self.open.vertices.is_empty() {
+            self.close(keep);
+            kept = true;
+        }
+        let base = self.open.vertex_count();
+        let first = mesh.first_vertex as usize * bytes;
+        let vertices = &scratch.vertices[first..first + count * bytes];
+        self.open.vertices.extend_from_slice(vertices);
+        let first_index = self.open.indices.len() / 2;
+        let from = mesh.first_index as usize;
+        let indices = &scratch.indices[from..from + mesh.index_count as usize];
+        for &i in indices {
+            let i = u16::try_from(usize::from(i) + base)
+                .map_err(|_| invalid(format!("{path}: an index past 16 bits")))?;
+            self.open.indices.extend_from_slice(&i.to_le_bytes());
+        }
+        mesh.kept = Some(self.open.index);
+        mesh.first_vertex = base as u32;
+        mesh.first_index = first_index as u32;
+        Ok(kept)
+    }
+
+    /// Hands the chunk being filled to `keep` and begins the next.
+    fn close(&mut self, keep: &mut dyn FnMut(GeometryChunk)) {
+        let next = GeometryChunk {
+            set: self.open.set,
+            index: self.open.index + 1,
+            ..Default::default()
+        };
+        let mut chunk = std::mem::replace(&mut self.open, next);
+        // Whole words.
+        if !chunk.indices.len().is_multiple_of(4) {
+            chunk.indices.extend_from_slice(&[0, 0]);
+        }
+        self.count += 1;
+        self.vertices += chunk.vertices.len() as u64;
+        self.indices += chunk.indices.len() as u64;
+        keep(chunk);
+    }
+
+    /// Hands the chunk being filled to `keep`, if it holds any mesh.
+    fn finish(&mut self, keep: &mut dyn FnMut(GeometryChunk)) {
+        if !self.open.vertices.is_empty() {
+            self.close(keep);
+        }
+    }
 }
 
 /// The sets of kept geometry made so far.
@@ -635,10 +724,7 @@ impl Prefetching {
                 set,
                 ..Default::default()
             },
-            open: GeometryChunk {
-                set,
-                ..Default::default()
-            },
+            chunks: Chunks::new(set, 0),
             scratch: ObjectGeometry::default(),
         }
     }
@@ -656,7 +742,6 @@ impl Prefetching {
         data: &GameData,
         keep: &mut dyn FnMut(GeometryChunk),
     ) -> io::Result<bool> {
-        let bytes = crate::render::world::MODEL_VERTEX_BYTES;
         let mut kept = false;
         while !kept && let Some(name) = self.visuals.get(self.next) {
             self.next += 1;
@@ -674,28 +759,7 @@ impl Prefetching {
                 add_model(&path, &parsed, &mut self.scratch, &mut self.made.names)?
             };
             for mesh in &mut model.meshes {
-                let count = mesh.vertex_count as usize;
-                if self.open.vertex_count() + count > CHUNK_VERTICES
-                    && !self.open.vertices.is_empty()
-                {
-                    self.close(keep);
-                    kept = true;
-                }
-                let base = self.open.vertex_count();
-                let first = mesh.first_vertex as usize * bytes;
-                let vertices = &self.scratch.vertices[first..first + count * bytes];
-                self.open.vertices.extend_from_slice(vertices);
-                let first_index = self.open.indices.len() / 2;
-                let from = mesh.first_index as usize;
-                let indices = &self.scratch.indices[from..from + mesh.index_count as usize];
-                for &i in indices {
-                    let i = u16::try_from(usize::from(i) + base)
-                        .map_err(|_| invalid(format!("{path}: an index past 16 bits")))?;
-                    self.open.indices.extend_from_slice(&i.to_le_bytes());
-                }
-                mesh.kept = Some(self.open.index);
-                mesh.first_vertex = base as u32;
-                mesh.first_index = first_index as u32;
+                kept |= self.chunks.place(&path, mesh, &self.scratch, keep)?;
             }
             self.made.models.push(PrefetchedModel {
                 model,
@@ -706,35 +770,16 @@ impl Prefetching {
         if self.next < self.visuals.len() {
             return Ok(false);
         }
-        if !self.open.vertices.is_empty() {
-            self.close(keep);
-        }
+        self.chunks.finish(keep);
         self.scratch = ObjectGeometry::default();
         Ok(true)
-    }
-
-    /// Hands the chunk being filled to `keep` and begins the next.
-    fn close(&mut self, keep: &mut dyn FnMut(GeometryChunk)) {
-        let next = GeometryChunk {
-            set: self.made.set,
-            index: self.open.index + 1,
-            ..Default::default()
-        };
-        let mut chunk = std::mem::replace(&mut self.open, next);
-        // Whole words.
-        if !chunk.indices.len().is_multiple_of(4) {
-            chunk.indices.extend_from_slice(&[0, 0]);
-        }
-        let m = &mut self.made;
-        m.chunks += 1;
-        m.vertices += chunk.vertices.len() as u64;
-        m.indices += chunk.indices.len() as u64;
-        keep(chunk);
     }
 
     /// The models loaded, once [`Prefetching::step`] has loaded every one.
     pub fn finish(self) -> Prefetched {
         let mut made = self.made;
+        let c = &self.chunks;
+        (made.chunks, made.vertices, made.indices) = (c.count, c.vertices, c.indices);
         let mut by_path: Vec<(String, u32)> = (self.by_path.into_iter())
             .map(|(path, i)| (path, i as u32))
             .collect();
@@ -1053,7 +1098,14 @@ pub struct Spawned {
     pub models: Vec<LoadedModel>,
     pub instances: Vec<Instance>,
     pub lamps: Vec<LampLights>,
+    /// The detail windows, and the meshes too large for a chunk.
     pub geometry: ObjectGeometry,
+    /// Which set of kept geometry the chunks of the models not prefetched
+    /// are ([`GeometryChunk::set`]; their indices with [`LEVEL_CHUNK`]).
+    pub set: u64,
+    /// Those chunks no platform kept as they were made, for a presenter to
+    /// keep.
+    pub chunks: Vec<GeometryChunk>,
     /// The models' names.
     pub names: Names,
     /// The prefetched models the models taken from them are drawn from.
@@ -1061,20 +1113,29 @@ pub struct Spawned {
 }
 
 /// Loads the visuals of `objects` (sections 3, 4): each model file once,
-/// taken from `prefetched` where it holds the file.
+/// taken from `prefetched` where it holds the file. The others' meshes are
+/// placed in chunks of the level's kept geometry as they are laid out,
+/// each handed to `keep` once full, so the CPU holds one at a time
+/// (docs/architecture/memory.md, #788); a mesh of more vertices than a
+/// chunk holds stays in [`Spawned::geometry`].
 pub fn spawn(
     tree: &dyn Vfs,
     data: &GameData,
     dir: &str,
     objects: &[LevelObject],
     prefetched: Option<&Arc<Prefetched>>,
+    keep: &mut dyn FnMut(GeometryChunk),
 ) -> io::Result<Spawned> {
+    let set = SETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let mut chunks = Chunks::new(set, LEVEL_CHUNK);
+    let mut scratch = ObjectGeometry::default();
     let mut characters = Characters::new(tree, data);
     // Models by file path, and by visual name (located once each).
     let mut by_path: HashMap<String, usize> = HashMap::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
     let mut s = Spawned {
         online: objects.iter().filter(|o| o.online).count(),
+        set,
         ..Default::default()
     };
     let mut classes: HashMap<&str, usize> = HashMap::new();
@@ -1104,7 +1165,20 @@ pub fn spawn(
                                 let bytes = vfs::read(tree, &path)?;
                                 let parsed = Model::parse(&bytes)
                                     .map_err(|e| invalid(format!("{path}: {e}")))?;
-                                add_model(&path, &parsed, &mut s.geometry, &mut s.names)?
+                                scratch.vertices.clear();
+                                scratch.indices.clear();
+                                scratch.windows.clear();
+                                let mut model =
+                                    add_model(&path, &parsed, &mut scratch, &mut s.names)?;
+                                place_own(
+                                    &path,
+                                    &mut model,
+                                    &scratch,
+                                    &mut chunks,
+                                    &mut s.geometry,
+                                    keep,
+                                )?;
+                                model
                             }
                         };
                         s.models.push(model);
@@ -1153,12 +1227,49 @@ pub fn spawn(
         .collect();
     by_class.sort();
     s.online_by_class = by_class;
+    chunks.finish(keep);
     // Grown model by model: the spare capacity (a third of it for
     // `l01_escape`, measured) goes, shrunk in place (#357).
     s.geometry.vertices.shrink_to_fit();
     s.geometry.indices.shrink_to_fit();
+    s.geometry.windows.shrink_to_fit();
     s.names.seal();
     Ok(s)
+}
+
+/// Places the meshes of `model`, the file at `path` laid out in `scratch`
+/// by [`add_model`], in `chunks`, each chunk handed to `keep` once full; a
+/// mesh of more vertices than a chunk holds goes to `geometry`, where its
+/// detail windows go too.
+fn place_own(
+    path: &str,
+    model: &mut LoadedModel,
+    scratch: &ObjectGeometry,
+    chunks: &mut Chunks,
+    geometry: &mut ObjectGeometry,
+    keep: &mut dyn FnMut(GeometryChunk),
+) -> io::Result<()> {
+    let bytes = crate::render::world::MODEL_VERTEX_BYTES;
+    let window = geometry.windows.len() as u32;
+    geometry.windows.extend_from_slice(&scratch.windows);
+    for mesh in &mut model.meshes {
+        mesh.windows[0] += window;
+        if mesh.vertex_count as usize <= CHUNK_VERTICES {
+            chunks.place(path, mesh, scratch, keep)?;
+            continue;
+        }
+        let first = mesh.first_vertex as usize * bytes;
+        let to = first + mesh.vertex_count as usize * bytes;
+        mesh.first_vertex = (geometry.vertices.len() / bytes) as u32;
+        geometry
+            .vertices
+            .extend_from_slice(&scratch.vertices[first..to]);
+        let from = mesh.first_index as usize;
+        mesh.first_index = geometry.indices.len() as u32;
+        (geometry.indices)
+            .extend_from_slice(&scratch.indices[from..from + mesh.index_count as usize]);
+    }
+    Ok(())
 }
 
 /// One object mesh's draw: a range of [`ObjectGeometry`] or of a kept
@@ -1211,6 +1322,10 @@ pub struct LevelObjects {
     /// Shader pairs not drawn, with why.
     pub not_drawn: Vec<(String, String)>,
     geometry: Mutex<Option<ObjectGeometry>>,
+    /// The set of kept geometry its own models' chunks are
+    /// ([`Spawned::set`]), and those not kept yet.
+    pub set: u64,
+    chunks: Mutex<Vec<GeometryChunk>>,
     /// The prefetched models whose kept geometry the draws with
     /// [`ObjectDraw::kept`] read.
     pub prefetched: Option<Arc<Prefetched>>,
@@ -1223,6 +1338,12 @@ impl LevelObjects {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
+    }
+
+    /// The chunks of its own models' geometry not kept yet, once: whoever
+    /// takes them keeps them.
+    pub fn take_chunks(&self) -> Vec<GeometryChunk> {
+        std::mem::take(&mut *self.chunks.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// The objects with their draws: `mesh_surfaces[m][k]` is the surface
@@ -1271,6 +1392,8 @@ impl LevelObjects {
             lamps: spawned.lamps,
             not_drawn,
             geometry: Mutex::new(Some(spawned.geometry)),
+            set: spawned.set,
+            chunks: Mutex::new(spawned.chunks),
             prefetched: spawned.prefetched,
         }
     }

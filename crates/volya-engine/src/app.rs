@@ -34,7 +34,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
-use crate::level::{LevelScreen, LevelState, LevelWorld};
+use crate::level::{GeometryKeeper, LevelScreen, LevelState, LevelWorld};
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -622,6 +622,9 @@ pub struct App {
     /// Whether the platform prepares a level's textures while it loads
     /// ([`App::set_prepare_textures`]).
     prepare_textures: bool,
+    /// Keeps the level's own models' geometry as it loads
+    /// ([`App::set_geometry_keeper`]).
+    geometry_keeper: Option<GeometryKeeper>,
     /// The menu was asked for (the `quit` key, a gamepad's east button,
     /// the touch Menu button, a lost pointer lock) while the loading image
     /// covered the level: it opens once the player's controls are live
@@ -865,6 +868,7 @@ impl App {
             frames: 0,
             unlock_opened: None,
             prepare_textures: false,
+            geometry_keeper: None,
             menu_asked: false,
             hidden: false,
             shown: false,
@@ -899,6 +903,14 @@ impl App {
     /// GPU lacks the textures' format transcodes them there).
     pub fn set_prepare_textures(&mut self, on: bool) {
         self.prepare_textures = on;
+    }
+
+    /// Has `keep` (the platform's renderer) keep each chunk of a New
+    /// Game's own models' geometry as `st_client_spawning` makes it, so
+    /// the CPU holds one at a time (docs/architecture/memory.md, #788);
+    /// without it the chunks wait with the level until its world is made.
+    pub fn set_geometry_keeper(&mut self, keep: Option<GeometryKeeper>) {
+        self.geometry_keeper = keep;
     }
 
     /// The level's texture files, while the loading waits for the platform
@@ -1550,6 +1562,7 @@ impl App {
                             self.prefetched = None;
                         }
                         let mut loading = Loading::start(data, changed, self.prefetched.clone());
+                        loading.keep_geometry_with(self.geometry_keeper.clone());
                         // The first caption begins as the load does.
                         self.phase_started = Some(time_ms);
                         let memory = self

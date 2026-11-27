@@ -540,8 +540,8 @@ fn loading_stage_times() {
 /// out: the same models and meshes as a load without the prefetching (a
 /// later New Game of the game type given none), each prefetched mesh's
 /// vertices and indices in its kept chunk those of its file, the indices
-/// counted from the chunk's first vertex, and the rest of the geometry the
-/// same.
+/// counted from the chunk's first vertex; the others' in the level's own
+/// chunks (#788) as in that load's, and the rest of the geometry the same.
 #[test]
 fn prefetched_models_lay_out_as_their_files() {
     let Some(archives) = gog_archives::archives() else {
@@ -573,31 +573,55 @@ fn prefetched_models_lay_out_as_their_files() {
                 (names.get(m.path).to_owned(), meshes)
             })
             .collect();
-        (prefetched, models, objects.take_geometry().unwrap())
+        let own = objects.take_chunks();
+        assert!(own.iter().all(|c| c.set == objects.set));
+        (prefetched, models, objects.take_geometry().unwrap(), own)
     };
-    let (prefetched, with, with_geometry) = load(&Stage::ALL);
-    let (none, without, without_geometry) = load(&Stage::ALL[1..]);
+    let (prefetched, with, with_geometry, with_own) = load(&Stage::ALL);
+    let (none, without, without_geometry, without_own) = load(&Stage::ALL[1..]);
     let p = prefetched.unwrap();
     let chunks = p.take_pending();
     let (count, vertices, indices) = p.geometry();
     eprintln!(
-        "{} models prefetched, {} texture files, their geometry {count} chunks, {vertices} bytes of vertices and {indices} of indices; the level's {} models, {} of them prefetched",
+        "{} models prefetched, {} texture files, their geometry {count} chunks, {vertices} bytes of vertices and {indices} of indices; the level's {} models, {} of them prefetched; its own geometry {} chunks",
         p.len(),
         p.textures.len(),
         with.len(),
-        with.iter().filter(|(path, _)| p.holds(path)).count()
+        with.iter().filter(|(path, _)| p.holds(path)).count(),
+        with_own.len()
     );
     assert!(!p.is_empty() && none.is_none());
     assert_eq!(chunks.len(), count as usize);
     assert!(chunks.iter().all(|c| c.set == p.set()));
     assert_eq!(with.len(), without.len());
-    // What the level's own geometry holds, the models not prefetched'.
-    let mut own = volya_engine::render::world::ObjectGeometry {
-        windows: with_geometry.windows.clone(),
-        ..Default::default()
-    };
     const V: usize = volya_engine::render::world::MODEL_VERTEX_BYTES;
+    const LEVEL: u32 = volya_engine::render::world::LEVEL_CHUNK;
     let index = |bytes: &[u8], i: usize| u16::from_le_bytes([bytes[2 * i], bytes[2 * i + 1]]);
+    // A mesh's vertices and its indices counted from its first vertex,
+    // wherever they are.
+    let layout = |m: &volya_engine::objects::MeshRange,
+                  geometry: &volya_engine::render::world::ObjectGeometry,
+                  own: &[volya_engine::objects::GeometryChunk]| {
+        let (v, i) = (m.first_vertex as usize, m.first_index as usize);
+        let (n, k) = (m.vertex_count as usize, m.index_count as usize);
+        match m.kept {
+            Some(c) => {
+                let c = if c & LEVEL != 0 {
+                    &own[(c & !LEVEL) as usize]
+                } else {
+                    &chunks[c as usize]
+                };
+                let indices: Vec<u16> = (0..k)
+                    .map(|j| index(&c.indices, i + j) - v as u16)
+                    .collect();
+                (c.vertices[v * V..(v + n) * V].to_vec(), indices)
+            }
+            None => (
+                geometry.vertices[v * V..(v + n) * V].to_vec(),
+                geometry.indices[i..i + k].to_vec(),
+            ),
+        }
+    };
     for ((path, meshes), (other, file)) in with.iter().zip(&without) {
         assert_eq!(path, other);
         assert_eq!(meshes.len(), file.len(), "{path}");
@@ -607,36 +631,15 @@ fn prefetched_models_lay_out_as_their_files() {
             };
             assert_eq!(ranges(m), ranges(f), "{path}");
             assert_eq!((texture, shader), (file_texture, file_shader), "{path}");
-            assert_eq!(m.kept.is_some(), p.holds(path), "{path}");
-            let (fv, fi) = (f.first_vertex as usize, f.first_index as usize);
-            let file_vertices =
-                &without_geometry.vertices[fv * V..(fv + m.vertex_count as usize) * V];
-            let file_indices = &without_geometry.indices[fi..fi + m.index_count as usize];
-            match m.kept {
-                Some(c) => {
-                    let c = &chunks[c as usize];
-                    let (v, i) = (m.first_vertex as usize, m.first_index as usize);
-                    assert_eq!(
-                        &c.vertices[v * V..(v + m.vertex_count as usize) * V],
-                        file_vertices,
-                        "{path}"
-                    );
-                    let kept: Vec<u16> = (0..m.index_count as usize)
-                        .map(|k| index(&c.indices, i + k) - v as u16)
-                        .collect();
-                    assert_eq!(kept, file_indices, "{path}");
-                }
-                None => {
-                    let (v, i) = (m.first_vertex as usize, m.first_index as usize);
-                    assert_eq!(v, own.vertices.len() / V, "{path}");
-                    assert_eq!(i, own.indices.len(), "{path}");
-                    own.vertices.extend_from_slice(file_vertices);
-                    own.indices.extend_from_slice(file_indices);
-                }
-            }
+            let prefetched = m.kept.is_some_and(|c| c & LEVEL == 0);
+            assert_eq!(prefetched, p.holds(path), "{path}");
+            assert!(f.kept.is_none_or(|c| c & LEVEL != 0), "{path}");
+            assert!(
+                layout(m, &with_geometry, &with_own) == layout(f, &without_geometry, &without_own),
+                "{path}"
+            );
         }
     }
-    assert!(own == with_geometry, "the objects' own geometry");
     assert_eq!(
         with_geometry.windows, without_geometry.windows,
         "the detail windows"

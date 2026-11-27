@@ -350,6 +350,11 @@ pub struct WorldDraw {
     pub kept: Option<u32>,
 }
 
+/// Set in a kept chunk's number for a chunk of a level's own geometry,
+/// kept until the level's world is made (`Renderer::keep_geometry`),
+/// beside the prefetched models' kept while the game type stays.
+pub const LEVEL_CHUNK: u32 = 1 << 31;
+
 /// Bytes of one draw's record in the draws buffer.
 pub(crate) const DRAW_BYTES: usize = 144;
 /// RGBA32F texels per draw record, and records per row of the draws
