@@ -83,14 +83,27 @@ pub fn float(value: &str) -> f32 {
 
 /// [`float`], or `None` when the value has no number prefix.
 fn parse_float(value: &str) -> Option<f32> {
-    let s = skip_space(value.as_bytes());
-    let len = float_prefix(s);
+    scan_double(value).map(|(v, _)| v as f32)
+}
+
+/// [`float`] in double precision, as `atof` returns it.
+pub fn double(value: &str) -> f64 {
+    scan_double(value).map_or(0.0, |(v, _)| v)
+}
+
+/// One decimal number as the C library scans it (`atof`, `scanf`'s `%f`):
+/// leading whitespace skipped, the longest number prefix as `f64`, and the
+/// text after it; `None` without a number.
+pub fn scan_double(value: &str) -> Option<(f64, &str)> {
+    let skipped = value.len() - skip_space(value.as_bytes()).len();
+    let s = &value[skipped..];
+    let len = float_prefix(s.as_bytes());
     if len == 0 {
         return None;
     }
-    let text = std::str::from_utf8(&s[..len]).expect("ASCII prefix");
-    // Rust accepts `3.` and `.2` as C does; parse as double first, as `atof`.
-    Some(text.parse::<f64>().expect("valid float prefix") as f32)
+    // Rust accepts `3.` and `.2` as C does.
+    let v = s[..len].parse::<f64>().expect("valid float prefix");
+    Some((v, &s[len..]))
 }
 
 /// [`int`], or `None` when the value has no integer prefix.
