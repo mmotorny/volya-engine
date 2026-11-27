@@ -2,12 +2,15 @@
  * SPDX-License-Identifier: BSD-3-Clause */
 
 /* The frame clock's shared memory, between the proxy winmm.dll in the game
- * (frameclock.c) and the driver (capture.c). The driver creates it before it
- * starts the game; the proxy opens it when the process loads it and runs
- * the clock only then (without it, it forwards everything unchanged).
+ * (frameclock.c), the counter client the game runs under (counter.c) and
+ * the driver (capture.c). The driver creates it before it starts the game;
+ * the proxy opens it when the process loads it and runs the clock only then
+ * (without it, it forwards everything unchanged); the client opens it when
+ * it starts, before the game's first instruction.
  *
  * Every field is written by one side only and read with full barriers
- * (Interlocked operations), so each side sees the other's writes in order. */
+ * (Interlocked operations, sequentially consistent atomics), so each side
+ * sees the other's writes in order. */
 
 #ifndef VOLYA_FRAMECLOCK_H
 #define VOLYA_FRAMECLOCK_H
@@ -16,7 +19,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 5
+#define FRAMECLOCK_VERSION 6
 
 /* Ticks of the clock: 100 ns, the unit of the system time. Every clock the
  * game reads is derived from one count of them (frameclock.c). */
@@ -66,7 +69,20 @@ struct frameclock {
     volatile int64_t frame_sleeps_waited; /* those that waited */
     volatile int64_t sync_timeouts;   /* waits released by the watchdog */
     volatile int64_t idle_sleeps;     /* main-thread Sleep(1 ms or more) after the first frame */
+
+    /* Written by the counter client (counter.c, original-determinism.md 7,
+     * rule 1). */
+    volatile int64_t counter_attached; /* 1 once the client runs in the game */
+    volatile int64_t counter_reads;    /* time-stamp-counter reads substituted, all told */
     uint8_t pixels[FRAMECLOCK_MAX_PIXELS * 4]; /* rows top first, B G R X */
 };
+
+/* The clock in ticks, as every clock the game reads derives it (the proxy
+ * counts the read first, frameclock.c). */
+static inline uint64_t frameclock_ticks(struct frameclock *c) {
+    return (uint64_t)__atomic_load_n(&c->frames, __ATOMIC_SEQ_CST) * c->step +
+           (uint64_t)__atomic_load_n(&c->extra, __ATOMIC_SEQ_CST) +
+           (uint64_t)__atomic_load_n(&c->sleep_ticks, __ATOMIC_SEQ_CST);
+}
 
 #endif

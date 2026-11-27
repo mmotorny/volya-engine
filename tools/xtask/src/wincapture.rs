@@ -81,7 +81,9 @@ const FLAGS: &[&str] = &[
 
 /// `build CLANG OUT KIND SRC...`: the C sources compiled by `clang`
 /// (llvm-mingw's `i686-w64-mingw32-clang`) into `OUT`, the proxy `winmm.dll`
-/// (KIND `dll`) or the driver (KIND `exe`).
+/// (KIND `dll`), the driver (KIND `exe`) or the counter's DynamoRIO client
+/// (KIND `client`: with DynamoRIO's headers, the folder of its `dr_api.h`,
+/// and its import library `dynamorio.lib` among the sources).
 pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
     let mut command = Command::new(clang);
     command
@@ -93,7 +95,22 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
         // Exports undecorated, as winmm's.
         "dll" => command.args(["-shared", "-Wl,--kill-at", "-luser32"]),
         "exe" => command.args(["-lbcrypt", "-lwinmm", "-luser32"]),
-        _ => return Err(format!("{kind}: not dll or exe")),
+        // No C runtime: DynamoRIO loads a client privately and its own API
+        // replaces the runtime's (counter.c).
+        "client" => {
+            let api = sources
+                .iter()
+                .find(|s| s.ends_with("/dr_api.h"))
+                .ok_or("client: no dr_api.h")?;
+            let include = Path::new(api).parent().ok_or("dr_api.h: no folder")?;
+            command
+                .arg("-isystem")
+                .arg(include)
+                .args(["-shared", "-nostdlib"])
+                .args(sources.iter().filter(|s| s.ends_with(".lib")))
+                .arg("-lkernel32")
+        }
+        _ => return Err(format!("{kind}: not dll, exe or client")),
     };
     run(&mut command)
 }

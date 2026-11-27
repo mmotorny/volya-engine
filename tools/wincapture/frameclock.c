@@ -126,8 +126,7 @@ static ULONGLONG ticks(void) {
     } else {
         InterlockedIncrement64((volatile LONGLONG *)&clock_->other_reads);
     }
-    return (ULONGLONG)load(&clock_->frames) * clock_->step + (ULONGLONG)load(&clock_->extra) +
-           (ULONGLONG)load(&clock_->sleep_ticks);
+    return frameclock_ticks(clock_);
 }
 
 /* --- The proxy's log ---------------------------------------------------- */

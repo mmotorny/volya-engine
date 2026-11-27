@@ -112,10 +112,20 @@ fn copy_all(from: &Path, to: &Path) -> Result {
 
 /// `zip OUT FILE...`: the files, by their names, in a zip (stored, no
 /// timestamps), so the same files give the same zip; a folder's files go in
-/// under its name, in name order.
+/// under its name, in name order; `--as NAME FILE` puts a file in as NAME
+/// (a path in the zip, `/` between folders).
 pub fn zip(out: &Path, files: &[&str]) -> Result {
     let mut entries = Vec::new();
-    for file in files {
+    let mut files = files.iter();
+    while let Some(file) = files.next() {
+        if *file == "--as" {
+            let (Some(name), Some(file)) = (files.next(), files.next()) else {
+                return Err("--as NAME FILE".into());
+            };
+            let bytes = fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            entries.push((name.to_string(), bytes));
+            continue;
+        }
         let path = Path::new(file);
         let name = path
             .file_name()

@@ -10,6 +10,10 @@ data; everything it writes is game assets and stays on this machine.
 
 - volyacapture.exe  the driver
 - winmm.dll         the frame clock, copied into the copy's bin\ for a run
+- counter.dll       the time-stamp counter on the frame clock, a DynamoRIO
+                    client the game runs under
+- dynamorio\        DynamoRIO's drrun and runtime, 32-bit (BSD; its
+                    License.txt), which starts the game with the client
 - plan.txt          the views, their frames and settings
 
   volyacapture check [--runs N] [--game DIR] [--work DIR]

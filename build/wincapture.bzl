@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The original's capture on Windows (tools/wincapture/, docs/testing.md) as
-actions: the frame clock's proxy winmm.dll and volyacapture.exe built with
-llvm-mingw into 32-bit Windows files, and the driver's plan from the
-fidelity suite's views."""
+actions: the frame clock's proxy winmm.dll, the counter's DynamoRIO client
+and volyacapture.exe built with llvm-mingw into 32-bit Windows files, and
+the driver's plan from the fidelity suite's views."""
 
 _TOOL = attr.label(default = "//tools/xtask:wincapture-action", executable = True, cfg = "exec")
 
@@ -12,8 +12,8 @@ def _binary_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     ctx.actions.run(
         executable = ctx.executable._tool,
-        arguments = ["build", ctx.file._clang.path, out.path, ctx.attr.kind] + [f.path for f in ctx.files.srcs],
-        inputs = ctx.files.srcs + ctx.files._llvm_mingw,
+        arguments = ["build", ctx.file._clang.path, out.path, ctx.attr.kind] + [f.path for f in ctx.files.srcs + ctx.files.sdk],
+        inputs = ctx.files.srcs + ctx.files.sdk + ctx.files._llvm_mingw,
         outputs = [out],
         mnemonic = "WincaptureBuild",
         progress_message = "Building %{label} with llvm-mingw",
@@ -22,10 +22,12 @@ def _binary_impl(ctx):
 
 wincapture_binary = rule(
     implementation = _binary_impl,
-    doc = "C sources compiled into a 32-bit Windows DLL (`kind` dll) or executable (exe).",
+    doc = "C sources compiled into a 32-bit Windows DLL (`kind` dll), executable (exe) or " +
+          "DynamoRIO client (client: `sdk` holds DynamoRIO's headers and import library).",
     attrs = {
-        "kind": attr.string(mandatory = True, values = ["dll", "exe"]),
+        "kind": attr.string(mandatory = True, values = ["dll", "exe", "client"]),
         "out": attr.string(mandatory = True),
+        "sdk": attr.label_list(allow_files = [".h", ".lib"]),
         "srcs": attr.label_list(allow_files = [".c", ".h"], mandatory = True),
         "_clang": attr.label(default = "@llvm_mingw//:bin/i686-w64-mingw32-clang", allow_single_file = True, cfg = "exec"),
         "_llvm_mingw": attr.label(default = "@llvm_mingw//:files", cfg = "exec"),

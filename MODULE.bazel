@@ -198,6 +198,38 @@ exports_files(["bin/i686-w64-mingw32-clang"], visibility = ["//visibility:public
     url = "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-macos-universal.tar.xz",
 )
 
+# DynamoRIO (BSD; License.txt), for the original's capture on Windows
+# (tools/wincapture/counter.c): its Windows release, of which the 32-bit
+# drrun and runtime go into the capture runner and its headers and import
+# library build the client. None of its LGPL extensions is used or shipped.
+http_archive(
+    name = "dynamorio",
+    build_file_content = """filegroup(
+    name = "client_sdk",
+    srcs = glob(["include/**/*.h"]) + ["lib32/release/dynamorio.lib"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "runtime",
+    srcs = [
+        "License.txt",
+        "bin32/drconfiglib.dll",
+        "bin32/drinjectlib.dll",
+        "bin32/drrun.exe",
+        "lib32/drearlyhelp1.dll",
+        "lib32/drearlyhelp2.dll",
+        "lib32/drpreinject.dll",
+        "lib32/release/dynamorio.dll",
+    ],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "2f434ba0f0e339f069ccc1f576a3246ef3d95d28934dae3632b544f85ee2db26",
+    strip_prefix = "DynamoRIO-Windows-11.92.20777",
+    url = "https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-11.92.20777/DynamoRIO-Windows-11.92.20777.zip",
+)
+
 # Tools installed on the machine, with their versions (build/local_tools.bzl).
 local_tools = use_repo_rule("//build:local_tools.bzl", "local_tools")
 

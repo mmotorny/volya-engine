@@ -20,6 +20,19 @@ wincapture_binary(
     out = "winmm.dll",
 )
 
+# The time-stamp counter on the frame clock: a DynamoRIO client
+# (counter.c).
+wincapture_binary(
+    name = "counter",
+    srcs = [
+        "counter.c",
+        "frameclock.h",
+    ],
+    kind = "client",
+    out = "counter.dll",
+    sdk = ["@dynamorio//:client_sdk"],
+)
+
 # The driver (capture.c).
 wincapture_binary(
     name = "volyacapture",
@@ -39,16 +52,20 @@ wincapture_plan(
 )
 
 # The Windows runner (docs/testing.md, The original on Windows;
-# `bazel run //tools/xtask -- wincapture release` publishes it).
+# `bazel run //tools/xtask -- wincapture release` publishes it), with
+# DynamoRIO's 32-bit drrun and runtime in dynamorio\, laid out as in its
+# release.
 d3d9probes_zip(
     name = "runner",
     srcs = [
         "README.txt",
+        ":counter",
         ":plan",
         ":volyacapture",
         ":winmm",
     ],
     out = "wincapture.zip",
+    trees = {"@dynamorio//:runtime": "dynamorio"},
 )
 
 volya_checks(wasm = False)

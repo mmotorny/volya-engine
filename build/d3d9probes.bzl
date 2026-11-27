@@ -89,22 +89,33 @@ odeharness_ours = rule(
 
 def _zip_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
+    arguments = ["zip", out.path] + [f.path for f in ctx.files.srcs]
+    inputs = list(ctx.files.srcs)
+    for target, folder in ctx.attr.trees.items():
+        for f in target.files.to_list():
+            # The file's path in its repository: an external one's
+            # short_path is ../<repository>/<path>.
+            path = f.short_path.split("/", 2)[2] if f.short_path.startswith("../") else f.short_path
+            arguments += ["--as", folder + "/" + path, f.path]
+            inputs.append(f)
     ctx.actions.run(
         executable = ctx.executable._tool,
-        arguments = ["zip", out.path] + [f.path for f in ctx.files.srcs],
-        inputs = ctx.files.srcs,
+        arguments = arguments,
+        inputs = inputs,
         outputs = [out],
         mnemonic = "D3d9ProbesZip",
-        progress_message = "Packing the D3D9 probes' runner: %{label}",
+        progress_message = "Packing the runner: %{label}",
     )
     return [DefaultInfo(files = depset([out]))]
 
 d3d9probes_zip = rule(
     implementation = _zip_impl,
-    doc = "The files, by their names, in one zip; a folder's files under its name.",
+    doc = "The files, by their names, in one zip; a folder's files under its name; " +
+          "each of `trees`' files at its path in its repository, under the folder named.",
     attrs = {
         "out": attr.string(mandatory = True),
         "srcs": attr.label_list(allow_files = True, mandatory = True),
+        "trees": attr.label_keyed_string_dict(allow_files = True),
         "_tool": _TOOL,
     },
 )

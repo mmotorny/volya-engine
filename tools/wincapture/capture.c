@@ -4,7 +4,8 @@
 /* volyacapture.exe: the original's frames of the fidelity suite's views on
  * Windows (docs/testing.md, The original on Windows). It runs the shipped
  * game unmodified, from a copy of its install, on the frame clock of the
- * proxy winmm.dll beside it (frameclock.c), and steers it by its normal
+ * proxy winmm.dll beside it (frameclock.c), under DynamoRIO's drrun with
+ * the counter client (counter.c, dynamorio\ beside it), and steers it by its normal
  * inputs (docs/behavior/steering-the-original.md): its command line, its
  * configuration file, camera tracks in its saves folder, and keys sent with
  * SendInput while a frame is held, so the game reads each at the same frame
@@ -672,6 +673,7 @@ static int write_fsgame(const char *game, const char *copy, const char *userdata
 struct run {
     char dir[MAX_PATH], out[MAX_PATH], userdata[MAX_PATH], screenshots[MAX_PATH];
     HANDLE process, job, map;
+    HANDLE drrun; /* DynamoRIO's drrun, which started the game (process) */
     DWORD pid;
     struct frameclock *clock;
     int64_t frame;
@@ -1241,6 +1243,10 @@ static int quit(struct run *r, ULONGLONG config_written) {
             (long long)load(&r->clock->b_entries_waited), (long long)load(&r->clock->frame_sleeps),
             (long long)load(&r->clock->frame_sleeps_waited),
             (long long)load(&r->clock->sync_timeouts), (long long)load(&r->clock->idle_sleeps));
+    say("The counter client substituted %lld time-stamp-counter reads",
+        (long long)load(&r->clock->counter_reads));
+    fprintf(r->events, "clock counter reads substituted %lld\n",
+            (long long)load(&r->clock->counter_reads));
     if (code != 0) {
         return fail("the game ended with exit code 0x%lx", code);
     }
@@ -1428,6 +1434,81 @@ static int write_userdata(struct run *r, ULONGLONG *written) {
     return 1;
 }
 
+/* The game started by drrun (`drrun_pid`) in `job`: XR_3DA.exe's process,
+ * opened, and its id in `pid`; else null. */
+static HANDLE game_in_job(HANDLE job, DWORD drrun_pid, DWORD *pid) {
+    struct {
+        JOBOBJECT_BASIC_PROCESS_ID_LIST list;
+        ULONG_PTR more[63];
+    } ids;
+    if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, &ids, sizeof ids, NULL)) {
+        return NULL;
+    }
+    for (DWORD i = 0; i < ids.list.NumberOfProcessIdsInList; i++) {
+        DWORD id = (DWORD)ids.list.ProcessIdList[i];
+        if (id == drrun_pid) {
+            continue;
+        }
+        HANDLE p = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                               FALSE, id);
+        char image[MAX_PATH];
+        DWORD n = sizeof image;
+        if (p && QueryFullProcessImageNameA(p, 0, image, &n)) {
+            const char *name = strrchr(image, '\\');
+            if (!_stricmp(name ? name + 1 : image, "XR_3DA.exe")) {
+                *pid = id;
+                return p;
+            }
+        }
+        if (p) {
+            CloseHandle(p);
+        }
+    }
+    return NULL;
+}
+
+/* drrun's output (DynamoRIO's and the client's errors), with the folders
+ * of this machine written as redact.h says, into the run's
+ * drrun-output.txt; its first line in `first` ("none" if empty). */
+static void drrun_output(struct run *r, const char *raw, char *first, size_t n) {
+    uint8_t *data = NULL;
+    size_t size = 0;
+    snprintf(first, n, "none");
+    if (!read_file(raw, &data, &size)) {
+        return;
+    }
+    char path[MAX_PATH];
+    join(path, sizeof path, r->dir, "drrun-output.txt");
+    FILE *out = fopen(path, "w");
+    char line[1024];
+    size_t len = 0;
+    for (size_t i = 0; i <= size; i++) {
+        char c = i < size ? (char)data[i] : '\n';
+        if (c == '\r') {
+            continue;
+        }
+        if (c != '\n') {
+            if (len < sizeof line - 1) {
+                line[len++] = c;
+            }
+            continue;
+        }
+        line[len] = 0;
+        redact(line, sizeof line);
+        if (len && !strcmp(first, "none")) {
+            snprintf(first, n, "%s", line);
+        }
+        if (out && (len || i < size)) {
+            fprintf(out, "%s\n", line);
+        }
+        len = 0;
+    }
+    if (out) {
+        fclose(out);
+    }
+    free(data);
+}
+
 /* One run of the game: `mode` "check" or "full", its outputs in
  * work\runs\<mode>-<n>\. */
 static int run_once(const char *exe_dir, const char *game, const char *work, const char *mode,
@@ -1489,40 +1570,109 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     r.clock->version = FRAMECLOCK_VERSION;
     r.clock->magic = FRAMECLOCK_MAGIC;
 
+    /* The game runs under DynamoRIO with the counter client (counter.c),
+     * started by its drrun, which this runner holds in dynamorio\ (its
+     * configuration files in the work folder). The client takes the
+     * game's folder, the copy, as its modules' paths name it (long names). */
+    char drrun[MAX_PATH], client[MAX_PATH], drlog[MAX_PATH], long_copy[MAX_PATH];
+    join(drrun, sizeof drrun, exe_dir, "dynamorio\\bin32\\drrun.exe");
+    join(client, sizeof client, exe_dir, "counter.dll");
+    if (GetFileAttributesA(drrun) == INVALID_FILE_ATTRIBUTES ||
+        GetFileAttributesA(client) == INVALID_FILE_ATTRIBUTES) {
+        return fail("no %s or %s: unpack the whole runner", drrun, client);
+    }
+    DWORD n = GetLongPathNameA(copy, long_copy, sizeof long_copy);
+    if (n == 0 || n >= sizeof long_copy) {
+        return fail("cannot read the long name of %s (%lu)", copy, GetLastError());
+    }
+    static int long_work_redacted;
+    char long_work[MAX_PATH];
+    if (!long_work_redacted && GetLongPathNameA(work, long_work, sizeof long_work) - 1u <
+                                   sizeof long_work - 1u) {
+        redact_add(long_work, "<work>", 0);
+        long_work_redacted = 1;
+    }
+    join(path, sizeof path, work, "dynamorio-config");
+    if (!make_dirs(path) || !SetEnvironmentVariableA("DYNAMORIO_CONFIGDIR", path)) {
+        return fail("cannot make %s", path);
+    }
+    join(drlog, sizeof drlog, work, "drrun-output.txt");
+    SECURITY_ATTRIBUTES inherit = {.nLength = sizeof inherit, .bInheritHandle = TRUE};
+    HANDLE output = CreateFileA(drlog, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (output == INVALID_HANDLE_VALUE) {
+        return fail("cannot make %s", drlog);
+    }
+
     /* The launch task (gog-install-additions.md section 5) and the options
      * of an unattended start (steering-the-original.md 1.2, 3.1). The game
      * searches its whole command line for its options (1.1): the program's
-     * path is not in it, as when it is started from its folder (1.3). */
-    char command[1024], program[MAX_PATH];
-    join(program, sizeof program, bin, "XR_3DA.exe");
+     * path is not in it, as when it is started from its folder (1.3);
+     * drrun passes the game the words after its `--` as they are, and
+     * starts it in its own working folder. DynamoRIO shows no message
+     * boxes and writes its errors to drrun's output; drrun warns not of
+     * the parts of DynamoRIO the runner leaves out (64-bit, debug). */
+    const char *game_command =
+        "XR_3DA.exe --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx";
+    char command[2048];
     snprintf(command, sizeof command,
-             "XR_3DA.exe --skipmemcheck -silent_error_mode -nosound -ss_tga -ltx steer.ltx");
-    STARTUPINFOA si = {.cb = sizeof si};
+             "\"%s\" -quiet -msgbox_mask 0 -stderr_mask 12 -c \"%s\" \"%s\" -- %s", drrun, client,
+             long_copy, game_command);
+    STARTUPINFOA si = {.cb = sizeof si,
+                       .dwFlags = STARTF_USESTDHANDLES,
+                       .hStdInput = GetStdHandle(STD_INPUT_HANDLE),
+                       .hStdOutput = output,
+                       .hStdError = output};
     PROCESS_INFORMATION pi;
     r.job = CreateJobObjectA(NULL, NULL);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     SetInformationJobObject(r.job, JobObjectExtendedLimitInformation, &limits, sizeof limits);
-    say("Starting %s (working folder %s)", command, bin);
-    if (!CreateProcessA(program, command, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, bin, &si, &pi)) {
-        return fail("cannot start the game (%lu)", GetLastError());
+    say("Starting %s under DynamoRIO with the counter client (working folder %s)", game_command,
+        bin);
+    if (!CreateProcessA(drrun, command, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, bin, &si, &pi)) {
+        CloseHandle(output);
+        return fail("cannot start drrun (%lu)", GetLastError());
     }
+    CloseHandle(output);
     AssignProcessToJobObject(r.job, pi.hProcess);
-    r.process = pi.hProcess;
-    r.pid = pi.dwProcessId;
-    AllowSetForegroundWindow(r.pid);
+    r.drrun = pi.hProcess;
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
 
     int ok = 1;
     ULONGLONG until_ms = GetTickCount64() + ATTACH_TIMEOUT * 1000ull;
-    while (!load(&r.clock->attached) && !ended(&r) && GetTickCount64() < until_ms) {
+    while (!(r.process = game_in_job(r.job, pi.dwProcessId, &r.pid)) &&
+           WaitForSingleObject(r.drrun, 0) != WAIT_OBJECT_0 && GetTickCount64() < until_ms) {
         Sleep(5);
     }
-    if (!load(&r.clock->attached)) {
+    if (!r.process) {
+        char first[256];
+        drrun_output(&r, drlog, first, sizeof first);
+        ok = fail("drrun did not start the game within %d s%s; drrun's output: %s",
+                  ATTACH_TIMEOUT,
+                  WaitForSingleObject(r.drrun, 0) == WAIT_OBJECT_0 ? " (drrun ended)" : "",
+                  first);
+        /* The rest stops a run whose game is the drrun process. */
+        r.process = r.drrun;
+        r.drrun = NULL;
+    } else {
+        AllowSetForegroundWindow(r.pid);
+    }
+    while (ok && !load(&r.clock->attached) && !ended(&r) && GetTickCount64() < until_ms) {
+        Sleep(5);
+    }
+    if (ok && !load(&r.clock->attached)) {
         ok = fail("the frame clock did not start in the game within %d s%s: its winmm.dll was "
                   "not loaded from %s",
                   ATTACH_TIMEOUT, ended(&r) ? " (the game ended)" : "", bin);
+    }
+    /* The client starts before the game's first instruction, so before
+     * the proxy. */
+    if (ok && !load(&r.clock->counter_attached)) {
+        char first[256];
+        drrun_output(&r, drlog, first, sizeof first);
+        ok = fail("the counter client did not start in the game; drrun's output: %s", first);
     }
     if (ok && (ok = advance(&r, 1, 0))) {
         event(&r, load(&r.clock->hooked) ? "the first frame, held"
@@ -1547,6 +1697,14 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     }
     fprintf(r.events, "seconds %.1f\n", seconds);
     say("Run %s-%d %s after %.1f s", mode, index, ok ? "done" : "failed", seconds);
+    /* drrun ends with the game. */
+    if (r.drrun && WaitForSingleObject(r.drrun, 10000) != WAIT_OBJECT_0) {
+        say("WARNING: drrun was still running 10 s after the game");
+    }
+    {
+        char first[256];
+        drrun_output(&r, drlog, first, sizeof first);
+    }
     /* The game's logs, beside the run's own. */
     join(from, sizeof from, r.userdata, "logs");
     join(path, sizeof path, r.dir, "game-logs");
@@ -1554,6 +1712,9 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     fclose(r.events);
     fclose(r.hashes);
     CloseHandle(r.process);
+    if (r.drrun) {
+        CloseHandle(r.drrun);
+    }
     CloseHandle(r.job);
     UnmapViewOfFile(r.clock);
     CloseHandle(r.map);

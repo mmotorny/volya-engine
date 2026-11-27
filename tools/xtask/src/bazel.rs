@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use super::{Result, cmd, locked_version, output, root, run, step};
 
 /// Moves everything to its latest release: Rust, the crates, Bazel, its
-/// modules, the wasm LLVM, the Windows cross LLVM (llvm-mingw) and the
+/// modules, the wasm LLVM, the Windows cross LLVM (llvm-mingw), DynamoRIO and the
 /// wasm-bindgen CLI's pin; then the checks and the advisories.
 pub fn update() -> Result {
     let module_path = root().join("MODULE.bazel");
@@ -45,6 +45,8 @@ pub fn update() -> Result {
     module = update_wasm_llvm(&module)?;
     step("The Windows cross LLVM (llvm-mingw)");
     module = update_llvm_mingw(&module)?;
+    step("DynamoRIO (the Windows capture's counter client)");
+    module = update_dynamorio(&module)?;
     fs::write(&module_path, &module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
     step("Bazel");
@@ -233,6 +235,42 @@ fn update_llvm_mingw(module: &str) -> Result<String> {
     let (head, block) = module.split_at(start);
     let block = replace_quoted_after(block, "sha256 = ", &sha)?;
     let block = replace_quoted_after(&block, "strip_prefix = ", &name)?;
+    let block = replace_quoted_after(&block, "url = ", &url)?;
+    println!("{name}");
+    Ok(format!("{head}{block}"))
+}
+
+/// Points `@dynamorio` at DynamoRIO's latest release for Windows, with the
+/// checksum GitHub records for the asset (its archive is about 450 MB).
+fn update_dynamorio(module: &str) -> Result<String> {
+    let release = output(&mut cmd(
+        "gh",
+        &[
+            "api",
+            "repos/DynamoRIO/dynamorio/releases/latest",
+            "--jq",
+            r#".tag_name + " " + ([.assets[] | select(.name | test("^DynamoRIO-Windows-.*\\.zip$")) | .name + " " + .digest][0])"#,
+        ],
+    ))?;
+    let words: Vec<&str> = release.split_whitespace().collect();
+    let [tag, asset, digest] = words[..] else {
+        return Err(format!("DynamoRIO's latest release: {release}"));
+    };
+    let sha = digest
+        .strip_prefix("sha256:")
+        .ok_or(format!("{asset}: digest {digest}"))?;
+    let name = asset.strip_suffix(".zip").ok_or("no .zip")?;
+    let url = format!("https://github.com/DynamoRIO/dynamorio/releases/download/{tag}/{asset}");
+    if module.contains(&url) {
+        println!("{name} (unchanged)");
+        return Ok(module.to_owned());
+    }
+    let start = module
+        .find("name = \"dynamorio\"")
+        .ok_or("MODULE.bazel: no dynamorio")?;
+    let (head, block) = module.split_at(start);
+    let block = replace_quoted_after(block, "sha256 = ", sha)?;
+    let block = replace_quoted_after(&block, "strip_prefix = ", name)?;
     let block = replace_quoted_after(&block, "url = ", &url)?;
     println!("{name}");
     Ok(format!("{head}{block}"))

@@ -4,8 +4,9 @@
 //! The Windows capture's actions (build/wincapture.bzl): xtask's
 //! `wincapture` module alone.
 //!
-//! - `build CLANG OUT KIND SRC...`: the proxy `winmm.dll` (KIND `dll`) or
-//!   `volyacapture.exe` (KIND `exe`) compiled with llvm-mingw into `OUT`.
+//! - `build CLANG OUT KIND SRC...`: the proxy `winmm.dll` (KIND `dll`),
+//!   `volyacapture.exe` (KIND `exe`) or the counter's DynamoRIO client
+//!   (KIND `client`) compiled with llvm-mingw into `OUT`.
 //! - `plan OUT`: the driver's plan from the fidelity suite's views.
 
 #![allow(dead_code)] // The modules' other tasks are xtask's.
