@@ -22,11 +22,13 @@
  *   volyacapture selftest [--work DIR]
  *       drrun and the counter client on this machine, with counterprobe.exe
  *       of ours in place of the game: natively, then under drrun.
- *   volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] [--work DIR]
- *       every walk of the audio-fidelity suite with sound on, its audio
- *       output recorded by loopback (loopback.c) from the default output
- *       device (or the one NAME names), and its frames where the player
- *       starts and ends kept; N runs (default 1).
+ *   volyacapture audio [--walk NAME] [--audio-device NAME] [--runs N] [--game DIR]
+ *                      [--work DIR]
+ *       every walk of the audio-fidelity suite (or the one named) with
+ *       sound on, its audio output recorded by loopback (loopback.c) from
+ *       the default output device (or the one NAME names), and its frames
+ *       at its boundaries kept; N runs (default 1). Walks whose frames
+ *       overlap are captured one at a time.
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -2454,7 +2456,7 @@ int main(int argc, char **argv) {
         snprintf(work, sizeof work, "%svolya-engine-capture", temp);
     }
     int runs = -1;
-    char audio_device[256] = "";
+    char audio_device[256] = "", walk_name[64] = "";
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--game") && i + 1 < argc) {
             snprintf(game, sizeof game, "%s", argv[++i]);
@@ -2464,6 +2466,8 @@ int main(int argc, char **argv) {
             runs = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--audio-device") && i + 1 < argc) {
             snprintf(audio_device, sizeof audio_device, "%s", argv[++i]);
+        } else if (!strcmp(argv[i], "--walk") && i + 1 < argc) {
+            snprintf(walk_name, sizeof walk_name, "%s", argv[++i]);
         } else if (!strcmp(argv[i], "--no-heap")) {
             no_heap = 1;
         } else if (!strcmp(argv[i], "--kernel32-client")) {
@@ -2481,8 +2485,8 @@ int main(int argc, char **argv) {
         runs < 1) {
         fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
                         "[--work DIR] [--no-heap] [--kernel32-client]\n"
-                        "       volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] "
-                        "[--work DIR] [--no-heap] [--kernel32-client]\n");
+                        "       volyacapture audio [--walk NAME] [--audio-device NAME] [--runs N] "
+                        "[--game DIR] [--work DIR] [--no-heap] [--kernel32-client]\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -2503,6 +2507,31 @@ int main(int argc, char **argv) {
     if (audio && !plan.nwalks) {
         fail("the plan has no walk");
         return 1;
+    }
+    if (audio && walk_name[0]) {
+        /* The named walk alone, from its own New Game. */
+        int found = -1;
+        for (int i = 0; i < plan.nwalks; i++) {
+            if (!strcmp(plan.walks[i].name, walk_name)) {
+                found = i;
+            }
+        }
+        if (found < 0) {
+            fail("the plan has no walk %s", walk_name);
+            return 1;
+        }
+        plan.walks[0] = plan.walks[found];
+        plan.nwalks = 1;
+    }
+    for (int i = 1; audio && i < plan.nwalks; i++) {
+        /* One New Game runs the walks one after the other: each recording
+         * (its preroll first) after the one before has ended. */
+        const struct walk *a = &plan.walks[i - 1], *b = &plan.walks[i];
+        if (b->start - b->preroll < a->start + walk_frames(a)) {
+            fail("the walks %s and %s overlap; capture one at a time (--walk NAME)", a->name,
+                 b->name);
+            return 1;
+        }
     }
     if (!game[0] && !default_game(game, sizeof game)) {
         fail("no --game DIR, and the install's registry key (HKLM\\SOFTWARE\\GSC Game "
@@ -2526,6 +2555,10 @@ int main(int argc, char **argv) {
     say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
     say("The deterministic heap %s; the client %s", no_heap ? "OFF (--no-heap)" : "on",
         kernel32_client ? "counter-kernel32.dll (--kernel32-client)" : "counter.dll");
+    for (int i = 0; audio && i < plan.nwalks; i++) {
+        say("Walk %s: from frame %lld of play, %lld frames", plan.walks[i].name,
+            (long long)plan.walks[i].start, (long long)walk_frames(&plan.walks[i]));
+    }
     clear_outputs(work, mode);
     /* The walks' output device: the default as it is, or the one named. */
     struct loopback *lb = NULL;

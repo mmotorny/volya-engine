@@ -26,12 +26,14 @@ data; everything it writes is game assets and stays on this machine.
   volyacapture selftest [--work DIR]
   volyacapture check [--runs N] [--game DIR] [--work DIR]
   volyacapture full  [--runs N] [--game DIR] [--work DIR]
-  volyacapture audio [--audio-device NAME] [--runs N] [--game DIR] [--work DIR]
+  volyacapture audio [--walk NAME] [--audio-device NAME] [--runs N]
+                     [--game DIR] [--work DIR]
 
 selftest: drrun and the client with counterprobe.exe in place of the game
 (no game needed); check: the title menu only; full: every view. N runs
 (default 2), compared.
-audio: every walk with sound on, the game's output recorded by WASAPI
+audio: every walk (or the one NAME names; walks whose frames overlap
+need one named) with sound on, the game's output recorded by WASAPI
 loopback from the default output device as it is (or the one whose name
 contains NAME), and each walk's frames at its start, each segment's end and its end kept.
 Nothing changes a volume or a device setting; the

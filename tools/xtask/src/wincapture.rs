@@ -500,6 +500,9 @@ mod tests {
         }
         assert!(p.contains("\naudio_ltx snd_volume_eff 1.\n"));
         assert!(p.contains("\nwalk bunker-exit 900 50 25 e04b:23 11:66 e04d:12 "));
+        assert!(p.contains("\nwalk trader-room 900 50 25 e04d:14 11:7 e04d:25 11:10 "));
+        // The capture reads at most 8 walks of 64 segments (capture.c).
+        assert!(WALKS.len() <= 8 && WALKS.iter().all(|w| w.segments.len() <= 64));
         // A track: 16 words after its frame and key count; the last is 1.0.
         let track = p.lines().find(|l| l.contains(" track ")).unwrap();
         let words: Vec<&str> = track.split(' ').collect();

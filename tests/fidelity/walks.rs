@@ -103,28 +103,65 @@ const W: &[WalkKey] = &[WalkKey::Forward];
 const L: &[WalkKey] = &[WalkKey::TurnLeft];
 const R: &[WalkKey] = &[WalkKey::TurnRight];
 
-/// The walks, in the order they are captured.
-pub const WALKS: &[Walk] = &[Walk {
-    // Planned on our collision world (the tap routes' planner) and checked
-    // by our movement to leave the bunker: turned at π rad/s (0.126 rad a
-    // frame), run at the default run (section 4.1). It starts after the
-    // loud bursts of the original's frames 728–802 and 859–873 of play
-    // (#864), its preroll too.
-    name: "bunker-exit",
-    shows: "a New Game's player running out of the trader's bunker from the start: back \
-            along the room, up the stairs, around the landing and out",
-    start: 900,
-    segments: &[
-        seg(L, 23),
-        seg(W, 66),
-        seg(R, 12),
-        seg(W, 50),
-        seg(R, 12),
-        seg(W, 24),
-        seg(L, 12),
-        seg(W, 8),
-        seg(L, 12),
-        seg(W, 100),
-    ],
-    tail: 50,
-}];
+/// The trader-room walk's segments: a turn to face the room's far end and
+/// a run there, then 14 times a half turn to the right (25 frames, π rad)
+/// and a run of 10 frames back along the room.
+const TRADER_ROOM: [Segment; 30] = {
+    let mut s = [seg(R, 25); 30];
+    s[0] = seg(R, 14);
+    s[1] = seg(W, 7);
+    let mut i = 3;
+    while i < s.len() {
+        s[i] = seg(W, 10);
+        i += 2;
+    }
+    s
+};
+
+/// The walks, in the order they are captured; each from its own New Game
+/// (the capture runs one at a time, `--walk`, when their frames overlap).
+pub const WALKS: &[Walk] = &[
+    Walk {
+        // Planned on our collision world (the tap routes' planner) and checked
+        // by our movement to leave the bunker: turned at π rad/s (0.126 rad
+        // a frame), run at the default run (section 4.1). It starts after
+        // the loud bursts of the original's frames 728–802 and 859–873 of
+        // play (#864), its preroll too. The original's player is stopped
+        // at the trader's locked door in segment 2 (#866).
+        name: "bunker-exit",
+        shows: "a New Game's player running out of the trader's bunker from the start: back \
+                along the room, up the stairs, around the landing and out",
+        start: 900,
+        segments: &[
+            seg(L, 23),
+            seg(W, 66),
+            seg(R, 12),
+            seg(W, 50),
+            seg(R, 12),
+            seg(W, 24),
+            seg(L, 12),
+            seg(W, 8),
+            seg(L, 12),
+            seg(W, 100),
+        ],
+        tail: 50,
+    },
+    Walk {
+        // Planned on our collision world (its clearance around the start)
+        // and checked by our movement to stay on the flooring tiles between
+        // the counter and the trader's door (#867), at least 1.4 m from
+        // the door and 0.3 m from the walls, never touching one: the
+        // player turns to the room's far end and runs back and forth
+        // along it, from 1.0 m behind the start to 0.45 m before it,
+        // turning right each time (one way, so the body's lag after a
+        // turn sends the runs alternately to either side, not always to
+        // one). Steps on one material, from frame 900 of play as
+        // bunker-exit.
+        name: "trader-room",
+        shows: "a New Game's player running back and forth in the trader's room, between \
+                the counter and the locked door, turning in place at each end",
+        start: 900,
+        segments: &TRADER_ROOM,
+        tail: 50,
+    },
+];

@@ -50,7 +50,10 @@ mod list {
 use list::{FRAME_MS, HEIGHT, PREROLL, SKIP_EVERY, WALKS, WIDTH, Walk, WalkKey};
 
 /// One check per walk.
-pub const CHECKS: &[(&str, Run)] = &[(WALKS[0].name, |c| Box::pin(walk(c, 0)))];
+pub const CHECKS: &[(&str, Run)] = &[
+    (WALKS[0].name, |c| Box::pin(walk(c, 0))),
+    (WALKS[1].name, |c| Box::pin(walk(c, 1))),
+];
 
 const SIZE: Resolution = Resolution::new(WIDTH, HEIGHT);
 /// Our offline output: the game's sounds' rate, each frame exactly
