@@ -522,10 +522,10 @@ absent names of 2.2 are assigned to the spec of the class or object the scripts 
 | 22 | P | Info portions, tasks, news and map spots | info portion members, `CGameTask`, `SGameTaskObjective`, `task`, news and tips, `level.map_…`, tutorials, task-file functions | M, F | 54 | 42 | 71 (73) |
 | 23 | Q | Relations, community and ranking | `relation_registry`, `actor_stats`, community, rank, reputation, goodwill and relation members (with the unlisted `set_community_goodwill`, `community_goodwill`) | M | 27 | 24 | 31 (32) |
 | 24 | R | Dialogs and trade | phrase classes, dialog start and talk members, trade members and conditions, dialog-file functions | M, P | 36 | 16 | 17 (17) |
-| 25 | S | Inventory | items, slots, money, transfer, iteration, ammunition | M | 29 | 21 | 26 (54) |
+| 25 | S | Inventory | items, slots, money, transfer, iteration, ammunition, trader supplies (`buy_supplies`, called by `trade_manager.script` with a trader's trade file and a section named by its `[trader]` key `buy_supplies` [trader_names.py]) | M | 29 | 21 | 26 (54) |
 | 26 | T | Sound | `sound_object`, `snd_type`, object sound members, `level.iterate_sounds` | M | 93 | 47 | 22 (52) |
 | 27 | V | Scripted actions | `entity_action` and its parts (`move`, `look`, `anim`, `sound`, `particle`, `object`, `cond`, `act`), action queue, script control | M | 147 | 65 | 30 (106) |
-| 28 | X | Movement, sight and memory | character movement, path, sight, mental and body state, enemies, danger, memory, restrictions | M, N | 160 | 85 | 59 (121) |
+| 28 | X | Movement, sight and memory | character movement, path, sight, mental and body state, enemies, danger, memory, restrictions, `hide_weapon` and `restore_weapon` (called on the player by `bind_stalker.script` and `xr_effects.script` [trader_names.py]) | M, N | 160 | 85 | 59 (121) |
 | 29 | Z | Multiplayer | game-type classes, player state and messages, multiplayer overrides | all above | 176 | 97 | 15 (52) |
 | 30 | L | Object binders | `object_binder`, `bind_object`, `script_binding`, binder overrides and their order | A, D, M | 15 | 6 | 13 (94) |
 
