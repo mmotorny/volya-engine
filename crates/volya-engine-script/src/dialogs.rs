@@ -490,7 +490,10 @@ impl Scripts {
     fn holds_lists(&self, ctx: &Context, lists: &ConditionsAndEffects) -> bool {
         let story = ctx.story.borrow();
         let holds = |id: &Option<String>| {
-            (story.info_portions.as_ref()).is_some_and(|p| p.holds(p.player(), entry(id)))
+            (story.info_portions.as_ref()).is_some_and(|p| {
+                let p = p.borrow();
+                p.holds(p.player(), entry(id))
+            })
         };
         lists.has_info.iter().all(holds) && !lists.dont_has_info.iter().any(holds)
     }
@@ -504,7 +507,7 @@ impl Scripts {
         for (id, give) in changes {
             let id = game_bytes(entry(id));
             self.with_story(|c, story| {
-                let Some(player) = story.info_portions.as_ref().map(|p| p.player()) else {
+                let Some(player) = story.info_portions.as_ref().map(|p| p.borrow().player()) else {
                     return Err("the information portions aren't set".into());
                 };
                 if give {

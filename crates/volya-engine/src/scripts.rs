@@ -37,7 +37,7 @@ use crate::script::game_object::{
 use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
 use crate::script::services::EngineServices;
-use crate::script::story::Story;
+use crate::script::story::{Icon, SharedInfoPortions, Story};
 use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::model;
@@ -85,11 +85,27 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         // The level's objects as scripts see them, fed by the level
         // ([`client_spawning`], [`level_frame`]).
         objects: Rc::new(RefCell::new(GameObjects::new())),
-        // TODO(#1063): the game's story state.
-        story: Rc::new(RefCell::new(Story::new())),
+        // The story's information portions are the level's, shared at
+        // spawning ([`client_spawning`]).
+        story: Rc::new(RefCell::new(story(data))),
         dialogs: Rc::default(),
     })
     .map_err(fatal)
+}
+
+/// The story state before a game: the interface's texture descriptions
+/// for `set_icon_name` (script API P 3.3).
+fn story(data: &GameData) -> Story {
+    let descriptions = data.descriptions.clone();
+    let mut story = Story::new();
+    story.textures = Some(Rc::new(move |id: &[u8]| {
+        let d = descriptions.get(&cp1251::decode(id))?;
+        Some(Icon {
+            texture: cp1251::encode(&d.file).unwrap_or_else(|| d.file.as_bytes().to_vec()),
+            rect: [d.rect.x, d.rect.y, d.rect.width, d.rect.height],
+        })
+    }));
+    story
 }
 
 /// A script error's report: the original's fatal error, the game's end.
@@ -148,8 +164,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// The level ends (the game is left for the menu, or a New Game starts
 /// over it): every object the scripts still see is destroyed, its binder
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
-/// reading), then the level's call list emptied, none of it called (spec O
-/// 6.5). A script error is fatal.
+/// reading), the game's story forgotten, then the level's call list
+/// emptied, none of it called (spec O 6.5). A script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
@@ -168,6 +184,7 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
         p.exploding.clear();
         p.take_events();
     }
+    scripts.story().borrow_mut().new_game();
     scripts.scripts().clear_level_calls()
 }
 
@@ -193,8 +210,8 @@ pub struct ClientObject<'a> {
 
 /// What the level's spawning gives the scripts (3.3 step 11.4): the
 /// objects online at the start, byte 11 of each level vertex (M 4), the
-/// game time, and the level's physics world, collision and patrol paths
-/// (script API Y).
+/// game time, the level's physics world, collision and patrol paths
+/// (script API Y) and the game's information portions (script API P).
 pub struct ClientSpawning<'a> {
     pub objects: Vec<ClientObject<'a>>,
     pub vertex_lights: Vec<u8>,
@@ -202,13 +219,15 @@ pub struct ClientSpawning<'a> {
     pub physics: Rc<RefCell<LevelPhysics>>,
     pub collision: Arc<CollisionWorld>,
     pub paths: PatrolPaths,
+    pub info_portions: Option<SharedInfoPortions>,
 }
 
 /// `st_client_spawning` (3.3 step 11.4), after the caption's own work
 /// (our placement: the objects' visuals and shells are made by it): the
-/// level vertices' light bytes and the objects online at the start, each
-/// created through the factory and spawned (spec C 6, spec M 3, spec L
-/// 5.1); the server time the engine clock `now` (ms).
+/// level vertices' light bytes, the game's information portions shared
+/// with the story (script API P), and the objects online at the start,
+/// each created through the factory and spawned (spec C 6, spec M 3, spec
+/// L 5.1); the server time the engine clock `now` (ms).
 pub fn client_spawning(
     scripts: &mut GameScripts,
     loading: &mut Loading,
@@ -237,6 +256,7 @@ pub fn client_spawning(
         }));
         p.current_holder = None;
     }
+    scripts.story().borrow_mut().info_portions = spawning.info_portions;
     for object in spawning.objects {
         spawn_client_object(scripts, &data.system, &mut characters, object)?;
     }
@@ -253,9 +273,10 @@ pub fn client_spawning(
 /// the events the level's systems raised on its objects (spec O 4: the
 /// player's death, the items used up on it, taken and dropped); the
 /// level's call list updated, after the physics steps and the objects'
-/// updates (O 6.1: the door scheme's fast call); then what the members
-/// asked of the engine ([`apply_events`]). No system of the app perceives
-/// sounds yet, so none is queued (O 4, id 17).
+/// updates (O 6.1: the door scheme's fast call); the story's frame
+/// ([`story_frame`]); then what the members asked of the engine
+/// ([`apply_events`]). No system of the app perceives sounds yet, so none
+/// is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
     level: &mut LevelScreen,
@@ -310,6 +331,7 @@ pub fn level_frame(
         scripts.scripts().raise(receiver, &event)?;
     }
     scripts.scripts().update_level_calls()?;
+    story_frame(scripts, level)?;
     apply_events(scripts, level);
     apply_physics_events(scripts, level)?;
     Ok(())
@@ -350,6 +372,38 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
         let updated = scripts.scripts().scheduled_update(id, delta);
         updated.map_err(|f| override_fatal(scripts, f))?;
     }
+    Ok(())
+}
+
+/// The story's part of a level frame (script API P): the simulation's
+/// story registry; what the engine's own gives and the returning messages
+/// ask of the scripts (`IP` 3.3, 3.4); the player's task update (5.1:
+/// every level frame, our choice where its rate is unestablished); the
+/// story's frame (queued news, sequences); then its callbacks raised on
+/// the player's object (spec O).
+fn story_frame(scripts: &mut GameScripts, level: &LevelScreen) -> Result<(), Error> {
+    {
+        let mut story = scripts.story().borrow_mut();
+        let registry = level.story_registry();
+        if story.story_registry.as_ref() != registry {
+            story.story_registry = registry.cloned();
+        }
+    }
+    let changed = scripts.story().borrow().portions_changed();
+    let s = scripts.scripts();
+    if changed {
+        s.info_portions_changed()?;
+    }
+    s.update_player_tasks()?;
+    s.story_frame()?;
+    // What else the story asks of the engine's other parts, which have no
+    // receiver yet: the dialogue window's rebuild mark and the talk
+    // window's lines (TODO(#993)); the PDA's changed mark (TODO(#179));
+    // news (TODO(#176)); the difficulty applied to the player
+    // (TODO(#652)); sequences (TODO(#1062)); `article_info`, whose group
+    // and name are the articles' (TODO(#1088)). The use tips the story
+    // keeps have no reader yet (the HUD hint, TODO(#180)).
+    let _unreceived = s.raise_story_callbacks()?;
     Ok(())
 }
 

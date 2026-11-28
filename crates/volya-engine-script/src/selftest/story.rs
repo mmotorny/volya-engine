@@ -43,6 +43,7 @@ pub const SECTIONS: &[(&str, Check)] = &[
     ("9 map spots", map_spots),
     ("10 game difficulty", difficulty),
     ("11 tutorials", tutorials),
+    ("callbacks raised (spec O)", callbacks),
 ];
 
 /// Runs every check; `Err` lists the failures.
@@ -234,7 +235,10 @@ fn state() -> Result<State, String> {
         )?,
     )
     .map_err(|e| e.to_string())?;
-    story.borrow_mut().info_portions = Some(InfoPortions::new(Arc::new(declarations), PLAYER));
+    story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+        Arc::new(declarations),
+        PLAYER,
+    ))));
     Ok(State {
         s,
         story,
@@ -508,7 +512,10 @@ actor:set_task_state(task.completed, "none", 1)
         story.map_spots.get(TRADER, b"red_location").is_none(),
         || "a hidden objective has no spot".into(),
     )?;
-    let articles = story.info_portions.as_ref().map(|p| p.articles().len());
+    let articles = story
+        .info_portions
+        .as_ref()
+        .map(|p| p.borrow().articles().len());
     ensure(articles == Some(1), || {
         format!("objective 0's article: {articles:?}")
     })?;
@@ -819,4 +826,63 @@ eq(game.has_active_tutorial(), true, "until the next frame")
         r#"eq(game.has_active_tutorial(), false, "discarded")"#,
     )?;
     fatal("game.start_tutorial('empty')", "has no item")
+}
+
+/// The story's callbacks raised on the player's object through spec O
+/// (`task_state` with engine objects over the task and its objective,
+/// `map_location_added`, `inventory_info`), in order, those they raise
+/// too; the other events returned.
+pub fn callbacks() -> Result<(), String> {
+    let mut t = state()?;
+    check_lua(
+        &mut t,
+        "callbacks",
+        r#"
+got = {}
+local function note(text) table.insert(got, text) end
+actor:set_callback(callback.task_state, function(task, objective, state)
+  note("task " .. task:get_id() .. " " .. objective:get_idx() .. " " .. state)
+  if objective:get_idx() == 0 then
+    actor:give_info_portion("talked")
+  end
+end)
+actor:set_callback(callback.map_location_added, function(kind, id)
+  note("spot " .. kind .. " " .. id)
+end)
+actor:set_callback(callback.inventory_info, function(who, portion)
+  note("info " .. who:id() .. " " .. portion)
+end)
+local flash = CGameTask() flash:load("flash_task")
+actor:give_task(flash, 0, false)
+"#,
+    )?;
+    let rest = t.s.raise_story_callbacks().map_err(|e| e.message)?;
+    ensure(
+        matches!(
+            rest.as_slice(),
+            [
+                Event::PdaChanged,
+                Event::InfoPortion(info_portions::Event::DialogsChanged)
+            ]
+        ),
+        || format!("the other events returned: {rest:?}"),
+    )?;
+    check_lua(
+        &mut t,
+        "callbacks raised",
+        &format!(
+            r#"
+eq(#got, 3, "three callbacks")
+eq(got[1], "spot blue_location {TRADER}", "map_location_added")
+eq(got[2], "task flash_task 0 " .. task.in_progress, "task_state")
+eq(got[3], "info {PLAYER} talked", "inventory_info, raised by a callback")
+"#
+        ),
+    )?;
+    ensure(
+        t.s.raise_story_callbacks()
+            .map_err(|e| e.message)?
+            .is_empty(),
+        || "the events taken".into(),
+    )
 }

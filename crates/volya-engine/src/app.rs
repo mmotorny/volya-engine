@@ -1141,8 +1141,15 @@ impl App {
             self.failed.get_or_insert(why);
         }
         self.run_console_actions(input, audio);
-        // The scripts' objects follow the level's frame (script API M); a
-        // script error ends the game.
+        // The level's own gives' log lines, before the scripts' story takes
+        // what the portions left (script API P).
+        if let Some(Phase::Level { level, .. }) = &mut self.phase {
+            for line in level.take_portion_log() {
+                self.console.log_mut().message(&line);
+            }
+        }
+        // The scripts' objects and story follow the level's frame (script
+        // APIs M, P); a script error ends the game.
         if let (Some(Phase::Level { level, .. }), Some(scripts)) =
             (&mut self.phase, &mut self.scripts)
             && let Err(e) = crate::scripts::level_frame(
@@ -1159,9 +1166,6 @@ impl App {
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
-            for line in level.take_portion_log() {
-                self.console.log_mut().message(&line);
-            }
             let effects = level.effects().and_then(|e| e.fatal()).map(str::to_owned);
             if let Some(error) = level.take_fatal().or(effects) {
                 self.failed.get_or_insert(error);
@@ -3764,7 +3768,7 @@ mod tests {
             let Some(Phase::Level { level, .. }) = &app.phase else {
                 panic!("no level")
             };
-            let portions = level.info_portions().unwrap();
+            let portions = level.info_portions().unwrap().borrow();
             let list = portions.list(portions.player());
             list.iter().map(|k| k.id.clone()).collect()
         };

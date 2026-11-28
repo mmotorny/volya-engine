@@ -37,6 +37,7 @@ use volya_engine_formats::xml::{self, Document};
 use crate::classes::EnginePart;
 use crate::files::FileSystem;
 use crate::files::index::IndexVfs;
+use crate::game_object::callbacks::ObjectEvent;
 use crate::game_object::{GameObjects, Kinds};
 use crate::loader::Scripts;
 use crate::services::{EngineServices, Fatal, report_fatal};
@@ -97,22 +98,26 @@ pub struct Sequences {
 /// its texture file and rectangle (x, y, width, height).
 pub type TextureLookup = Rc<dyn Fn(&[u8]) -> Option<Icon>>;
 
+/// The game's information portions, shared by the level and the story.
+pub type SharedInfoPortions = Rc<RefCell<InfoPortions>>;
+
 /// What the story state asks of the engine, in order ([`Story::take_events`]).
 #[derive(Clone, Debug)]
 pub enum Event {
-    /// The callback `task_state` (spec O, id 13) on the player's object.
-    /// TODO(#1063): raised through spec O's `Scripts::raise`.
+    /// The callback `task_state` (spec O, id 13) on the player's object
+    /// ([`Scripts::raise_story_callbacks`]).
     TaskState {
         task: TaskRef,
         objective: ObjectiveRef,
         state: i32,
     },
     /// The callback `map_location_added` (spec O, id 14) on the player's
-    /// object. TODO(#1063).
+    /// object ([`Scripts::raise_story_callbacks`]).
     MapLocationAdded { spot_type: Vec<u8>, object: u16 },
     /// What receiving and disabling portions ask besides their script
     /// functions (`IP` 3.4: the callbacks `article_info` and
-    /// `inventory_info`, TODO(#1063); the dialogue window's mark).
+    /// `inventory_info`, the second raised by
+    /// [`Scripts::raise_story_callbacks`]; the dialogue window's mark).
     InfoPortion(info_portions::Event),
     /// The PDA is told that its contents changed (4.1 step 6, 5.2 step 6).
     PdaChanged,
@@ -164,9 +169,9 @@ pub(crate) enum Request {
 /// The player's story state scripts read and change.
 #[derive(Default)]
 pub struct Story {
-    /// The information portions (`IP`); the engine sets them when the game
-    /// starts (TODO(#1063)).
-    pub info_portions: Option<InfoPortions>,
+    /// The information portions (`IP`), shared with the level, which sets
+    /// them when the game starts.
+    pub info_portions: Option<SharedInfoPortions>,
     pub tasks: PlayerTasks,
     pub map_spots: MapSpots,
     /// The player's news (`sav` 9 part 5), oldest first.
@@ -207,6 +212,24 @@ impl Story {
     /// The events since the last call, oldest first.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
+    }
+
+    /// A new game's story (its level ended): everything the game changed
+    /// forgotten, the interface's texture descriptions kept.
+    pub fn new_game(&mut self) {
+        let textures = self.textures.take();
+        *self = Self {
+            textures,
+            ..Self::default()
+        };
+    }
+
+    /// Whether the information portions have log lines or events the
+    /// engine's own gives left ([`Scripts::info_portions_changed`]).
+    pub fn portions_changed(&self) -> bool {
+        self.info_portions
+            .as_ref()
+            .is_some_and(|p| p.borrow().has_pending())
     }
 
     fn new_key(&mut self) -> FunctionKey {
@@ -316,30 +339,32 @@ impl Context {
     /// rest as events. An undeclared id stops the game.
     pub fn give_portion(&self, story: &mut Story, holder: u16, id: &[u8]) -> Result<(), String> {
         let now = self.now();
-        let Some(portions) = story.info_portions.as_mut() else {
+        let Some(portions) = story.info_portions.clone() else {
             return Err("the information portions aren't set".into());
         };
-        let given = portions.give(holder, &cp1251::decode(id), now);
+        let given = portions.borrow_mut().give(holder, &cp1251::decode(id), now);
         self.after_portions(story, given)
     }
 
     /// Disables `id` on `holder` by a transfer (`IP` 4.1).
     pub fn disable_portion(&self, story: &mut Story, holder: u16, id: &[u8]) -> Result<(), String> {
-        let Some(portions) = story.info_portions.as_mut() else {
+        let Some(portions) = story.info_portions.clone() else {
             return Err("the information portions aren't set".into());
         };
-        let disabled = portions.disable(holder, &cp1251::decode(id));
+        let disabled = portions.borrow_mut().disable(holder, &cp1251::decode(id));
         self.after_portions(story, disabled)
     }
 
     /// The log lines and events of the portions after `result`, and its
     /// error as the game's stop.
     fn after_portions(&self, story: &mut Story, result: io::Result<()>) -> Result<(), String> {
-        let Some(portions) = story.info_portions.as_mut() else {
+        let Some(portions) = story.info_portions.clone() else {
             return Ok(());
         };
-        let log = portions.take_log();
-        let events = portions.take_events();
+        let (log, events) = {
+            let mut portions = portions.borrow_mut();
+            (portions.take_log(), portions.take_events())
+        };
         {
             let mut services = self.services.borrow_mut();
             for line in &log {
@@ -505,10 +530,12 @@ impl Context {
         for objective in &objectives {
             let o = objective.borrow().clone();
             if !o.article.is_empty()
-                && let Some(portions) = story.info_portions.as_mut()
+                && let Some(portions) = story.info_portions.clone()
             {
+                let mut portions = portions.borrow_mut();
                 let learnt = portions.learn_article(&cp1251::decode(&o.article), now);
                 let log = portions.take_log();
+                drop(portions);
                 for line in &log {
                     self.services.borrow_mut().console.log_mut().write(line);
                 }
@@ -740,6 +767,11 @@ impl Request {
 /// What a state with the story registered keeps for the engine's calls.
 pub(crate) struct Registered {
     ctx: Context,
+    /// The engine objects standing for tasks and objectives in the
+    /// callback `task_state`, by the address of what they hold: one each,
+    /// kept as long as the state (our choice: the original hands scripts
+    /// the task itself).
+    callback_objects: HashMap<usize, (Weak<dyn std::any::Any>, EnginePart)>,
 }
 
 impl Scripts {
@@ -761,7 +793,10 @@ impl Scripts {
             fatal: self.fatal_flag(),
         };
         members::register(self, &ctx)?;
-        self.story_state = Some(Registered { ctx });
+        self.story_state = Some(Registered {
+            ctx,
+            callback_objects: HashMap::new(),
+        });
         Ok(())
     }
 
@@ -813,6 +848,89 @@ impl Scripts {
         let args = ["resolved".into(), Value::Number(f64::from(key))];
         let result = self.guarded(|lua| lua.call_kept(STORY_ENTRY, &args))?;
         Ok(result.first() == Some(&Value::Boolean(true)))
+    }
+
+    /// Raises the story's callbacks on the player's object (spec O,
+    /// [`Scripts::raise`]), in order, until they raise no more: `task_state`
+    /// with the task and the objective as `CGameTask` and
+    /// `SGameTaskObjective` engine objects, `map_location_added` and
+    /// `inventory_info`. Without the player's object they are dropped. The
+    /// story's other events are returned in order, for the engine.
+    pub fn raise_story_callbacks(&mut self) -> Result<Vec<Event>, Error> {
+        let ctx = self.story_context()?;
+        let mut rest = Vec::new();
+        loop {
+            let events = ctx.story.borrow_mut().take_events();
+            if events.is_empty() {
+                return Ok(rest);
+            }
+            for event in events {
+                let raised = match &event {
+                    Event::TaskState {
+                        task,
+                        objective,
+                        state,
+                    } => {
+                        let task_part =
+                            self.callback_object(task, "CGameTask", members::TaskPart)?;
+                        ctx.story.borrow_mut().remember_task(task_part, task);
+                        let objective = self.callback_object(
+                            objective,
+                            "SGameTaskObjective",
+                            members::ObjectivePart,
+                        )?;
+                        ObjectEvent::TaskState {
+                            task: task_part,
+                            objective,
+                            state: f64::from(*state),
+                        }
+                    }
+                    Event::MapLocationAdded { spot_type, object } => {
+                        ObjectEvent::MapLocationAdded {
+                            location_type: spot_type.clone(),
+                            object: *object,
+                        }
+                    }
+                    Event::InfoPortion(info_portions::Event::InventoryInfo { portion }) => {
+                        ObjectEvent::InventoryInfo {
+                            portion: crate::game_object::game_bytes(portion),
+                        }
+                    }
+                    _ => {
+                        rest.push(event);
+                        continue;
+                    }
+                };
+                if let Some(player) = ctx.player() {
+                    self.raise(player, &raised)?;
+                }
+            }
+        }
+    }
+
+    /// The engine object of class `class` holding `make(value)`, made on
+    /// first use and kept by the state ([`Registered::callback_objects`]).
+    fn callback_object<T: 'static, P: std::any::Any>(
+        &mut self,
+        value: &Rc<T>,
+        class: &str,
+        make: impl FnOnce(Rc<T>) -> P,
+    ) -> Result<EnginePart, Error> {
+        let key = Rc::as_ptr(value) as *const () as usize;
+        let objects = self.story_state.as_mut().map(|r| &mut r.callback_objects);
+        if let Some(objects) = objects {
+            objects.retain(|_, (held, _)| held.strong_count() > 0);
+            if let Some((_, part)) = objects.get(&key) {
+                return Ok(*part);
+            }
+        }
+        let held = Rc::clone(value);
+        let part = self.lua_mut().new_engine_object(class, |_| make(held))?;
+        let weak: Weak<dyn std::any::Any> = Rc::downgrade(value) as Weak<dyn std::any::Any>;
+        if let Some(r) = self.story_state.as_mut() {
+            r.callback_objects.insert(key, (weak, part));
+        }
+        Ok(part)
     }
 
     /// The engine gave or disabled portions itself (dialogs, documents,
@@ -871,7 +989,7 @@ impl Scripts {
             !portions.is_empty()
                 && portions.iter().all(|id| {
                     matches!((&story.info_portions, player), (Some(p), Some(player))
-                        if p.holds(player, &cp1251::decode(id)))
+                        if p.borrow().holds(player, &cp1251::decode(id)))
                 })
         };
         if holds_all(List::Fail) {

@@ -13,7 +13,7 @@
 use std::io;
 
 use volya_engine_core::dialogs::conditions::DialogWorld;
-use volya_engine_core::info_portions::{Change, InfoPortions};
+use volya_engine_core::info_portions::Change;
 use volya_engine_formats::cp1251;
 
 use crate::entry_points::{Keep, lua_text};
@@ -86,7 +86,7 @@ impl Scripts {
     fn transfer(&mut self, id: &str, change: Change) -> io::Result<()> {
         let id = cp1251::encode(id).unwrap_or_else(|| id.as_bytes().to_vec());
         self.with_story(|ctx, story| {
-            let Some(player) = story.info_portions.as_ref().map(InfoPortions::player) else {
+            let Some(player) = story.info_portions.as_ref().map(|p| p.borrow().player()) else {
                 return Err("the information portions aren't set".into());
             };
             match change {
@@ -109,7 +109,10 @@ impl DialogWorld for Scripts {
             return false;
         };
         let story = story.borrow();
-        (story.info_portions.as_ref()).is_some_and(|p| p.holds(p.player(), id))
+        (story.info_portions.as_ref()).is_some_and(|p| {
+            let p = p.borrow();
+            p.holds(p.player(), id)
+        })
     }
 
     fn give_to_player(&mut self, id: &str) -> io::Result<()> {

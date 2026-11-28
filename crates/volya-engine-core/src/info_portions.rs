@@ -521,6 +521,11 @@ impl InfoPortions {
         &self.sent
     }
 
+    /// Whether events or log lines wait to be taken.
+    pub fn has_pending(&self) -> bool {
+        !self.events.is_empty() || !self.log.is_empty()
+    }
+
     /// The events since the last call, in order.
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)

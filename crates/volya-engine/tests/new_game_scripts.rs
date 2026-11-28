@@ -21,6 +21,7 @@ use volya_engine::app::{App, AppState};
 use volya_engine::audio::Silent;
 use volya_engine::controls::MoveAction;
 use volya_engine::core::camera::Angles;
+use volya_engine::core::dialogs::conditions::DialogWorld;
 use volya_engine::core::input::{Control, Event, Input, Key};
 use volya_engine::core::memory_manager::GAME_SCRIPTS;
 use volya_engine::core::simulation::NO_ID;
@@ -474,6 +475,24 @@ end
         "the scripts' motor turns the door: {before} -> {after}"
     );
     assert_eq!(angle, after, "the script reads the level's hinge");
+
+    // Script API P over the game's own portions: a give to the player
+    // through the scripts' story (as a dialog's effect gives it) is the
+    // level's, and the scripts see it a frame later. TODO(#1077): through
+    // the player's `give_info_portion` once its binder lets it spawn.
+    let scripts = app.game_scripts().unwrap();
+    (scripts.scripts().give_to_player("esc_trader_can_leave")).unwrap();
+    step(&mut app, &mut input);
+    let held = {
+        let portions = app.level().unwrap().info_portions().unwrap().borrow();
+        portions.holds(portions.player(), "esc_trader_can_leave")
+    };
+    assert!(held, "the level's portions have the scripts' give");
+    let scripts = app.game_scripts().unwrap();
+    assert!(
+        scripts.scripts().player_holds("esc_trader_can_leave"),
+        "the scripts see it"
+    );
 
     // The services as the load left them: the game type and app_ready().
     let scripts = app.game_scripts().unwrap();

@@ -318,10 +318,10 @@ fn is_holder(ctx: &Context, id: u16) -> bool {
 }
 
 fn holds(story: &Story, holder: u16, id: &[u8]) -> bool {
-    story
-        .info_portions
-        .as_ref()
-        .is_some_and(|p| p.holds(holder, &volya_engine_formats::cp1251::decode(id)))
+    story.info_portions.as_ref().is_some_and(|p| {
+        p.borrow()
+            .holds(holder, &volya_engine_formats::cp1251::decode(id))
+    })
 }
 
 fn member(

@@ -145,8 +145,10 @@ fn game() -> Option<Game> {
 
 /// The scripts, the player character holding `held` and nothing else.
 fn world<'a>(g: &'a mut Game, held: &[&str]) -> &'a mut Scripts {
-    g.story.borrow_mut().info_portions =
-        Some(InfoPortions::new(Arc::clone(&g.declarations), PLAYER));
+    g.story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+        Arc::clone(&g.declarations),
+        PLAYER,
+    ))));
     let s = g.scripts.scripts();
     for id in held {
         s.give_to_player(id).unwrap();

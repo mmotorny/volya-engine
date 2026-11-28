@@ -166,8 +166,10 @@ fn shipped_uses_of_the_story_state() {
         health: Some(1.0),
     };
     let actor = s.spawn_engine_object(ObjectClass::Player, player).unwrap();
-    story.borrow_mut().info_portions =
-        Some(InfoPortions::new(std::sync::Arc::new(declarations), 0));
+    story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+        std::sync::Arc::new(declarations),
+        0,
+    ))));
 
     let registered = s
         .exec(

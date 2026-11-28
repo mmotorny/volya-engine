@@ -338,6 +338,11 @@ mod story {
     }
 
     #[test]
+    fn callbacks_raised() {
+        section(checks::callbacks);
+    }
+
+    #[test]
     fn objective_states() {
         section(checks::states);
     }

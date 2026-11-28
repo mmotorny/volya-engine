@@ -724,6 +724,11 @@ impl Simulation {
         self.schedule.iter().copied()
     }
 
+    /// The story registry: story id to object id.
+    pub fn story_registry(&self) -> &BTreeMap<i32, u16> {
+        &self.story_ids
+    }
+
     /// The object with story id `story_id`.
     pub fn by_story_id(&self, story_id: i32) -> Option<u16> {
         self.story_ids.get(&story_id).copied()

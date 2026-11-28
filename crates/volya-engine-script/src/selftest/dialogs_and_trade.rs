@@ -236,7 +236,10 @@ pub(super) fn state() -> Result<State, String> {
         &parse("<game_tasks/>")?,
     )
     .map_err(|e| e.to_string())?;
-    story.borrow_mut().info_portions = Some(InfoPortions::new(Arc::new(declarations), PLAYER));
+    story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+        Arc::new(declarations),
+        PLAYER,
+    ))));
     // Load the script so its functions are reachable as `talks.*`.
     s.exec("=load", b"local _ = talks.note").map_err(message)?;
     Ok(State {
@@ -284,7 +287,7 @@ fn expect_calls(t: &mut State, want: &[&str]) -> Result<(), String> {
 }
 
 fn holds(t: &State, id: &str) -> bool {
-    (t.story.borrow().info_portions.as_ref()).is_some_and(|p| p.holds(PLAYER, id))
+    (t.story.borrow().info_portions.as_ref()).is_some_and(|p| p.borrow().holds(PLAYER, id))
 }
 
 fn generated(id: &str, init: &str) -> Dialog {

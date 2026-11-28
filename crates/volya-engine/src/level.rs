@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -86,6 +87,7 @@ use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
 use crate::script::game_object::callbacks::ObjectEvent;
+use crate::script::story::SharedInfoPortions;
 use crate::scripts::{ClientObject, ClientSpawning};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, Flares, SkyCamera, SunFade};
@@ -413,9 +415,9 @@ pub struct LevelScreen {
     /// The offline simulation (offline-simulation.md); `None` only in the
     /// unit tests' empty level.
     simulation: Option<Simulation>,
-    /// The holders' information portions (info-portions.md); `None` only in
-    /// the unit tests' empty level.
-    info_portions: Option<InfoPortions>,
+    /// The holders' information portions (info-portions.md), shared with
+    /// the scripts' story; `None` only in the unit tests' empty level.
+    info_portions: Option<SharedInfoPortions>,
     /// Where each of the objects' instances is drawn; `None` while it is
     /// not online. Shared with the scenes, replaced when it changes.
     placements: Arc<Vec<Option<Mat4>>>,
@@ -1527,7 +1529,7 @@ pub struct NewGameLoad {
     /// ([`NewGameLoad::set_prefetched`]).
     prefetched: Option<Arc<objects::Prefetched>>,
     simulation: Option<Simulation>,
-    info_portions: Option<InfoPortions>,
+    info_portions: Option<SharedInfoPortions>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
     spawned: Option<objects::Spawned>,
@@ -1824,6 +1826,7 @@ impl NewGameLoad {
             physics: Rc::clone(shared),
             collision: Arc::clone(collision),
             paths: sim.paths.clone(),
+            info_portions: self.info_portions.clone(),
         })
     }
 
@@ -1899,7 +1902,10 @@ impl NewGameLoad {
                     .map(|v| v.model.to_string());
                 // info-portions.md 2: no holder holds a portion yet.
                 let declarations = data.info_portions(tree)?;
-                self.info_portions = Some(InfoPortions::new(declarations, character.owner.id));
+                self.info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+                    declarations,
+                    character.owner.id,
+                ))));
                 self.character = Some(character);
                 self.simulation = Some(sim);
                 self.clock = Some(clock);
@@ -3456,14 +3462,16 @@ impl LevelScreen {
         }
     }
 
-    /// The holders' information portions (info-portions.md).
-    pub fn info_portions(&self) -> Option<&InfoPortions> {
+    /// The holders' information portions (info-portions.md), shared with
+    /// the scripts' story.
+    pub fn info_portions(&self) -> Option<&SharedInfoPortions> {
         self.info_portions.as_ref()
     }
 
-    /// The holders' information portions, to give, disable and ask.
-    pub fn info_portions_mut(&mut self) -> Option<&mut InfoPortions> {
-        self.info_portions.as_mut()
+    /// The simulation's story registry (story id to object id) while it
+    /// runs.
+    pub fn story_registry(&self) -> Option<&BTreeMap<i32, u16>> {
+        self.simulation.as_ref().map(Simulation::story_registry)
     }
 
     /// Gives the player character each of `ids` by a transfer
@@ -3472,11 +3480,13 @@ impl LevelScreen {
     /// [`LevelScreen::take_fatal`].
     pub fn give_player(&mut self, ids: &[&str]) {
         let now = self.clock.time();
-        let Some(portions) = &mut self.info_portions else {
+        let Some(portions) = &self.info_portions else {
             return;
         };
+        let mut portions = portions.borrow_mut();
         let player = portions.player();
         let given = ids.iter().try_for_each(|id| portions.give(player, id, now));
+        drop(portions);
         if let Err(e) = given {
             self.record_fatal(e.to_string());
         }
@@ -3486,23 +3496,26 @@ impl LevelScreen {
     /// (info-portions.md 1.2: an undeclared id's listing of the index).
     pub fn take_portion_log(&mut self) -> Vec<String> {
         self.info_portions
-            .as_mut()
-            .map_or_else(Vec::new, InfoPortions::take_log)
+            .as_ref()
+            .map_or_else(Vec::new, |p| p.borrow_mut().take_log())
     }
 
     /// The messages sent to the server return (info-portions.md 3.1,
     /// believed: on a later update than the transfer). An error is fatal.
-    /// The script part's events have no receiver yet and are dropped
-    /// (TODO(#220): the script interface calls the action functions and
-    /// the callbacks; TODO(#993): the dialogue window takes its rebuild
-    /// mark).
+    /// The script part's events are the scripts' story's
+    /// (`Scripts::info_portions_changed`); without scripts sharing the
+    /// portions (unit tests) they are dropped.
     fn deliver_portions(&mut self) {
         let now = self.clock.time();
-        let Some(portions) = &mut self.info_portions else {
+        let Some(shared) = &self.info_portions else {
             return;
         };
+        let mut portions = shared.borrow_mut();
         let delivered = portions.deliver(now);
-        portions.take_events();
+        if Rc::strong_count(shared) == 1 {
+            portions.take_events();
+        }
+        drop(portions);
         if let Err(e) = delivered {
             self.record_fatal(e.to_string());
         }
@@ -4581,7 +4594,10 @@ impl LevelScreen {
         declarations: crate::core::info_portions::Declarations,
     ) -> Self {
         let player = self.character.as_ref().map_or(0, |c| c.owner.id);
-        self.info_portions = Some(InfoPortions::new(Arc::new(declarations), player));
+        self.info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+            Arc::new(declarations),
+            player,
+        ))));
         self
     }
 

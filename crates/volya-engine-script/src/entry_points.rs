@@ -332,6 +332,11 @@ impl GameScripts {
         &self.startup.objects
     }
 
+    /// The player's story state as scripts reach it (script API P).
+    pub fn story(&self) -> &Rc<RefCell<Story>> {
+        &self.startup.story
+    }
+
     /// The engine's calls into scripts so far, oldest first.
     pub fn calls(&self) -> &[EngineCall] {
         &self.calls
