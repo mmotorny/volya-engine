@@ -49,6 +49,7 @@ use crate::core::occlusion::object_box;
 use crate::core::occlusion::{OcclusionMesh, View};
 use crate::core::particles::placed::{Origin, PlacedEffect, PlacedEffects, particle_capacity};
 use crate::core::particles::random::Shared;
+use crate::core::physics::Timers;
 use crate::core::simulation::graph::Graph;
 use crate::core::simulation::navigation::Navigation;
 use crate::core::simulation::{AlifeConfig, Changes, Simulation};
@@ -67,6 +68,7 @@ use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
 use crate::level_details::{self, DetailsScene, DetailsWorld, LevelDetailObjects};
 use crate::level_doors::{DoorReport, LevelDoors};
 use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData};
+use crate::level_physics::{LevelPhysics, PhysicsReport, PhysicsSettings};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade_into};
@@ -481,6 +483,9 @@ pub struct LevelScreen {
     /// The doors under the door scheme and the player's hint
     /// (docs/behavior/trader-door.md).
     doors: LevelDoors,
+    /// The physics world (physics-world.md), made under
+    /// `st_client_spawning`.
+    physics: LevelPhysics,
 }
 
 /// What the engine interface reports.
@@ -518,6 +523,8 @@ pub struct LevelState {
     pub detectors: Vec<DetectorReport>,
     /// The doors under the door scheme (trader-door.md).
     pub doors: Vec<DoorReport>,
+    /// The physics world (physics-world.md).
+    pub physics: PhysicsReport,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -1543,6 +1550,10 @@ pub struct NewGameLoad {
     /// The doors under the door scheme (trader-door.md), found with the
     /// objects.
     doors: Option<LevelDoors>,
+    /// The console's physics values as the load runs.
+    physics_settings: PhysicsSettings,
+    /// The physics world, made under `st_client_spawning`.
+    physics: Option<LevelPhysics>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1769,6 +1780,11 @@ impl NewGameLoad {
         self.now = now;
     }
 
+    /// The console's physics values in force for the next stage.
+    pub fn set_physics_settings(&mut self, settings: PhysicsSettings) {
+        self.physics_settings = settings;
+    }
+
     /// Does the work of `stage`.
     pub fn run(&mut self, stage: Stage, tree: &dyn Vfs, data: &GameData) -> io::Result<()> {
         let dir = self.dir.clone();
@@ -1974,6 +1990,11 @@ impl NewGameLoad {
             // this caption by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
+                // physics-world.md 1.1, 1.2: the world, before the client
+                // receives the level's objects, its floor below the lowest
+                // y of the level's extent (the collision mesh's box).
+                let lowest_y = earlier(self.collision.as_deref(), "level.cform")?.bbox_min[1];
+                self.physics = Some(LevelPhysics::new(self.physics_settings, lowest_y));
                 // player-movement.md section 1: the actor's section is the
                 // one its spawn record names.
                 self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
@@ -2437,6 +2458,7 @@ impl NewGameLoad {
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
         let doors = earlier(self.doors, "objects")?;
+        let physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -2559,6 +2581,7 @@ impl NewGameLoad {
             body_events: Vec::new(),
             difficulty: None,
             doors,
+            physics,
         };
         screen.torches_frame(0.0);
         screen.update_view();
@@ -2670,6 +2693,8 @@ impl LevelScreen {
         self.clock.set_paused(true);
         self.clock.advance(elapsed);
         self.player.paused(now);
+        // physics-world.md 2.2: `dt_f` is 0, so no step runs.
+        self.physics.frame(0.0, now);
         // The frame still draws its lights and glows; no time passes.
         self.lights_frame(0.0, details);
     }
@@ -2854,6 +2879,9 @@ impl LevelScreen {
         );
         self.update_view();
         self.lights_frame(elapsed as f32 / 1000.0, true);
+        // physics-world.md 2.1: the physics world after the frame's object
+        // updates, on the movement's display frame time (2.2).
+        self.physics.frame(self.player.frame_time(), now);
     }
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
@@ -3007,6 +3035,23 @@ impl LevelScreen {
     /// `g_game_difficulty` is `name` (player-hits.md 3 items 1, 2): the
     /// character's immunities are read again when it changes; a missing
     /// immunity section is fatal.
+    /// The console's physics values before a frame (physics-world.md 2.3,
+    /// 2.4), with the display frame time as it stands.
+    pub fn set_physics_settings(&mut self, settings: PhysicsSettings) {
+        let dt_f = self.player.frame_time();
+        self.physics.follow(settings, dt_f);
+    }
+
+    /// The physics world (physics-world.md).
+    pub fn physics(&self) -> &LevelPhysics {
+        &self.physics
+    }
+
+    /// The physics timers since last taken (physics-world.md 6).
+    pub fn take_physics_timers(&mut self) -> Timers {
+        self.physics.take_timers()
+    }
+
     pub fn set_difficulty(&mut self, name: &str) {
         if self.difficulty.as_deref() == Some(name) {
             return;
@@ -4075,6 +4120,7 @@ impl LevelScreen {
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
             detectors: self.detectors.report(&self.zones),
             doors: self.doors.report(),
+            physics: self.physics.report(),
         }
     }
 
@@ -4292,6 +4338,7 @@ impl LevelScreen {
             body_events: Vec::new(),
             difficulty: None,
             doors: LevelDoors::default(),
+            physics: LevelPhysics::new(PhysicsSettings::default(), 0.0),
         }
     }
 }

@@ -604,6 +604,11 @@ impl Player {
         &mut self.body
     }
 
+    /// The display frame time `dt_f` of the latest frame, s (3.2).
+    pub fn frame_time(&self) -> f32 {
+        self.frame_time
+    }
+
     /// The physics steps the latest frame ran (6.1).
     pub fn steps(&self) -> u32 {
         self.steps

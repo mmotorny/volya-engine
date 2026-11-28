@@ -35,6 +35,7 @@ use crate::core::vfs::Vfs;
 use crate::data::{self, Assets, GameData};
 use crate::draw::Ctx;
 use crate::level::{GeometryKeeper, LevelScreen, LevelWorld, NewGameLoad};
+use crate::level_physics::PhysicsSettings;
 use crate::objects::{GeometryChunk, Prefetched, Prefetching};
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
@@ -472,6 +473,12 @@ impl Loading {
     /// it is made ([`NewGameLoad::keep_geometry_with`]).
     pub fn keep_geometry_with(&mut self, keep: Option<GeometryKeeper>) {
         self.load.keep_geometry_with(keep);
+    }
+
+    /// The console's physics values in force for the next stage
+    /// ([`NewGameLoad::set_physics_settings`]).
+    pub fn set_physics_settings(&mut self, settings: PhysicsSettings) {
+        self.load.set_physics_settings(settings);
     }
 
     /// Whether the loading waits under `st_prefetching_objects` for the

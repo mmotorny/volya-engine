@@ -428,5 +428,8 @@ fn the_timers_measure_the_frame_and_its_steps() {
     // Taken: they restart; a frame without steps measures only itself.
     assert_eq!(w.frame(0.001, 0), 0);
     let t = w.take_timers();
-    assert_eq!((t.physics, t.collider, t.solver, t.steps), (1.0, 0.0, 0.0, 0));
+    assert_eq!(
+        (t.physics, t.collider, t.solver, t.steps),
+        (1.0, 0.0, 0.0, 0)
+    );
 }

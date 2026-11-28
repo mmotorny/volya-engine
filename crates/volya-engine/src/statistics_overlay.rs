@@ -4,9 +4,9 @@
 //! The statistics overlay of `rs_stats` (docs/behavior/display-mode.md
 //! part B): drawn over everything of a frame while the variable is on, its
 //! values measured only meanwhile. Volya Engine measures the frame (FPS),
-//! the engine's update, the drawing and the sound, and counts the draw
-//! calls; every other timer and count of B.4 has nothing here to measure
-//! and shows 0.
+//! the engine's update, the drawing, the sound and the physics world
+//! (physics-world.md 6), and counts the draw calls; every other timer and
+//! count of B.4 has nothing here to measure and shows 0.
 
 use std::io;
 
@@ -18,6 +18,7 @@ use volya_engine_formats::text::layout::draw_line;
 use volya_engine_formats::ui::Color;
 use volya_engine_formats::ui::layout::HAlign;
 
+use crate::core::physics::Timers;
 use crate::core::vfs::Vfs;
 
 /// The layer the overlay's glyphs are drawn in, over everything.
@@ -54,8 +55,14 @@ pub struct StatisticsOverlay {
     render: f64,
     sound: f64,
     draws: u32,
+    /// `Physics`, `collider` and `solver`, with the solver's count.
+    physics: f64,
+    collider: f64,
+    solver: f64,
+    solver_count: u32,
     /// The latest frame's measurements, taken at the next overlay.
     latest: FrameTimes,
+    latest_physics: Timers,
     /// Frames drawn with the overlay (B.3's notice alternates by it).
     frames: u64,
 }
@@ -87,7 +94,12 @@ impl StatisticsOverlay {
             render: 0.0,
             sound: 0.0,
             draws: 0,
+            physics: 0.0,
+            collider: 0.0,
+            solver: 0.0,
+            solver_count: 0,
             latest: FrameTimes::default(),
+            latest_physics: Timers::default(),
             frames: 0,
         })
     }
@@ -95,6 +107,11 @@ impl StatisticsOverlay {
     /// The platform's measurements of the frame just drawn.
     pub fn measured(&mut self, times: FrameTimes) {
         self.latest = times;
+    }
+
+    /// The physics world's timers of the frame just run.
+    pub fn physics_measured(&mut self, timers: Timers) {
+        self.latest_physics = timers;
     }
 
     /// A frame with the overlay, `dt` seconds after the previous one: the
@@ -106,6 +123,11 @@ impl StatisticsOverlay {
         decay(&mut self.render, t.render_ms);
         decay(&mut self.sound, t.sound_ms);
         self.draws = t.draws;
+        let p = std::mem::take(&mut self.latest_physics);
+        decay(&mut self.physics, p.physics);
+        decay(&mut self.collider, p.collider);
+        decay(&mut self.solver, p.solver);
+        self.solver_count = p.steps;
         if dt > 1e-7 {
             self.fps = 0.7 * self.fps + 0.3 / dt;
             let r = self.render;
@@ -142,12 +164,19 @@ impl StatisticsOverlay {
             Some("uParticles:  Qstart[0] Qactive[0] Qdestroy[0]".into()),
             Some("spInsert:    o[0.00ms, 0.0%], p[0.00ms, 0.0%]".into()),
             Some("spRemove:    o[0.00ms, 0.0%], p[0.00ms, 0.0%]".into()),
-            Some(format!("Physics:     {z}ms, {:2.1}%", pe(0.0))),
-            Some(format!("  collider:  {z}ms")),
+            Some(format!(
+                "Physics:     {:2.2}ms, {:2.1}%",
+                self.physics,
+                pe(self.physics)
+            )),
+            Some(format!("  collider:  {:2.2}ms", self.collider)),
+            Some(format!(
+                "  solver:    {:2.2}ms, {}",
+                self.solver, self.solver_count
+            )),
         ];
         let counted = |label: &str| Some(format!("{label}{z}ms, 0"));
         lines.extend([
-            counted("  solver:    "),
             counted("aiThink:     "),
             counted("  aiRange:   "),
             counted("  aiPath:    "),
@@ -320,6 +349,38 @@ mod tests {
         o.frame(0.0);
         assert!((o.engine - (0.99 * 4.0 + 0.02)).abs() < 1e-9);
         assert_eq!(o.engine_lines()[4].as_deref(), Some("DIP/DP:      0"));
+    }
+
+    #[test]
+    fn the_physics_timers() {
+        let mut o = overlay();
+        o.measured(FrameTimes {
+            engine_ms: 8.0,
+            ..Default::default()
+        });
+        o.physics_measured(Timers {
+            physics: 2.0,
+            collider: 0.5,
+            solver: 1.25,
+            steps: 3,
+        });
+        o.frame(0.02);
+        let lines = o.engine_lines();
+        let at = |label: &str| {
+            lines
+                .iter()
+                .flatten()
+                .find(|l| l.starts_with(label))
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(at("Physics:"), "Physics:     2.00ms, 25.0%");
+        assert_eq!(at("  collider:"), "  collider:  0.50ms");
+        assert_eq!(at("  solver:"), "  solver:    1.25ms, 3");
+        // Not measured again: the peaks decay, the count is 0.
+        o.frame(0.02);
+        assert!((o.physics - 0.99 * 2.0).abs() < 1e-9);
+        assert_eq!(o.solver_count, 0);
     }
 
     #[test]

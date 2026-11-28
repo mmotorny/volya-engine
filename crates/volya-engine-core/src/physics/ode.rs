@@ -406,10 +406,7 @@ impl OdeSolver {
                 g.joints,
             )
         };
-        let (from_world, into_world) = (
-            self.group_mut(from).world,
-            self.group_mut(into).world,
-        );
+        let (from_world, into_world) = (self.group_mut(from).world, self.group_mut(into).world);
         for &m in &members {
             for &b in &self.group_mut(m).own.clone() {
                 // SAFETY: the body is listed in `from`'s world; both live.
@@ -775,8 +772,8 @@ mod tests {
         assert_eq!(s.merged(b[2]), Some((groups[2].0, 1, 0)));
         s.solve_groups(&params(), groups.iter().copied());
         // Held: the contacts' softness leaves little motion.
-        for k in 0..2 {
-            let y = s.position(b[k]).unwrap()[1] - k as f32;
+        for (k, &body) in b.iter().enumerate().take(2) {
+            let y = s.position(body).unwrap()[1] - k as f32;
             assert!(y.abs() < 1e-3, "{k}: {y}");
         }
         assert!((s.position(b[2]).unwrap()[1] - 2.0 + 19.62e-4).abs() < 1e-6);

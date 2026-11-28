@@ -31,6 +31,7 @@ pub mod level_details;
 pub mod level_doors;
 pub mod level_lights;
 pub mod level_maps;
+pub mod level_physics;
 pub mod level_sound;
 pub mod level_visibility;
 pub mod loading_screen;

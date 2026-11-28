@@ -35,6 +35,7 @@ use crate::data::{Assets, GameData};
 use crate::draw::Ctx;
 use crate::inventory_screen::{self, InventoryScreen, InventoryState};
 use crate::level::{GeometryKeeper, LevelScreen, LevelState, LevelWorld};
+use crate::level_physics::PhysicsSettings;
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
     GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
@@ -712,7 +713,8 @@ fn geometry_lod(console: &Console) -> [f32; 3] {
 /// are drawn at (`video`, the video mode) and the target's supersampling
 /// (`supersample`, as the device was last made or reset with), the view
 /// distance, the geometry detail level (object-detail-level.md 1) and the
-/// grass density (detail-objects.md 7), with `wind` the wind's strength.
+/// grass density (detail-objects.md 7), with `wind` the wind's strength,
+/// and the physics values (physics-world.md 2.3, 2.4).
 pub fn level_settings(
     level: &mut LevelScreen,
     console: &Console,
@@ -733,6 +735,7 @@ pub fn level_settings(
     let [lod, a, b] = geometry_lod(console);
     level.set_geometry_lod(lod, a, b);
     level.set_detail_settings(console.number("r__detail_density"), wind);
+    level.set_physics_settings(PhysicsSettings::from_console(console));
 }
 
 /// What a frame takes from the console besides the display colour's ramp
@@ -1508,6 +1511,8 @@ impl App {
                 (self.video, self.supersample),
                 self.sound_run.wind.strength,
             );
+            // The previous frame's physics timers (physics-world.md 6).
+            self.stats.physics_measured(level.take_physics_timers());
             // player-hits.md 3: the immunities follow `g_game_difficulty`.
             if let Some(difficulty) = self.console.status("g_game_difficulty") {
                 level.set_difficulty(&difficulty);
@@ -1638,6 +1643,7 @@ impl App {
                     }
                     NewGame::Stages(loading) => {
                         let captions = loading.screen().state().captions;
+                        loading.set_physics_settings(PhysicsSettings::from_console(&self.console));
                         let step = loading.step(tree, data, now);
                         // Kept for the game type once made, whatever
                         // becomes of this load.

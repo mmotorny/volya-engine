@@ -333,6 +333,8 @@ mod tested {
 /// unavailable.
 #[wasm_bindgen]
 pub async fn start(canvas: OffscreenCanvas) {
+    // The statistics overlay's timers read the worker's performance.now().
+    volya_engine::core::perf_counter::install(now);
     volya_engine::core::console::set_meters(volya_engine::core::console::Meters {
         memory: memory_statistics,
         resources: gpu::resource_counts,
