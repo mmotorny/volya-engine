@@ -2765,6 +2765,14 @@ impl App {
         }
     }
 
+    /// The level while one runs, to drive (tests).
+    pub fn level_mut(&mut self) -> Option<&mut LevelScreen> {
+        match &mut self.phase {
+            Some(Phase::Level { level, .. }) => Some(level),
+            _ => None,
+        }
+    }
+
     /// The game ends with this app (it is dropped next): the level's
     /// sounds leave `sounds`, which outlives it, as when the level is left,
     /// and with them what they share (the collision world the occlusion

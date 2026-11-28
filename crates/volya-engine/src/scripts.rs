@@ -141,14 +141,15 @@ pub fn new_game(scripts: &GameScripts) {
 /// The level ends (the game is left for the menu, or a New Game starts
 /// over it): every object the scripts still see is destroyed, its binder
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
-/// reading). A script error is fatal.
+/// reading), then the level's call list emptied, none of it called (spec O
+/// 6.5). A script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
         let destroyed = scripts.scripts().destroy_object(id);
         destroyed.map_err(|f| override_fatal(scripts, f))?;
     }
-    Ok(())
+    scripts.scripts().clear_level_calls()
 }
 
 /// The New Game's load ended, with its level or not (3.3 step 12): the
@@ -208,8 +209,13 @@ pub fn client_spawning(
 /// server and game times; the player's placement, its feet and its body's
 /// heading (our reading of M 4); the objects that went offline or were
 /// removed destroyed, those that came online spawned (M 2.1); the player's
-/// use action on the object it targeted (M 6.3); then what the members
-/// asked of the engine ([`apply_events`]).
+/// use action on the object it targeted (M 6.3), which raises its
+/// `use_object` (spec O 4, id 15); the events the level's systems raised on
+/// its objects (spec O 4: the player's death, the items used up on it,
+/// taken and dropped); the level's call list updated, after the physics
+/// steps and the objects' updates (O 6.1: the door scheme's fast call);
+/// then what the members asked of the engine ([`apply_events`]). No system
+/// of the app perceives sounds yet, so none is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
     level: &mut LevelScreen,
@@ -245,6 +251,10 @@ pub fn level_frame(
         let used = scripts.scripts().player_use(target, ACTOR_ID);
         used.map_err(|f| override_fatal(scripts, f))?;
     }
+    for (receiver, event) in level.take_object_events() {
+        scripts.scripts().raise(receiver, &event)?;
+    }
+    scripts.scripts().update_level_calls()?;
     apply_events(scripts, level);
     Ok(())
 }

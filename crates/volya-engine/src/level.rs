@@ -83,6 +83,7 @@ use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
+use crate::script::game_object::callbacks::ObjectEvent;
 use crate::scripts::{ClientObject, ClientSpawning};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, Flares, SkyCamera, SunFade};
@@ -493,6 +494,12 @@ pub struct LevelScreen {
     /// The body sounds' events since the sound side last took them
     /// (sound-player-body.md 3, 6).
     body_events: Vec<BodyEvent>,
+    /// The events on the level's objects for the scripts since the last
+    /// [`LevelScreen::take_object_events`] (script API O 4), by receiver.
+    object_events: Vec<(u16, ObjectEvent)>,
+    /// The player's item ids at the last [`LevelScreen::take_object_events`];
+    /// `None` before the first.
+    script_items: Option<Vec<u16>>,
     /// The difficulty the character's immunities were last read for
     /// (player-hits.md 3).
     difficulty: Option<String>,
@@ -2682,6 +2689,8 @@ impl NewGameLoad {
             detectors: PlayerDetectors::new(detectors),
             hit_sound_lists: self.hit_sound_lists,
             body_events: Vec::new(),
+            object_events: Vec::new(),
+            script_items: None,
             difficulty: None,
             doors,
             physics,
@@ -2909,6 +2918,9 @@ impl LevelScreen {
                 let pick = usize::from(c.random.rand15()) % DEATHS;
                 let feet = self.player.state().position;
                 self.body_events.push(BodyEvent::Death { pick, feet });
+                // Script API O 4, id 8: no hit names its hitter, so no
+                // killer.
+                (self.object_events).push((c.owner.id, ObjectEvent::Death { killer: None }));
             }
         }
         self.back |= back;
@@ -4115,6 +4127,44 @@ impl LevelScreen {
         std::mem::take(&mut self.script_changes)
     }
 
+    /// The events on the level's objects for the scripts since the last
+    /// call (script API O 4), in order, by receiver: the player's death
+    /// (id 8), then the items used up on it (15), the items that entered
+    /// its inventory (27) and those that left it (28), the last two by
+    /// comparing its items with the previous call's (our choice: the first
+    /// call raises none, the items it starts with being there before any
+    /// callback is set).
+    pub fn take_object_events(&mut self) -> Vec<(u16, ObjectEvent)> {
+        let mut events = std::mem::take(&mut self.object_events);
+        let Some(c) = &mut self.character else {
+            return events;
+        };
+        let owner = c.owner.id;
+        for item in c.take_used() {
+            events.push((owner, ObjectEvent::UseItem { item: Some(item) }));
+        }
+        let items = &c.inventory.items;
+        let Some(before) = &mut self.script_items else {
+            self.script_items = Some(items.iter().map(|i| i.id).collect());
+            return events;
+        };
+        let same = before.len() == items.len() && before.iter().zip(items).all(|(&b, i)| b == i.id);
+        if !same {
+            for i in items.iter().filter(|i| !before.contains(&i.id)) {
+                events.push((owner, ObjectEvent::OnItemTake { item: Some(i.id) }));
+            }
+            for &id in before
+                .iter()
+                .filter(|&&id| items.iter().all(|i| i.id != id))
+            {
+                events.push((owner, ObjectEvent::OnItemDrop { item: Some(id) }));
+            }
+            before.clear();
+            before.extend(items.iter().map(|i| i.id));
+        }
+        events
+    }
+
     /// The object the player's use action targeted since the last call
     /// (script API M 6.3).
     pub fn take_used(&mut self) -> Option<u16> {
@@ -4632,6 +4682,8 @@ impl LevelScreen {
             global_ms: 0,
             hit_sound_lists: [0; TYPE_COUNT],
             body_events: Vec::new(),
+            object_events: Vec::new(),
+            script_items: None,
             difficulty: None,
             doors: LevelDoors::default(),
             physics: LevelPhysics::new(PhysicsSettings::default(), 0.0),
@@ -4643,6 +4695,42 @@ impl LevelScreen {
 mod tests {
     use super::*;
     use volya_engine_formats::shaders_xr::Definition;
+
+    /// Script API O 4: the player's items used up (15), taken (27) and
+    /// dropped (28), and its death (8), on the player's object; none at
+    /// the first call.
+    #[test]
+    fn the_players_object_events_follow_its_character() {
+        use crate::controls::Bindings;
+        use crate::core::movement::Settings;
+        let character = crate::inventory_screen::tests::character(&[("bread", 5, 3)]);
+        let owner = character.owner.id;
+        let controls = Controls::new(Bindings::default(), Settings::default());
+        let mut level = LevelScreen::empty(controls, 0).with_character(character);
+        assert_eq!(level.take_object_events(), []);
+        let c = level.character_mut().unwrap();
+        let bread = c.drop_item(5).unwrap();
+        c.inventory.take(bread);
+        assert_eq!(level.take_object_events(), [], "the same items");
+        let c = level.character_mut().unwrap();
+        let mut more = c.inventory.item(5).unwrap().clone();
+        more.id = 6;
+        c.inventory.take(more);
+        c.eat(5).unwrap();
+        let use_up = |item| (owner, ObjectEvent::UseItem { item: Some(item) });
+        let took = |item| (owner, ObjectEvent::OnItemTake { item: Some(item) });
+        let left = |item| (owner, ObjectEvent::OnItemDrop { item: Some(item) });
+        assert_eq!(level.take_object_events(), [use_up(5), took(6), left(5)]);
+        level
+            .object_events
+            .push((owner, ObjectEvent::Death { killer: None }));
+        level.character_mut().unwrap().drop_item(6);
+        assert_eq!(
+            level.take_object_events(),
+            [(owner, ObjectEvent::Death { killer: None }), left(6)]
+        );
+        assert_eq!(level.take_object_events(), []);
+    }
 
     /// level.md 3: an entry no draw uses is still created, so one the
     /// library lacks (static-shading.md 3.4) or with too few textures (7.1)

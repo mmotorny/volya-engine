@@ -166,6 +166,10 @@ pub struct CharacterState {
     /// The game time of the latest update, game ms; `None` until the first
     /// update after coming online, whose `dt` is 0 (4.1).
     last_update: Option<u64>,
+    /// The items used up on the player since [`CharacterState::take_used`]
+    /// (eaten, section 5), oldest first: the scripts' event (script API O
+    /// 4, id 15).
+    used: Vec<u16>,
 }
 
 /// What a hit asks of the movement (player-hits.md 4.1).
@@ -211,6 +215,7 @@ impl CharacterState {
             bones: Vec::new(),
             random: Rand15(1),
             last_update: None,
+            used: Vec::new(),
         }
     }
 
@@ -297,6 +302,7 @@ impl CharacterState {
             bones: Vec::new(),
             random: Rand15(1),
             last_update: None,
+            used: Vec::new(),
         })
     }
 
@@ -476,6 +482,7 @@ impl CharacterState {
             .eatable
             .ok_or_else(|| invalid(format!("{} is not eatable", item.config.section)))?;
         self.conditions.eat(&self.condition_config, &eatable);
+        self.used.push(id);
         let left = match item.portions.unwrap_or(0) {
             p if p >= 1 => p - 1,
             _ => 0,
@@ -485,6 +492,11 @@ impl CharacterState {
             self.inventory.remove(id);
         }
         Ok(())
+    }
+
+    /// The items used up on the player since the last call, oldest first.
+    pub fn take_used(&mut self) -> Vec<u16> {
+        std::mem::take(&mut self.used)
     }
 
     /// **Drop** of item `id` (inventory-screen.md section 5.7): nothing for

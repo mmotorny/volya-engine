@@ -19,7 +19,9 @@ use std::time::Instant;
 
 use volya_engine::app::{App, AppState};
 use volya_engine::audio::Silent;
-use volya_engine::core::input::{Event, Input, Key};
+use volya_engine::controls::MoveAction;
+use volya_engine::core::camera::Angles;
+use volya_engine::core::input::{Control, Event, Input, Key};
 use volya_engine::core::memory_manager::GAME_SCRIPTS;
 use volya_engine::core::simulation::NO_ID;
 use volya_engine::core::vfs::db::DbVfs;
@@ -260,6 +262,107 @@ end
             Value::Boolean(true),
         ],
         "the door's handle and binder"
+    );
+
+    // Escape skips the intro (startup.md 6.5): the level runs.
+    press(&mut input, Key::Escape);
+    step(&mut app, &mut input);
+    assert!(matches!(app.state(), AppState::Level { intro: None, .. }));
+    let scripts = app.game_scripts().unwrap();
+
+    // Script API O 5, 6.1 and 10 in the app's level frames: the door's
+    // fast call (ours, standing in for the scheme's `close_door`) runs once
+    // a frame until it returns true; the player's use action on the door
+    // raises its `use_object` on the binder's `use_callback`, as its update
+    // sets it (here wrapped to record the arguments).
+    scripts
+        .scripts()
+        .exec(
+            "=door_calls",
+            br#"
+door_calls = { fast = 0 }
+function door_calls_set(d)
+  local b = d:binded_object()
+  b.use_callback = function(self, obj, who)
+    door_calls.used = { rawequal(self, b), obj:id(), who and who:id() }
+  end
+  d:set_callback(callback.use_object, b.use_callback, b)
+  d:set_fastcall(function(v) v.fast = v.fast + 1; return v.fast == 3 end, door_calls)
+end
+function door_calls_read()
+  local u = door_calls.used
+  if not u then return door_calls.fast end
+  return door_calls.fast, u[1], u[2], u[3]
+end
+"#,
+        )
+        .unwrap();
+    scripts
+        .scripts()
+        .call("door_calls_set", &[Value::Object(handle)])
+        .unwrap();
+    assert_eq!(scripts.scripts().level_calls().unwrap(), 1);
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    let scripts = app.game_scripts().unwrap();
+    assert_eq!(
+        scripts.scripts().call("door_calls_read", &[]).unwrap(),
+        [Value::Number(3.0)],
+        "the fast call, three frames"
+    );
+    assert_eq!(scripts.scripts().level_calls().unwrap(), 0);
+
+    // Facing the leaf from 0.6 m in front of it (trader-door.md 2.5), a
+    // use.
+    let level = app.level_mut().unwrap();
+    let leaf = level.doors().boxes()[0];
+    let start = level.player().state().position;
+    let k = (0..3)
+        .min_by(|&a, &b| leaf.half_size[a].total_cmp(&leaf.half_size[b]))
+        .unwrap();
+    let mut n = leaf.axes[k];
+    let side =
+        |p: [f32; 3], n: [f32; 3]| (0..3).map(|i| (p[i] - leaf.centre[i]) * n[i]).sum::<f32>();
+    if side(start, n) < 0.0 {
+        n = n.map(|v| -v);
+    }
+    let d = leaf.half_size[k] + 0.6;
+    let feet = [
+        leaf.centre[0] + n[0] * d,
+        start[1],
+        leaf.centre[2] + n[2] * d,
+    ];
+    let h = (level.player().config).eye_height(level.player().body().box_index());
+    let angles = Angles {
+        yaw: (-n[0]).atan2(-n[2]),
+        pitch: 0.0,
+        roll: 0.0,
+    };
+    level.set_camera([feet[0], feet[1] + h, feet[2]], angles);
+    let Some(Control::Key(use_key)) = (level.controls().bindings)
+        .controls(MoveAction::Use)
+        .find(|c| matches!(c, Control::Key(_)))
+    else {
+        panic!("a key bound to use");
+    };
+    step(&mut app, &mut input);
+    step(&mut app, &mut input);
+    assert_eq!(app.level().unwrap().doors().picked_object(), Some(door));
+    press(&mut input, use_key);
+    step(&mut app, &mut input);
+    let scripts = app.game_scripts().unwrap();
+    assert_eq!(
+        scripts.scripts().call("door_calls_read", &[]).unwrap(),
+        [
+            Value::Number(3.0),
+            Value::Boolean(true),
+            Value::Number(f64::from(door)),
+            // TODO(#1077): the player's handle, once its binder runs; the
+            // player isn't in the scripts yet, so nil (O 3.2).
+            Value::Nil,
+        ],
+        "the door's use callback: the binder, the door, the user"
     );
 
     // The services as the load left them: the game type and app_ready().
