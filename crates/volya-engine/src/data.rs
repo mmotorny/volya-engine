@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::io::{self, Cursor};
 use std::sync::{Arc, OnceLock};
 
+use crate::characters::CharacterFiles;
 use crate::controls::{Bindings, Controls};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::console::{Console, ConsoleFiles, PRESET_FILES};
@@ -137,6 +138,9 @@ pub struct GameData {
     /// level: read once here rather than with each level (our choice;
     /// docs/architecture/memory.md), empty when the file is absent.
     pub effects: Arc<Library>,
+    /// The ids of the profiles and specific characters, registered at
+    /// startup (character-descriptions.md sections 1, 3.1).
+    pub characters: CharacterFiles,
     pub menu: TitleMenuLayout,
     pub intro: MovieSequence,
     /// Per intro item, how long it lasts in seconds after its delay
@@ -236,6 +240,7 @@ impl GameData {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Library::default(),
             Err(e) => return Err(e),
         });
+        let characters = CharacterFiles::register(tree, &aliases, &system)?;
 
         // startup.md section 6.1: `intro_logo`, reached from
         // `game_tutorials.xml` through its include of `ui_movies.xml`.
@@ -274,6 +279,7 @@ impl GameData {
             localization,
             strings,
             effects,
+            characters,
             menu,
             intro,
             intro_lengths: Vec::new(),

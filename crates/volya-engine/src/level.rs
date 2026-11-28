@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::characters::{self, Characters};
 use crate::controls::Controls;
 use crate::core::artefacts::{
     ArtefactRecord, ArtefactSection, Artefacts, Behaviour as ArtefactBehaviour,
@@ -74,7 +75,7 @@ use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
 use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade_into};
 use crate::loading_screen::Stage;
-use crate::objects::{self, Characters, LevelObjects, ObjectsReport};
+use crate::objects::{self, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
 use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
@@ -968,7 +969,7 @@ pub fn new_game_character(
     };
     let mut characters = Characters::new(tree, data);
     let specific = characters
-        .specific_character(&p.trader)?
+        .for_trader(&p.trader)?
         .cloned()
         .unwrap_or_else(|| SpecificCharacter {
             // Our choice: a profile without a description supplies nothing
@@ -978,21 +979,7 @@ pub fn new_game_character(
             reputation: character::NOT_SET,
             ..SpecificCharacter::default()
         });
-    let relations = match data.system.section("game_relations") {
-        Some(_) => data.system.clone(),
-        None => config::load(
-            tree,
-            &data
-                .aliases
-                .path("$game_config$", "creatures\\game_relations.ltx")?,
-        )?,
-    };
-    let communities = character::communities(
-        relations
-            .get("game_relations", "communities")
-            .flatten()
-            .unwrap_or(""),
-    );
+    let communities = characters::communities(tree, data)?;
     CharacterState::new_game(&character::NewGame {
         record: player,
         system: &data.system,

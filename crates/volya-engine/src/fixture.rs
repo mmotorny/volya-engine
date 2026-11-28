@@ -22,6 +22,13 @@ use volya_engine_formats::ui::Resolution;
 #[derive(Default)]
 pub struct MemVfs(HashMap<String, Vec<u8>>);
 
+impl MemVfs {
+    /// Adds or replaces the file at `path`.
+    pub fn insert(&mut self, path: &str, data: impl Into<Vec<u8>>) {
+        self.0.insert(path.to_ascii_lowercase(), data.into());
+    }
+}
+
 struct MemFile(Cursor<Vec<u8>>);
 
 impl io::Read for MemFile {

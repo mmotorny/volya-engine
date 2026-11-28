@@ -25,20 +25,16 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::core::character::SpecificCharacter;
+use crate::characters::Characters;
 use crate::core::collision::CollisionWorld;
-use crate::core::config::value;
 use crate::core::object_light;
 use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, model_vertex};
-use volya_engine_formats::cp1251;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
 use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord, TraderLike};
-
-use volya_engine_formats::xml;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -118,145 +114,17 @@ fn plain_name(name: &str) -> String {
     }
 }
 
-/// The specific characters (section 3.2, item 3; player-state.md 2.2),
-/// read on first use: `config\gameplay\npc_profile.xml` and the files of
-/// `[profiles] specific_characters_files`.
-pub struct Characters<'a> {
-    tree: &'a dyn Vfs,
-    data: &'a GameData,
-    /// Profile id → its named specific character.
-    profiles: Option<HashMap<String, String>>,
-    /// Specific character id → its description.
-    descriptions: Option<HashMap<String, SpecificCharacter>>,
-}
-
-impl<'a> Characters<'a> {
-    pub fn new(tree: &'a dyn Vfs, data: &'a GameData) -> Self {
-        Self {
-            tree,
-            data,
-            profiles: None,
-            descriptions: None,
-        }
-    }
-
-    fn document(&self, name: &str) -> io::Result<xml::Document> {
-        let aliases = &self.data.aliases;
-        let path = aliases.path("$game_config$", &format!("gameplay\\{name}"))?;
-        let text = vfs::read(self.tree, &path)?;
-        let text = xml::preprocess(&text, &mut |include| {
-            let path = aliases.path("$game_config$", &cp1251::decode(include))?;
-            vfs::read(self.tree, &path)
-        })?;
-        xml::parse(&text).map_err(|e| invalid(format!("{path}: {e}")))
-    }
-
-    /// The `<visual>` of the trader-like block's specific character
-    /// ([`Self::specific_character`]) as a visual name; without one the
-    /// record's visual is kept (our choice).
-    pub fn visual(&mut self, trader: &TraderLike) -> io::Result<Option<String>> {
-        Ok(self
-            .specific_character(trader)?
-            .map(|c| plain_name(&c.visual))
-            .filter(|v| !v.is_empty()))
-    }
-
-    /// The trader-like block's specific character: the block's own if
-    /// named, else its profile's `<specific_character>`. Profiles and
-    /// descriptions are found by their `id` attribute, and a file named in
-    /// `specific_characters_files` without `.xml` gets it appended (our
-    /// reading: the spec says only that they name them). A profile that
-    /// names none chooses at random among the descriptions of its class
-    /// (level-objects.md 3.2, item 3); we give none then.
-    // TODO(#338): the random choice.
-    pub fn specific_character(
-        &mut self,
-        trader: &TraderLike,
-    ) -> io::Result<Option<&SpecificCharacter>> {
-        let id = if trader.specific_character.is_empty() {
-            if self.profiles.is_none() {
-                let doc = self.document("npc_profile.xml")?;
-                let mut profiles = HashMap::new();
-                if let Some(root) = doc.root() {
-                    for c in root.children_named("character") {
-                        if let (Some(id), Some(sc)) = (
-                            c.attr("id"),
-                            c.child("specific_character").and_then(|e| e.value()),
-                        ) {
-                            profiles.insert(id.to_owned(), sc.to_owned());
-                        }
-                    }
-                }
-                self.profiles = Some(profiles);
-            }
-            match self
-                .profiles
-                .as_ref()
-                .and_then(|p| p.get(trader.character_profile.as_str()))
-            {
-                Some(id) => id.clone(),
-                None => return Ok(None),
-            }
-        } else {
-            trader.specific_character.to_string()
-        };
-        if self.descriptions.is_none() {
-            let files = self
-                .data
-                .system
-                .get("profiles", "specific_characters_files")
-                .flatten()
-                .unwrap_or("");
-            let mut descriptions = HashMap::new();
-            for file in files.split(',').map(str::trim).filter(|f| !f.is_empty()) {
-                let name = if file.ends_with(".xml") {
-                    file.to_owned()
-                } else {
-                    format!("{file}.xml")
-                };
-                let doc = self.document(&name)?;
-                for d in doc.nodes.iter().filter_map(|n| match n {
-                    xml::Node::Element(e) => Some(e),
-                    xml::Node::Text(_) => None,
-                }) {
-                    for c in d.children_named("specific_character") {
-                        let Some(id) = c.attr("id") else {
-                            continue;
-                        };
-                        let text = |name: &str| {
-                            c.child(name)
-                                .and_then(|e| e.value())
-                                .unwrap_or("")
-                                .to_owned()
-                        };
-                        // Rank and reputation as integers (`00` is 0).
-                        let int = |name: &str| value::int(&text(name)) as i32;
-                        descriptions.insert(
-                            id.to_owned(),
-                            SpecificCharacter {
-                                id: id.to_owned(),
-                                community: text("community"),
-                                rank: int("rank"),
-                                reputation: int("reputation"),
-                                name: text("name"),
-                                visual: text("visual"),
-                                // The text writes its line breaks as `\n`
-                                // (player-state.md 3.1 item 3; that they
-                                // break lines is our reading).
-                                supplies: c
-                                    .child("supplies")
-                                    .and_then(|e| e.raw_value())
-                                    .unwrap_or("")
-                                    .replace("\\n", "\n"),
-                            },
-                        );
-                    }
-                }
-            }
-            self.descriptions = Some(descriptions);
-        }
-        Ok(self.descriptions.as_ref().and_then(|d| d.get(&id)))
-    }
+/// The `<visual>` of the Trader-like block's specific character (section
+/// 3.2, item 3; [`Characters::for_trader`]) as a visual name; without one
+/// the record's visual is kept.
+pub fn character_visual(
+    characters: &mut Characters,
+    trader: &TraderLike,
+) -> io::Result<Option<String>> {
+    Ok(characters
+        .for_trader(trader)?
+        .map(|c| plain_name(&c.visual))
+        .filter(|v| !v.is_empty()))
 }
 
 /// The file of visual name `name` (section 3.1): `name` as given, then
@@ -1142,7 +1010,7 @@ pub fn spawn(
         if o.online {
             *classes.entry(o.record.class_id.as_str()).or_default() += 1;
         }
-        let name = visual_name(o, &mut |t| characters.visual(t))?;
+        let name = visual_name(o, &mut |t| character_visual(&mut characters, t))?;
         let model = match &name {
             Some(name) if by_name.contains_key(&name.to_lowercase()) => {
                 Some(by_name[&name.to_lowercase()])

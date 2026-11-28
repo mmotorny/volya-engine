@@ -39,25 +39,13 @@ fn invalid(message: impl Into<String>) -> io::Error {
 /// The player's object id at a New Game (2.1).
 pub const PLAYER_ID: u16 = 0;
 /// A rank or reputation that is not set (`0x80000001`, 2.2).
-pub const NOT_SET: i32 = -2_147_483_647;
+pub const NOT_SET: i32 = volya_engine_formats::character_descriptions::NOT_SET;
 /// A community that is not set (2.2).
 pub const NO_COMMUNITY: i32 = -1;
 
-/// A specific character's description (2.2): from
-/// `character_desc_general.xml` and the other files of `[profiles]`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SpecificCharacter {
-    pub id: String,
-    /// The community's name.
-    pub community: String,
-    pub rank: i32,
-    pub reputation: i32,
-    /// The name's string-table key.
-    pub name: String,
-    pub visual: String,
-    /// The `<supplies>` text (3.1 item 3).
-    pub supplies: String,
-}
+/// A specific character (2.2; docs/formats/character-descriptions.md
+/// section 5).
+pub use volya_engine_formats::character_descriptions::SpecificCharacter;
 
 /// `[game_relations] communities`: its names with the number after each
 /// (2.2).

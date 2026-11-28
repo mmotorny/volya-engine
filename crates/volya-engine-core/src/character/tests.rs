@@ -165,6 +165,7 @@ fn actor() -> SpecificCharacter {
         name: "actor_name".into(),
         visual: "actors\\hero\\stalker_novice".into(),
         supplies: "[spawn] \n device_torch \n".into(),
+        ..SpecificCharacter::default()
     }
 }
 

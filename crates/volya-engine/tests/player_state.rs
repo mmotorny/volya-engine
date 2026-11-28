@@ -16,6 +16,7 @@ mod gog_archives;
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use volya_engine::characters::Characters;
 use volya_engine::core::character::condition::{Activity, ConditionConfig, Conditions};
 use volya_engine::core::character::inventory::{
     InventoryConfig, InventoryItem, ItemConfig, ItemState, Place, Supplies, WeaponItem,
@@ -25,7 +26,6 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{StdVfs, Vfs, read};
 use volya_engine::data::GameData;
 use volya_engine::level;
-use volya_engine::objects::Characters;
 use volya_engine_formats::object::{self, Object, ObjectRecord};
 use volya_engine_formats::spawn;
 use volya_engine_formats::ui::Resolution;
@@ -172,7 +172,7 @@ fn new_game_player_state_from_game_data() {
 
         // The specific character and profile `actor`.
         let mut characters = Characters::new(tree, data);
-        let actor = characters.specific_character(t).unwrap().unwrap().clone();
+        let actor = characters.for_trader(t).unwrap().unwrap().clone();
         assert_eq!(
             (
                 actor.id.as_str(),

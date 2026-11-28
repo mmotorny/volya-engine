@@ -16,6 +16,7 @@ pub use volya_engine_script as script;
 
 pub mod app;
 pub mod audio;
+pub mod characters;
 pub mod console_window;
 pub mod controls;
 pub mod data;
