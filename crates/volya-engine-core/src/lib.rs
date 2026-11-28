@@ -34,6 +34,7 @@ pub mod object_light;
 pub mod occlusion;
 pub mod particles;
 pub mod pause;
+pub mod perf_counter;
 pub mod physics;
 pub mod simulation;
 pub mod sound;

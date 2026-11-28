@@ -401,3 +401,32 @@ fn deactivating_a_set_aside_shell_is_fatal() {
         Err(Fatal("can not deactivate freezed !!!"))
     );
 }
+
+thread_local! {
+    static TICKS: std::cell::Cell<f64> = const { std::cell::Cell::new(0.0) };
+}
+
+/// A counter advancing 1 ms per reading.
+fn tick() -> f64 {
+    TICKS.with(|t| {
+        t.set(t.get() + 1.0);
+        t.get()
+    })
+}
+
+#[test]
+fn the_timers_measure_the_frame_and_its_steps() {
+    let log = Log::default();
+    let mut w = world(&log);
+    w.set_perf_counter(tick);
+    // Three steps: the collider and solver timers read twice per step,
+    // the physics timer around them.
+    assert_eq!(w.frame(0.035, 0), 3);
+    let t = w.take_timers();
+    assert_eq!((t.collider, t.solver, t.steps), (3.0, 3.0, 3));
+    assert_eq!(t.physics, 13.0);
+    // Taken: they restart; a frame without steps measures only itself.
+    assert_eq!(w.frame(0.001, 0), 0);
+    let t = w.take_timers();
+    assert_eq!((t.physics, t.collider, t.solver, t.steps), (1.0, 0.0, 0.0, 0));
+}

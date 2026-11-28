@@ -240,6 +240,19 @@ impl<O: Object> Action<O> for ConstantForce {
     }
 }
 
+/// The statistics overlay's physics timers (6; `display-mode` B.4.1), ms,
+/// with the number of steps the `solver` timer measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Timers {
+    /// The world's whole work of each frame (2.2).
+    pub physics: f64,
+    /// The contact gathering of each step (3, item 3).
+    pub collider: f64,
+    /// The per-step actions and the solving of each step (3, items 6, 7).
+    pub solver: f64,
+    pub steps: u32,
+}
+
 /// The hook called after each step with its start and end time, ms (3,
 /// item 11).
 pub type StepHook = Box<dyn FnMut(u64, u64)>;
@@ -264,6 +277,9 @@ pub struct World<O, S> {
     /// Resting shells and their counts (4.4).
     resting: Vec<(ObjectId, u32)>,
     hook: Option<StepHook>,
+    /// The performance counter, ms.
+    perf: fn() -> f64,
+    timers: Timers,
 }
 
 impl<O: Object, S: Solver<O>> World<O, S> {
@@ -286,6 +302,8 @@ impl<O: Object, S: Solver<O>> World<O, S> {
             actions: Vec::new(),
             resting: Vec::new(),
             hook: None,
+            perf: crate::perf_counter::now_ms,
+            timers: Timers::default(),
         }
     }
 
@@ -333,6 +351,18 @@ impl<O: Object, S: Solver<O>> World<O, S> {
 
     pub fn set_hook(&mut self, hook: Option<StepHook>) {
         self.hook = hook;
+    }
+
+    /// The performance counter the timers read, ms
+    /// ([`crate::perf_counter::now_ms`] unless set).
+    pub fn set_perf_counter(&mut self, counter: fn() -> f64) {
+        self.perf = counter;
+    }
+
+    /// The timers' totals since they were last taken (the statistics
+    /// overlay takes them every frame); they restart from 0.
+    pub fn take_timers(&mut self) -> Timers {
+        std::mem::take(&mut self.timers)
     }
 
     /// Adds an object, set aside until [`World::activate`].
@@ -485,6 +515,13 @@ impl<O: Object, S: Solver<O>> World<O, S> {
     /// 2.2: the frame's steps, `dt_f` the display frame time and `now_ms` the
     /// millisecond clock at the frame's start. Returns the steps run.
     pub fn frame(&mut self, dt_f: f32, now_ms: u64) -> u32 {
+        let start = (self.perf)();
+        let n = self.frame_steps(dt_f, now_ms);
+        self.timers.physics += (self.perf)() - start;
+        n
+    }
+
+    fn frame_steps(&mut self, dt_f: f32, now_ms: u64) -> u32 {
         if self.frozen {
             return 0;
         }
@@ -527,12 +564,14 @@ impl<O: Object, S: Solver<O>> World<O, S> {
         // 2.
         self.counter += 1;
         // 3.
+        let collider = (self.perf)();
         self.solver.collide(
             &params,
             &mut Active {
                 entries: &mut self.objects,
             },
         );
+        self.timers.collider += (self.perf)() - collider;
         // 4, 5.
         for e in self.objects.iter_mut().filter(|e| e.state == State::Active) {
             e.object.pre_step(&params);
@@ -541,6 +580,7 @@ impl<O: Object, S: Solver<O>> World<O, S> {
             u.pre_step(&params);
         }
         // 6.
+        let solver = (self.perf)();
         let counter = self.counter;
         let objects = &mut self.objects;
         self.actions.retain_mut(|a| match a.condition(counter) {
@@ -555,6 +595,8 @@ impl<O: Object, S: Solver<O>> World<O, S> {
                 entries: &mut self.objects,
             },
         );
+        self.timers.solver += (self.perf)() - solver;
+        self.timers.steps += 1;
         // 8, with the floor (4.5) and resting (4.4).
         for e in self.objects.iter_mut().filter(|e| e.state == State::Active) {
             let resting = e.object.post_step(&params);
