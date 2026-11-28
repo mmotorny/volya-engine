@@ -425,13 +425,14 @@ end
 
     // Script API Q 2.1, 5, 8.1: the trader came online with his New Game
     // identity (character-identity.md 8: his community and rank), which the
-    // ranking reads; the player has no entry. TODO(#1202): the player's
-    // record carries its identity, its community `actor`.
+    // ranking reads; the player has no entry. The player came online with
+    // its record's (character-identity.md 7): community `actor`, rank 0.
     let relations = scripts.scripts().exec(
         "=relations",
         b"local t = db.trader actor_stats.add_to_ranking(t:id()) \
           return t:character_community(), t:character_rank(), t:team(), \
-            actor_stats.get_actor_ranking()",
+            actor_stats.get_actor_ranking(), db.actor:character_community(), \
+            db.actor:character_rank()",
     );
     assert_eq!(
         relations.unwrap(),
@@ -440,6 +441,8 @@ end
             Value::Number(330.0),
             Value::Number(0.0),
             Value::Number(1.0),
+            Value::from("actor"),
+            Value::Number(0.0),
         ],
         "the trader's relations"
     );
