@@ -24,10 +24,12 @@ Builds on (not repeated here):
 - `docs/formats/dialog-files.md` (cited as `files`: dialogs, phrases, ids, the six lists, links, script function
   names and their lookup, `init_func`), `docs/behavior/dialogue-scope.md` (cited as `DG`: the parts DG-2 to DG-10,
   *player character*, *partner*), `docs/behavior/talk-window.md`, `docs/behavior/use-action.md` (cited as `use`;
-  its 6.2, talk with the living), `docs/behavior/info-portions.md`, `docs/behavior/character-identity.md`.
-- Spec P (information portions, tasks, news and map spots, `script-api-scope` order 22) is not yet approved.
-  Where this spec needs one of P's members it names it as P's and states only what this spec itself needs;
-  every statement resting on P is marked **(P)** and is unestablished until P is approved.
+  its 6.2, talk with the living), `docs/behavior/character-identity.md`.
+- Spec D, `docs/behavior/script-api-engine-entry-points.md` (1.1, finding a script function by name; 1.2, the call
+  and its failure; 1.3, where the engine finds script functions by name).
+- Spec P, `docs/behavior/script-api-info-portions-tasks-news-and-map-spots.md` (its 2.1, giving, disabling and
+  asking; its 10, the difficulty functions) and `docs/behavior/info-portions.md` (cited as `IP`: holding, 2; the
+  transfer *give*, 3.1; receiving and its script part, 3.2 and 3.3; the transfer *disable*, 4.1).
 
 Conventions:
 
@@ -50,8 +52,9 @@ Conventions:
 
 **Checks.** Every claim carries a tag [R-*n*]. The checks are one script in the dirty workspace,
 `checks/script-api-dialogs-and-trade/run_all.py` (`python3 -I run_all.py`): it reads the game library's bytes and
-run-time type information, the evidence of read-only headless static analysis (produced by `gh.py` beside it),
-the listing, the scoping spec's scan and the shipped scripts and data. All checks pass (`ALL PASS 26`).
+run-time type information, the evidence of read-only headless static analysis (produced by `gh.py` beside it,
+and the evidence of the checks of specs D, P and `IP` that it cites), the listing, the scoping spec's scan and the
+shipped scripts and data. All checks pass (`ALL PASS 29`).
 
 ## 1. What this spec owns
 
@@ -143,21 +146,23 @@ R-6]:
 
 Nothing is checked when an entry is added: a name of a function that does not exist, or an id no information
 portion has, is found only when the list is used, as `files` 8 describes for the files [R-5]. The same entry may
-be added twice and is then used twice (static: the lists are appended to without search) [R-5]. Holding, giving
-and disabling an information portion are P's (**P**); these lists ask the player character in every case,
-whoever the speakers are (3.2) [R-5].
+be added twice and is then used twice (static: the lists are appended to without search) [R-5]. The has and
+dont-has entries ask whether the player character holds the id (`IP` 2, the question of P 2.1's `has_info`); a
+give entry is a transfer *give* of the id to the player character (`IP` 3.1) and a disable entry a transfer
+*disable* on it (`IP` 4.1), the same transfers as P 2.1's `give_info_portion` and `disable_info_portion`, as
+`files` 6 states for the lists read from the files [R-5, R-27]. These lists act on the player character in every
+case, whoever the speakers are (3.2) [R-5].
 
 ## 3. The dialog-file functions as entry points (static)
 
 ### 3.1 Calls and failures
 
-The program calls a script function named in a list by looking it up (`files` 6 and 8) and calling it with the
-arguments below in the runtime's protected mode [R-9]. If the function raises an error, the binding library's
-error callback is called and then the program ends (it terminates without the report of `console-log` 3.8)
-[R-9] (static; what the error callback writes is A's). **Disputed in review:** the end is not without a report:
-by spec D 1.2 (`docs/behavior/script-api-engine-entry-points.md`) the binding library's error callback is itself
-the fatal `LUA error: %s` of A 5.3, so an error in a dialog function is fatal as D 1.2; the termination after the
-callback is reached only if that callback returned. A function that is not found is `files` 8's case.
+The dialog functions are among the entry points of D 1.3 (the names of the dialog files and the names scripts
+pass to `AddPrecondition` and `AddAction`) [R-26]. The program finds a script function named in a list by D 1.1's
+resolution (the lookup of `files` 6 and 8) and calls it with the arguments below in a protected call, as D 1.2
+states for every entry point [R-9, R-26]. If the function raises an error, the binding library's error callback
+is called, which is the fatal `LUA error: %s` of A 5.3 (D 1.2): an error in a dialog function is fatal; the
+program would end even if that callback returned [R-9, R-26]. A function that is not found is `files` 8's case.
 
 ### 3.2 Preconditions
 
@@ -193,7 +198,7 @@ is made when, is DG-3's and DG-4's.
 When a phrase is said, its effects run as follows [R-9, R-10]:
 
 1. First the give list, in order: each id is given to the player character; then the disable list, in order:
-   each id is disabled for it (**P**) [R-5, R-9].
+   each id is disabled for it, each by a transfer (`IP` 3.1, 4.1; 2.4) [R-5, R-9, R-27].
 2. Then each action function in list order, with **four arguments**: the handle of the character who said the
    phrase, the handle of the other speaker, the dialog id and the id of the phrase said (texts); results are
    ignored [R-9, R-10].
@@ -207,10 +212,15 @@ defined (7) [R-24].
 
 The same condition-and-effect part has a second precondition form, called with **one argument** (the handle of
 one object; has and dont-has first, then each function, the same result rule), and a second action form,
-called with **two arguments** (one object's handle and a text; the actions first, then give and disable) [R-11].
-Dialogs use the two-speaker forms of 3.2 and 3.3 [R-10]. Which other systems use the one-object forms, and with
-which object and text, is **unestablished** here (believed P's: the information portions are the other owner of
-such lists, `files` 3.2) (**P**).
+called with **two arguments** (one object's handle and a text; the actions first, then give and disable on the
+player character) [R-11]. Dialogs use the two-speaker forms of 3.2 and 3.3 [R-10].
+
+- The **one-object action form** is used when a holder receives an information portion: the portion's own
+  condition-and-effect part runs it with the receiving holder's handle and nil, so its `action` functions get
+  (holder, nil), and then its give and disable lists act on the player character (`IP` 3.3) [R-27].
+- The **one-object precondition form**: no user is known. Receiving a portion tests none of its conditions
+  (`IP` 3.3), the call on receiving is to the action form only [R-27], and P adds no use of either form;
+  **believed** unused in this edition.
 
 ### 3.5 `init_func`
 
@@ -348,8 +358,8 @@ passes flags whose meaning is T's) [R-23].
 ## 7. `game_difficulty` (static)
 
 Integer constants: `novice` 0, `stalker` 1, `veteran` 2, `master` 3 [R-12]. They are the game difficulty values
-that the level functions setting and returning the difficulty take and give; those functions are P's (the
-scoping split) (**P**). No shipped script names the class; `bind_stalker.script` maps the numbers 0 to 3 to the
+of P 10: `level.get_game_difficulty()` returns and `level.set_game_difficulty(d)` stores the one difficulty value,
+0 to 3 as these constants (what setting it does is P 10's) [R-12, R-28]. No shipped script names the class; `bind_stalker.script` maps the numbers 0 to 3 to the
 console values `gd_novice`, `gd_stalker`, `gd_veteran`, `gd_master` (measured) [R-12].
 
 ## 8. Worked example: the generated help dialog
@@ -376,23 +386,26 @@ functions and `game_difficulty` are used by none [R-2].
 
 ## 10. Verification facts
 
-All reproduced by `run_all.py` (26 PASS lines, no failure):
+All reproduced by `run_all.py` (29 PASS lines, no failure):
 
 - Scope: 36 listed items, 2 candidate strings that are not registrations, 16 used names, 17 loadable scripts
   [R-2, R-3].
 - Phrase classes: 3 classes without base or constructor, 8 members paired with implementations; the six lists
   [R-4, R-5]; `AddPhrase` registered as (text, text, text, number) [R-6].
 - Entry points: preconditions with 5 arguments and a truth-value result (dialog-level ones with two empty
-  texts), actions with 4 and none, one-object forms with 1 and 2; init functions with the dialog [R-8 – R-11].
+  texts), actions with 4 and none, one-object forms with 1 and 2; init functions with the dialog [R-8 – R-11];
+  every one found and called as D 1.1 and 1.2 state [R-26]; the information portions' receiving calls the
+  one-object action form with the holder and nil, the lists' entries use the transfers of `IP` [R-27].
 - Trade: 5 global registrations; defaults from `[trade]` (4 keys); the price rule's constants 0.0005, 0.5, 1,
   0.9, 0.1, 0.75 [R-13 – R-16].
 - `game_object`: 17 members paired; talk flags on 20 character classes, monsters (17 classes) never talk-enabled;
   start dialog on 2 classes [R-18 – R-23].
 - Data: 65 precondition, 78 action, 31 init function names in the listed dialog files [R-24].
+- Difficulty: the level functions take and give the value of `game_difficulty`'s constants [R-28].
 
 ## 11. Unestablished
 
-- Which systems use the one-object precondition and action forms, and with what (3.4; believed P's).
+- Whether anything uses the one-object precondition form (3.4; believed nothing).
 - `get_start_dialog`'s result when a character has no start dialog (4.4; believed nil); how the default start
   dialog is set (4.4).
 - What an unknown motion name does in the trader members; the sound's positioning (section 6; spec T).
@@ -401,8 +414,7 @@ All reproduced by `run_all.py` (26 PASS lines, no failure):
 - The section from which a character's own trade parameters are made (5.2; #284); what the show list decides
   (5.3).
 - Whether a failed `cannot find section` check is fatal (5.3; believed).
-- Everything marked **(P)**: holding, giving and disabling information portions, and the difficulty functions.
-- Everything that depends on A (argument matching, calls of missing members, the error callback).
+- Everything that depends on A (argument matching, calls of missing members).
 
 ## Provenance
 
@@ -418,21 +430,8 @@ All reproduced by `run_all.py` (26 PASS lines, no failure):
   trade parameters, their reading, their defaults and the price computation, the trader's motions and sound);
   run-time type information read from the file bytes; the scoping spec's script scan reused; the listing, the
   scripts and the data read as text. No binary was executed.
+- Revision (2026-11-28): the calls into scripts compared with spec D's entry points (the lookups and the error
+  callback they share); the information portions' receiving and its call into their condition-and-effect part;
+  the difficulty functions against spec P.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
 
-## Gaps found in review
-
-1. Spec P is approved (`docs/behavior/script-api-info-portions-tasks-news-and-map-spots.md`); the "Builds on"
-   note and section 11 still treat every **(P)** statement as unestablished until P's approval.
-2. Holding, giving and disabling an information portion (2.4, 3.3 step 1, marked **(P)**) are settled: P 2.1 defers
-   them to `info-portions.md` 2 (holding), 3.1 (the transfer *give*) and 4.1 (the transfer *disable*), and the
-   lists' ids go to the player character's transfers as `dialog-files` 6 states.
-3. The one-object forms (3.4, marked **(P)**): `info-portions.md` 3.3 settles the action form's use when a portion
-   is received (the portion's `action` functions called with the receiving holder and nil, then its `give_info`
-   and `disable_info` on the player character); P adds no use of either form, and receiving tests no
-   precondition, so no user of the one-object precondition form is known.
-4. The difficulty functions (section 7, marked **(P)**) are settled by P 10: `level.get_game_difficulty()` returns
-   and `level.set_game_difficulty(d)` stores the one difficulty value, 0 to 3 as these constants.
-5. The calls of dialog functions (3.1) do not cite spec D 1.1 and 1.2, which state the resolution of a script
-   function by name and the protected call for every entry point, and D 1.3, which assigns the dialog functions to
-   this spec.
