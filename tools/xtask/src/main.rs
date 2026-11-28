@@ -3,6 +3,7 @@
 
 //! Operational tasks: `bazel run //tools/xtask -- <task>`.
 
+mod areas;
 mod bazel;
 mod common;
 #[allow(dead_code)] // Its actions are d3d9probes-action's.
@@ -67,6 +68,10 @@ Tasks:
               address, port and token the PC sends them with.
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
+  suites [BASE]
+              The tests the changes since BASE (default: the merge base with
+              origin/main; the working tree's included) trigger by area
+              (tests/areas.txt), one per line, for `bazel test`.
   update      Move to the latest Rust, crates, Bazel, its modules and the
               wasm LLVM, then run the checks and the advisories.
   gc          Remove Bazel's output bases of deleted worktrees.";
@@ -93,6 +98,8 @@ fn main() -> ExitCode {
         ["parity", against @ ..] => parity::run(against),
         ["deploy"] => deploy::run_deploy(),
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
+        ["suites"] => suites(None),
+        ["suites", base] => suites(Some(base)),
         ["update"] => bazel::update(),
         ["gc"] => bazel::gc(),
         ["wincapture", "release"] => bazel::build_output(&root(), wincapture::RUNNER)
@@ -139,6 +146,33 @@ fn frames_receive(args: &[&str]) -> Result {
         [address] => frames::receive(into, Some(address)),
         _ => Err(format!("frames-receive: unknown arguments {rest:?}")),
     }
+}
+
+/// `suites [BASE]`: prints the targets the diff from BASE triggers.
+fn suites(base: Option<&str>) -> Result {
+    let text = fs::read_to_string(root().join(areas::FILE))
+        .map_err(|e| format!("read {}: {e}", areas::FILE))?;
+    let areas = areas::Areas::parse(&text)?;
+    let base = match base {
+        Some(base) => base.to_owned(),
+        None => output(&mut cmd("git", &["merge-base", "HEAD", "origin/main"]))?
+            .trim()
+            .to_owned(),
+    };
+    // Both sides of a rename; then the files git doesn't track yet.
+    let changed = output(&mut cmd(
+        "git",
+        &["diff", "--name-only", "--no-renames", &base, "--"],
+    ))?;
+    let untracked = output(&mut cmd(
+        "git",
+        &["ls-files", "--others", "--exclude-standard"],
+    ))?;
+    let paths: Vec<&str> = changed.lines().chain(untracked.lines()).collect();
+    for target in areas.triggered(&paths) {
+        println!("{target}");
+    }
+    Ok(())
 }
 
 /// Version of `package` recorded in Cargo.lock.

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 load("@gog_installer//:defs.bzl", "GOG_INSTALLER")
-load("//build:checks.bzl", "volya_checks")
+load("//build:checks.bzl", "CHECK", "volya_checks")
 load("//build:rust.bzl", "LINTS", "volya_binary")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
@@ -15,6 +15,7 @@ volya_binary(
     srcs = glob(["src/**/*.rs"]),
     # The fidelity suites' views and walks (src/wincapture.rs).
     compile_data = [
+        "//:tests/areas.txt",
         "//tests/fidelity:views.rs",
         "//tests/fidelity:walks.rs",
     ],
@@ -62,6 +63,39 @@ rust_test(
     name = "xtask-unit",
     crate = ":xtask",
     rustc_flags = LINTS,
+)
+
+# Every test and test suite but the static checks (//:all_tests): what
+# `:areas` holds tests/areas.txt's targets to.
+genquery(
+    name = "manual_tests",
+    expression = "tests(//:all_tests) + kind(test_suite, deps(//:all_tests, 2))",
+    scope = ["//:all_tests"],
+)
+
+# tests/areas.txt matches the trigger table (docs/architecture/build.md,
+# Test triggers): every test run by area has an entry, each a test.
+rust_test(
+    name = "areas",
+    srcs = [
+        "src/areas.rs",
+        "src/areas_check.rs",
+    ],
+    # areas.rs's own tests read the file too.
+    compile_data = ["//:tests/areas.txt"],
+    crate_root = "src/areas_check.rs",
+    data = [
+        ":manual_tests",
+        "//:docs/architecture/build.md",
+        "//:tests/areas.txt",
+    ],
+    env = {
+        "AREAS": "$(rootpath //:tests/areas.txt)",
+        "MANUAL_TESTS": "$(rootpath :manual_tests)",
+        "TRIGGERS_DOC": "$(rootpath //:docs/architecture/build.md)",
+    },
+    rustc_flags = LINTS,
+    tags = CHECK,
 )
 
 volya_checks(wasm = False)

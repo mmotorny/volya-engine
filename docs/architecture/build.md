@@ -96,6 +96,7 @@ Tests in `//:checks` (a `test_suite`), cached like any test. Every package's `BU
 | SPDX headers | `//build:spdx`, a Rust test over `//:all_files` (the root's files and every package's) in its runfiles |
 | Static only | `//build:checks_static`: every test of `//:checks` is tagged `check` |
 | Hermetic default | `//build:default_only`: `bazel test //...` runs no check, game-data test or browser suite (Test sets) |
+| Areas | `//tools/xtask:areas`: every test the trigger table runs by area has an entry in `tests/areas.txt`, and every entry is a test or test suite (a genquery over `//:all_tests`, which names every package's `all_tests`, made by `volya_checks()`: its tests and suites but the static checks, which would make a cycle) |
 | Pins | `//build:pins`: MODULE.bazel's wasm-bindgen CLI equals Cargo.lock's crate |
 | Licences | `//build:licenses`: cargo-deny's licences, bans and sources over the workspace in its runfiles, with the toolchain's cargo; `no-sandbox` and `requires-network` (it reads the crates' metadata). cargo-deny is installed on the machine (`@local_tools`, its version an input). Advisories are left to `update`: they change with the day, not with an input. |
 | Third-party notices | `//platforms/web:notices`: the site's notices build (The web app): every crate and component the release wasm links declares its licence, on deny.toml's allow-list, with its text; every served file is ours |

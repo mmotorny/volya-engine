@@ -15,8 +15,8 @@ _RUST_KINDS = ["rust_binary", "rust_library", "rust_shared_library", "rust_test"
 CHECK = ["check", "manual"]
 
 def volya_checks(wasm = True):
-    """`fmt`, `clippy`, `clippy_wasm`, `all_files` and the suites `checks`
-    and `default_tests`.
+    """`fmt`, `clippy`, `clippy_wasm`, `all_files` and the suites `checks`,
+    `default_tests` and `all_tests`.
 
     Args:
         wasm: whether the package's crates build for wasm32, for clippy there.
@@ -55,6 +55,14 @@ def volya_checks(wasm = True):
         if (r["kind"].endswith("_test") or r["kind"] == "test_suite") and
            "manual" not in r.get("tags", [])
     ]
+    # Every test and test suite of the package but the static checks, for
+    # //:all_tests (which they check: //tools/xtask:areas).
+    every = [
+        ":" + r["name"]
+        for r in native.existing_rules().values()
+        if (r["kind"].endswith("_test") or r["kind"] == "test_suite") and
+           "check" not in r.get("tags", [])
+    ]
     native.filegroup(
         name = "all_files",
         srcs = native.glob(["**"], allow_empty = True),
@@ -74,5 +82,11 @@ def volya_checks(wasm = True):
         name = "default_tests",
         tags = ["manual"],
         tests = default,
+        visibility = ["//:__pkg__"],
+    )
+    native.test_suite(
+        name = "all_tests",
+        tags = ["manual"],
+        tests = every,
         visibility = ["//:__pkg__"],
     )

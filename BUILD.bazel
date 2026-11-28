@@ -8,6 +8,9 @@ exports_files([
     "LICENSE",
     "MODULE.bazel",
     "deny.toml",
+    # The trigger table and the areas (//tools/xtask:areas).
+    "docs/architecture/build.md",
+    "tests/areas.txt",
 ])
 
 # Every package. A new package adds its `volya_checks()` and a line here.
@@ -63,6 +66,15 @@ test_suite(
     visibility = ["//build:__pkg__"],
 )
 
+# Every test and test suite but the static checks (which check this list,
+# //tools/xtask:areas): every package's and the root's.
+test_suite(
+    name = "all_tests",
+    tags = ["manual"],
+    tests = [":gamedata"] + [p + ":all_tests" for p in PACKAGES],
+    visibility = ["//tools/xtask:__pkg__"],
+)
+
 # The tests that read the game data, but those that walk the whole game or
 # measure (docs/architecture/build.md, Native tests): `bazel test
 # //:gamedata`, or a package's `:gamedata`.
@@ -99,6 +111,7 @@ test_suite(
         "//build:licenses",
         "//build:pins",
         "//build:spdx",
+        "//tools/xtask:areas",
         "//platforms/web:notices",
     ] + [p + ":checks" for p in PACKAGES],
     visibility = ["//build:__pkg__"],
