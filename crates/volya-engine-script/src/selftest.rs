@@ -3,9 +3,9 @@
 
 //! The runtime's behaviour, the script loader, script classes, the
 //! object factory, the engine services, the value types, configuration
-//! and files, game objects, object binders, object event callbacks and
-//! the engine's entry points, checked on every target: natively by
-//! `cargo test`, in the browser by the `script_selftest` op
+//! and files, game objects, object binders, object event callbacks, the
+//! story state and the engine's entry points, checked on every target:
+//! natively by `cargo test`, in the browser by the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
 
 use crate::{ErrorKind, Lua, Value};
@@ -20,6 +20,7 @@ pub mod object_callbacks;
 pub mod object_factory;
 pub mod physics;
 pub mod services;
+pub mod story;
 pub mod values;
 
 /// Runs every check; `Err` lists the failures.
@@ -54,6 +55,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = object_binder::check() {
+        fail(e);
+    }
+    if let Err(e) = story::check() {
         fail(e);
     }
     if let Err(e) = entry_points::check() {

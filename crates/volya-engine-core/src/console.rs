@@ -943,6 +943,22 @@ impl Console {
         registered(name).map(|i| self.values[i].status(COMMANDS[i].kind))
     }
 
+    /// Stores `n` as list command `name`'s number, as the engine's own code
+    /// stores it, unchecked against the list (the game difficulty, which
+    /// scripts set): false when `name` is not a list command.
+    pub fn set_list_number(&mut self, name: &str, n: i64) -> bool {
+        let Some(i) = registered(name) else {
+            return false;
+        };
+        if !matches!(self.values[i], Value::List(_)) {
+            return false;
+        }
+        self.values[i] = Value::List(n);
+        self.generation += 1;
+        self.untyped_generation += 1;
+        true
+    }
+
     /// `name`'s value as on/off (false when not on/off).
     pub fn on(&self, name: &str) -> bool {
         self.value(name) == Some(Value::OnOff(true))

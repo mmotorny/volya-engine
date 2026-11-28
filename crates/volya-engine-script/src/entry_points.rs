@@ -27,6 +27,7 @@ use crate::game_object::GameObjects;
 use crate::loader::{Common, Prefix, Scripts, Trees};
 use crate::object_factory::{CreatedObject, class_id, id_text, keeps_lua};
 use crate::services::EngineServices;
+use crate::story::Story;
 use crate::{Error, ErrorKind, Lua, Value};
 
 /// The registry key of the entry points' function (entry_points.lua).
@@ -112,7 +113,7 @@ pub enum EngineCall {
 
 /// What startup makes and registers a game state from: the game's trees
 /// and path aliases, the namespace prefix, and the engine state the
-/// interface's names read (script APIs B, F, M).
+/// interface's names read (script APIs B, F, M, P).
 pub struct Startup {
     pub trees: Rc<dyn Trees>,
     pub aliases: PathAliases,
@@ -120,6 +121,7 @@ pub struct Startup {
     pub services: Rc<RefCell<EngineServices>>,
     pub files: Rc<RefCell<FileSystem>>,
     pub objects: Rc<RefCell<GameObjects>>,
+    pub story: Rc<RefCell<Story>>,
 }
 
 impl Startup {
@@ -152,8 +154,8 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, M; A, C and E
-    /// [`Scripts::new`] registers).
+    /// The engine interface of the specs implemented (B, F, M, P; A, C and
+    /// E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -162,7 +164,8 @@ impl Startup {
             Rc::clone(&self.objects),
             Rc::clone(&self.services),
             Rc::clone(&self.files),
-        )
+        )?;
+        scripts.register_story(Rc::clone(&self.story))
     }
 }
 

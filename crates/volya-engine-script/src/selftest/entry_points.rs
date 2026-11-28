@@ -24,6 +24,7 @@ use crate::game_object::GameObjects;
 use crate::loader::{Prefix, Trees};
 use crate::object_factory::class_id;
 use crate::services::EngineServices;
+use crate::story::Story;
 use crate::{ErrorKind, Value};
 
 /// A section's check: `Err` lists its failures.
@@ -189,6 +190,7 @@ fn started(
         prefix: Prefix::Default,
         services,
         objects: Rc::new(RefCell::new(GameObjects::new())),
+        story: Rc::new(RefCell::new(Story::new())),
         files: Rc::clone(&fs),
     })
     .map_err(|e| e.message)?;

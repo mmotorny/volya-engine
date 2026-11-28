@@ -31,6 +31,7 @@ use volya_engine_script::files::FileSystem;
 use volya_engine_script::game_object::GameObjects;
 use volya_engine_script::loader::{Common, Prefix};
 use volya_engine_script::services::EngineServices;
+use volya_engine_script::story::Story;
 
 /// The engine-read keys' values (2.1 to 2.6).
 #[test]
@@ -113,6 +114,7 @@ fn started(trees: Rc<GameTrees>, aliases: &PathAliases) -> GameScripts {
         prefix: Prefix::Default,
         services,
         objects: Rc::new(RefCell::new(GameObjects::new())),
+        story: Rc::new(RefCell::new(Story::new())),
         files,
     })
     .unwrap()

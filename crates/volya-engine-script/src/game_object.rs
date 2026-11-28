@@ -673,6 +673,11 @@ impl GameObjects {
         self.objects.len()
     }
 
+    /// The objects, by increasing id.
+    pub fn iter(&self) -> impl Iterator<Item = &GameObject> {
+        self.objects.values()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.objects.is_empty()
     }
@@ -782,9 +787,9 @@ impl Context {
 /// What a state with the game object basics registered keeps for the
 /// engine's calls.
 pub(crate) struct Registered {
-    objects: Rc<RefCell<GameObjects>>,
-    services: Rc<RefCell<EngineServices>>,
-    files: Rc<RefCell<FileSystem>>,
+    pub objects: Rc<RefCell<GameObjects>>,
+    pub services: Rc<RefCell<EngineServices>>,
+    pub files: Rc<RefCell<FileSystem>>,
     physics: Rc<RefCell<physics::PhysicsState>>,
 }
 

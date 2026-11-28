@@ -17,8 +17,8 @@
 //! script part is reported, in order, as [`Event`]s: the `action`
 //! functions (3.3), the callbacks `article_info`, `task_state` and
 //! `inventory_info` (3.4) and the dialogue window's rebuild mark (3.4 step
-//! 4, 4.2). TODO(#220): the script interface calls them and binds the
-//! members of 5 to this API.
+//! 4, 4.2); script API P's story state (`volya-engine-script`'s `story`)
+//! calls the functions and binds the members of 5 to this API.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
@@ -494,6 +494,26 @@ impl InfoPortions {
     /// The player character's tasks (3.4 step 2).
     pub fn tasks(&self) -> &[GivenTask] {
         &self.tasks
+    }
+
+    /// Adds article `id` to the player character's articles at game time
+    /// `now`, as 3.4 step 1 adds one but without its callback, unless it
+    /// knows it already: whether it was added. An undeclared article stops
+    /// the game (1.2): the error. Giving a task adds its objectives'
+    /// articles so (`script-api-info-portions-tasks-news-and-map-spots` 4.1
+    /// step 4).
+    pub fn learn_article(&mut self, id: &str, now: u64) -> io::Result<bool> {
+        if self.articles.iter().any(|a| a.id == id) {
+            return Ok(false);
+        }
+        let index = self.declarations.articles.look_up(id, &mut self.log)?;
+        self.articles.push(KnownArticle {
+            received: now,
+            id: id.to_owned(),
+            read: false,
+            article_type: self.declarations.article_data[index].article_type.clone(),
+        });
+        Ok(true)
     }
 
     /// The messages sent and not yet returned (3.1).

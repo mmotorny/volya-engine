@@ -236,6 +236,8 @@ pub struct Scripts {
     pub(crate) factory: Rc<RefCell<Option<ObjectFactory>>>,
     /// The game object basics, once registered ([`crate::game_object`]).
     pub(crate) game_object_state: Option<crate::game_object::Registered>,
+    /// The story state, once registered ([`crate::story`]).
+    pub(crate) story_state: Option<crate::story::Registered>,
 }
 
 impl Scripts {
@@ -305,6 +307,7 @@ impl Scripts {
             fatal,
             factory,
             game_object_state: None,
+            story_state: None,
         })
     }
 

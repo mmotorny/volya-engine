@@ -21,6 +21,7 @@ use crate::script::files::FileSystem;
 use crate::script::game_object::GameObjects;
 use crate::script::loader::{Prefix, Trees};
 use crate::script::services::EngineServices;
+use crate::script::story::Story;
 
 /// The server options of a New Game from the menu, `start
 /// server(all/single/alife/new)` (level-loading.md section 2.1).
@@ -62,6 +63,8 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         files: Rc::new(RefCell::new(files)),
         // TODO(#1030): the app's objects as scripts see them.
         objects: Rc::new(RefCell::new(GameObjects::new())),
+        // TODO(#1063): the game's story state.
+        story: Rc::new(RefCell::new(Story::new())),
     })
     .map_err(fatal)
 }

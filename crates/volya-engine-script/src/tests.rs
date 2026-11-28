@@ -305,6 +305,74 @@ mod object_binder {
     }
 }
 
+/// The story state's checks, one test per section of
+/// docs/behavior/script-api-info-portions-tasks-news-and-map-spots.md (all
+/// of them run in [`selftest`] too, on every target).
+mod story {
+    use crate::selftest::story as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn information_portions() {
+        section(checks::portions);
+    }
+
+    #[test]
+    fn task_values() {
+        section(checks::task_values);
+    }
+
+    #[test]
+    fn the_players_tasks() {
+        section(checks::player_tasks);
+    }
+
+    #[test]
+    fn objective_states() {
+        section(checks::states);
+    }
+
+    #[test]
+    fn the_task_functions() {
+        section(checks::functions);
+    }
+
+    #[test]
+    fn news_and_talk_messages() {
+        section(checks::news);
+    }
+
+    #[test]
+    fn use_tips() {
+        section(checks::tips);
+    }
+
+    #[test]
+    fn map_spots() {
+        section(checks::map_spots);
+    }
+
+    #[test]
+    fn game_difficulty() {
+        section(checks::difficulty);
+    }
+
+    #[test]
+    fn tutorials() {
+        section(checks::tutorials);
+    }
+}
+
 /// The value types' checks, one test per section of
 /// docs/behavior/script-api-value-types-and-math.md (all of them run in
 /// [`selftest`] too, on every target).
