@@ -300,9 +300,12 @@ fn a_state_allocates_from_the_game_scripts_pool() {
     // 8 MB kept by the state; other tests' states, made and closed on
     // other threads meanwhile, are far smaller.
     lua.exec("=big", b"big = string.rep('x', 8000000)").unwrap();
-    assert!(GAME_SCRIPTS.in_use_bytes() > before + 7_000_000);
+    let kept = GAME_SCRIPTS.in_use_bytes();
+    assert!(kept > before + 7_000_000);
     drop(lua);
-    assert!(GAME_SCRIPTS.in_use_bytes() < before + 1_000_000);
+    // Measured over the drop alone: other tests' states come and go
+    // meanwhile on other threads, several at once.
+    assert!(GAME_SCRIPTS.in_use_bytes() < kept - 7_000_000);
 }
 
 #[test]
