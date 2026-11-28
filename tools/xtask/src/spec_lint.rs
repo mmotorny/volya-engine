@@ -120,10 +120,14 @@ fn lint(text: &str) -> Vec<(usize, String)> {
             if DECOMPILER_WORDS.contains(&word) {
                 out.push((n, format!("decompiler term `{word}`")));
             }
-            if DECOMPILER_PREFIXES
-                .iter()
-                .any(|p| word.starts_with(p) && word.len() > p.len())
-            {
+            // Invented names continue with a hex offset or an index
+            // (`local_10`, `FUN_10001234`, `uVar3`); a name from the game's
+            // own data (`local_hours`) does not.
+            if DECOMPILER_PREFIXES.iter().any(|p| {
+                word.strip_prefix(p).is_some_and(|rest| {
+                    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_hexdigit())
+                })
+            }) {
                 out.push((n, format!("decompiler-style name `{word}`")));
             }
             if mangled(word) {
@@ -272,6 +276,23 @@ mod tests {
     fn clean_text_passes() {
         let text = "The header is 12 bytes at offset 0x37940.\n```text\nfield  size\n```\nA URL: https://example.org/a::b";
         assert!(lint(text).is_empty(), "{:?}", lint(text));
+    }
+
+    #[test]
+    fn script_names_with_a_decompiler_prefix_pass() {
+        let text =
+            "`_g` defines `local_hours` and `local_c`; Ghidra names `local_1c` and `DAT_00a3`.\n";
+        let problems: Vec<String> = lint(text).into_iter().map(|(_, p)| p).collect();
+        assert!(
+            !problems.iter().any(|p| p.contains("local_hours")),
+            "{problems:?}"
+        );
+        for needle in ["local_c", "local_1c", "DAT_00a3"] {
+            assert!(
+                problems.iter().any(|p| p.contains(needle)),
+                "missing {needle}: {problems:?}"
+            );
+        }
     }
 
     #[test]
