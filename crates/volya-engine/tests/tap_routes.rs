@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Tap-to-move's routes on `l01_escape` (BYOA; our design,
-//! docs/architecture/simulation.md, Navigation): targets around the start
-//! whose straight line is blocked are planned and then followed by the
+//! docs/architecture/simulation.md, Navigation): targets around the start,
+//! from just past the trader's locked door, whose straight line is blocked are planned and then followed by the
 //! player's own movement on the level's collision world, and one of the
 //! nearby ladders is climbed; the searches' cost is reported. Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
@@ -15,14 +15,12 @@ mod gog_archives;
 
 use std::time::Instant;
 
-use volya_engine::controls::MoveAction;
-use volya_engine::core::camera::Angles;
 use volya_engine::core::collision::CollisionWorld;
 use volya_engine::core::collision::geometry::{Vec3, length, sub};
-use volya_engine::core::input::{Control, Event, Input};
+use volya_engine::core::input::Input;
 use volya_engine::core::movement::{Player, Request};
 use volya_engine::core::navigation::follow::{Follow, Follower};
-use volya_engine::core::navigation::{Body, Kind, Route, plan};
+use volya_engine::core::navigation::{Body, Kind, Route, plan_among};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
@@ -76,8 +74,26 @@ fn routes_on_the_start_level() {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
+    // The trader's door is locked at the start (trader-door.md, #874): the
+    // routes start 1 m past its leaf, on the side away from the start.
+    let leaf = level.player().body().bodies()[0];
+    let start = level.player().state().position;
+    let k = (0..3)
+        .min_by(|&a, &b| leaf.half_size[a].total_cmp(&leaf.half_size[b]))
+        .unwrap();
+    let n = leaf.axes[k];
+    let side = n[0] * (start[0] - leaf.centre[0]) + n[2] * (start[2] - leaf.centre[2]);
+    let out = -side.signum();
+    let (x, z) = (leaf.centre[0] + out * n[0], leaf.centre[2] + out * n[2]);
+    let (y, _) = (level.collision())
+        .floor_below(x, z, start[1] + 1.0, start[1] - 2.0)
+        .expect("a floor past the door");
+    let p = level.player();
+    let h = p.config.eye_height(p.body().box_index());
+    let angles = p.angles();
+    level.set_camera([x, y + h, z], angles);
     let input = Input::new();
-    let mut now = open_trader_door(&mut level);
+    let mut now = 0;
     for _ in 0..30 {
         now += 16;
         level.set_global_clock(now);
@@ -86,6 +102,8 @@ fn routes_on_the_start_level() {
     let world = level.collision();
     let player = level.player().clone();
     let body = Body::of(&player.config);
+    // The door is in the way.
+    let walls = player.body().bodies();
     let from = player.state().position;
     eprintln!("start {from:?}");
 
@@ -108,7 +126,7 @@ fn routes_on_the_start_level() {
             let dir = d.map(|v| v / length(d));
             let blocked = world.ray_hits(eye, dir, length(d));
             let t = Instant::now();
-            let route = plan(world, &body, from, target);
+            let route = plan_among(world, &body, walls, from, target);
             let ms = t.elapsed().as_secs_f64() * 1e3;
             times.push(ms);
             eprintln!(
@@ -182,7 +200,7 @@ fn routes_on_the_start_level() {
         };
         let target = [beyond[0], y, beyond[1]];
         let t = Instant::now();
-        let Some(route) = plan(world, &body, from, target) else {
+        let Some(route) = plan_among(world, &body, walls, from, target) else {
             continue;
         };
         let ms = t.elapsed().as_secs_f64() * 1e3;
@@ -205,54 +223,4 @@ fn routes_on_the_start_level() {
         break;
     }
     assert!(climbed, "no ladder near the start climbed");
-}
-
-/// TODO(#876): the trader's door is locked at a New Game's start; the
-/// stub's two uses (the key bound to `use`) with the player turned to its
-/// leaf open it. The player is then turned back and the clock (ms, from
-/// 0) after the frames run is returned.
-fn open_trader_door(level: &mut LevelScreen) -> u64 {
-    let leaf = level.player().body().bodies()[0].centre;
-    let p = level.player();
-    let feet = p.state().position;
-    let h = p.config.eye_height(p.body().box_index());
-    let eye = [feet[0], feet[1] + h, feet[2]];
-    let angles = p.angles();
-    let key = (level.controls().bindings)
-        .controls(MoveAction::Use)
-        .find_map(|c| match c {
-            Control::Key(k) => Some(k),
-            _ => None,
-        })
-        .expect("a key bound to use");
-    let to = [leaf[0] - feet[0], leaf[2] - feet[2]];
-    level.set_camera(
-        eye,
-        Angles {
-            yaw: to[0].atan2(to[1]),
-            pitch: 0.0,
-            roll: 0.0,
-        },
-    );
-    let mut input = Input::new();
-    let mut now = 0;
-    let mut frame = |level: &mut LevelScreen, input: &mut Input| {
-        now += 16;
-        level.set_global_clock(now);
-        level.update(now, input);
-        input.end_frame();
-    };
-    for _ in 0..3 {
-        frame(level, &mut input);
-    }
-    for _ in 0..2 {
-        for pressed in [true, false] {
-            input.handle(Event::Key { key, pressed });
-        }
-        frame(level, &mut input);
-    }
-    assert!(level.state().doors[0].open, "the trader's door opened");
-    level.set_camera(eye, angles);
-    frame(level, &mut input);
-    now
 }

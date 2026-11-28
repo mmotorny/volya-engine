@@ -21,15 +21,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 use md5::{Digest, Md5};
-use volya_engine::controls::MoveAction;
 use volya_engine::core::audio::Category;
-use volya_engine::core::camera::Angles;
 use volya_engine::core::collision::CollisionWorld;
 use volya_engine::core::collision::geometry::{
     self, Vec3, add, cross, length, normalize, scale, sub,
 };
 use volya_engine::core::cycles::Cycle;
-use volya_engine::core::input::{Control, Event, Input, Key};
+use volya_engine::core::input::{Event, Input, Key};
 use volya_engine::core::sound::system::{NoDevice, SoundSystem};
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{self, StdVfs, Vfs};
@@ -684,9 +682,9 @@ fn way_out(world: &CollisionWorld, start: Vec3, goal: impl Fn(Vec3) -> bool) -> 
     path
 }
 
-/// #837: leaving the start bunker. The trader's door opened (#876's stub),
-/// from the start the player stands, then
-/// runs (W held, steered by the mouse) along the way out to the first
+/// #837: leaving the start bunker. From just past the trader's locked door
+/// (#874) the player stands, then runs (W held, steered by the mouse)
+/// along the way out to the first
 /// earth outside: the time from the key to the first step and to its
 /// voice starting (S11 3.2, 3.3: the first step is due 173 ms into the
 /// cycle), and per step the pair's ground material against the triangles
@@ -700,7 +698,6 @@ fn footsteps_leaving_the_bunker() {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
-    let opened = open_trader_door(&mut level);
     let sound = level.take_sound_data().unwrap();
     let mut system = SoundSystem::new(32);
     system.set_volume(Category::Effects, 1.0);
@@ -714,6 +711,27 @@ fn footsteps_leaving_the_bunker() {
     let start = level.player().state().position;
     let world = level.shared_collision();
     let mut path = way_out(&world, start, |_| true);
+    // The trader's door is locked at the start (trader-door.md, #874): the
+    // way out starts past its leaf, 1 m beyond it, the player placed there.
+    let leaf = level.player().body().bodies()[0].centre;
+    let flat = |p: Vec3| (p[0] - leaf[0]).hypot(p[2] - leaf[2]);
+    let at_door = path
+        .iter()
+        .position(|&p| flat(p) < 0.5)
+        .expect("the door on the way");
+    let past = at_door + (path[at_door..].iter().position(|&p| flat(p) > 1.0).unwrap());
+    path.drain(..past);
+    let p = level.player();
+    let h = p.config.eye_height(p.body().box_index());
+    let (feet, next) = (path[0], path[1]);
+    level.set_camera(
+        [feet[0], feet[1] + h, feet[2]],
+        volya_engine::core::camera::Angles {
+            yaw: (next[0] - feet[0]).atan2(next[2] - feet[2]),
+            pitch: 0.0,
+            roll: 0.0,
+        },
+    );
     let exit = *path.last().unwrap();
     let outside = way_out(&world, exit, |p| {
         under(&world, p).0.is_some_and(|m| matches!(m, 7 | 10))
@@ -729,7 +747,7 @@ fn footsteps_leaving_the_bunker() {
 
     let mut input = Input::new();
     let mut device = Starts::default();
-    let mut now = opened;
+    let mut now = 0u64;
     let mut frame = |level: &mut LevelScreen, input: &mut Input| {
         now += FRAME_MS;
         level.update(now, input);
@@ -889,54 +907,4 @@ fn footsteps_leaving_the_bunker() {
     eprintln!("steps whose ground is not under the feet: {mismatched}");
     assert!(outside.len() >= 4, "{outside:?}");
     assert!(outside[1..].iter().all(|&id| id == EARTH), "{outside:?}");
-}
-
-/// TODO(#876): the trader's door is locked at a New Game's start; the
-/// stub's two uses (the key bound to `use`) with the player turned to its
-/// leaf open it. The player is then turned back and the clock (ms, from
-/// 0) after the frames run is returned.
-fn open_trader_door(level: &mut LevelScreen) -> u64 {
-    let leaf = level.player().body().bodies()[0].centre;
-    let p = level.player();
-    let feet = p.state().position;
-    let h = p.config.eye_height(p.body().box_index());
-    let eye = [feet[0], feet[1] + h, feet[2]];
-    let angles = p.angles();
-    let key = (level.controls().bindings)
-        .controls(MoveAction::Use)
-        .find_map(|c| match c {
-            Control::Key(k) => Some(k),
-            _ => None,
-        })
-        .expect("a key bound to use");
-    let to = [leaf[0] - feet[0], leaf[2] - feet[2]];
-    level.set_camera(
-        eye,
-        Angles {
-            yaw: to[0].atan2(to[1]),
-            pitch: 0.0,
-            roll: 0.0,
-        },
-    );
-    let mut input = Input::new();
-    let mut now = 0;
-    let mut frame = |level: &mut LevelScreen, input: &mut Input| {
-        now += 16;
-        level.set_global_clock(now);
-        level.update(now, input);
-        input.end_frame();
-    };
-    for _ in 0..3 {
-        frame(level, &mut input);
-    }
-    for _ in 0..2 {
-        for pressed in [true, false] {
-            input.handle(Event::Key { key, pressed });
-        }
-        frame(level, &mut input);
-    }
-    assert!(level.state().doors[0].open, "the trader's door opened");
-    level.set_camera(eye, angles);
-    frame(level, &mut input);
-    now
 }

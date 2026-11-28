@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::core::collision::body::BodyBox;
 use crate::core::collision::geometry::Vec3;
 use crate::core::config;
-use crate::core::door::{self, Door, DoorSection, Used};
+use crate::core::door::{self, Door, DoorSection};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::objects::{LevelObject, locate_model};
@@ -49,8 +49,6 @@ pub struct DoorReport {
     pub name: String,
     pub section: String,
     pub locked: bool,
-    /// Opened by a use (4.3).
-    pub open: bool,
     /// The hinge motor's maximum force and velocity (2.3), once set.
     pub motor: Option<[f32; 2]>,
     pub tip: Option<String>,
@@ -108,22 +106,11 @@ impl LevelDoors {
                 materials,
             )
             .map_err(|e| invalid(format!("{}: {e}", h.name.as_str())))?;
-            // 4.3: the section the unlock switches to; without it in the
-            // file, its keys' defaults, unlocked (TODO(#876): the stub's).
-            let unlocked = logic.section(door::UNLOCKED_SECTION).map_or_else(
-                || DoorSection {
-                    name: door::UNLOCKED_SECTION.to_owned(),
-                    locked: false,
-                    closed: true,
-                    show_tips: true,
-                    locked_tip: door::LOCKED_TIP.to_owned(),
-                },
-                DoorSection::read,
-            );
-            doors.push(
-                Door::new(h.name.to_string(), DoorSection::read(section), boxes)
-                    .with_unlocked(unlocked),
-            );
+            doors.push(Door::new(
+                h.name.to_string(),
+                DoorSection::read(section),
+                boxes,
+            ));
         }
         Ok(Self {
             doors,
@@ -137,7 +124,7 @@ impl LevelDoors {
     /// is not simulated, so it meets nothing here).
     pub fn boxes(&self) -> Vec<BodyBox> {
         (self.doors.iter())
-            .filter(|d| d.section.closed && !d.is_open())
+            .filter(|d| d.section.closed)
             .flat_map(|d| d.boxes().iter().copied())
             .collect()
     }
@@ -179,13 +166,10 @@ impl LevelDoors {
         Some((self.doors[i].tip()?, at))
     }
 
-    /// The use action on the door the crosshair picks, if any (2.5, 4.3;
-    /// TODO(#876): the stub's unlock). A changed hint only replaces the
-    /// text: the fade restarts when the picked object changes (5.3).
-    pub fn use_picked(&mut self) -> Used {
-        match self.picked {
-            Some((i, _)) => self.doors[i].use_action(),
-            None => Used::Nothing,
+    /// The use action on the door the crosshair picks, if any (2.5).
+    pub fn use_picked(&mut self) {
+        if let Some((i, _)) = self.picked {
+            self.doors[i].use_action();
         }
     }
 
@@ -195,7 +179,6 @@ impl LevelDoors {
                 name: d.name.clone(),
                 section: d.section.name.clone(),
                 locked: d.section.locked,
-                open: d.is_open(),
                 motor: d.motor().map(|m| [m.force, m.velocity]),
                 tip: d.tip().map(str::to_owned),
             })

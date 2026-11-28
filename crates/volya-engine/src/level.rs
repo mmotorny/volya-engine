@@ -2745,12 +2745,9 @@ impl LevelScreen {
         self.doors.physics_steps(self.player.steps());
         let view = self.player.view();
         self.doors.pick(view.eye, view.direction, now);
-        // The use action on the picked door (TODO(#876): the stub's unlock);
-        // an opened leaf leaves the player's way.
-        if self.controls.use_pressed(input)
-            && self.doors.use_picked() == crate::core::door::Used::Opened
-        {
-            self.player.body_mut().set_bodies(self.doors.boxes());
+        // The use action on the picked door (2.5).
+        if self.controls.use_pressed(input) {
+            self.doors.use_picked();
         }
         self.fall_hit();
         if let Some(c) = &mut self.character {

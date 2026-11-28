@@ -1689,7 +1689,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap unlocks it (#876's stub), the d-pad right opens it": async () => {
+  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap and the d-pad right use it, leaving it locked": async () => {
     needsGame();
     if ((await state()).phase === "menu") await enterLevel();
     let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
@@ -1729,8 +1729,9 @@ export const tests = {
         }),
       );
     }
-    s = await until((s) => s.level.player.hint === "tip_door_open", "Use to unlock the door");
-    assert(!s.level.doors[0].open, "unlocked, still closed");
+    await sleep(300);
+    s = await state();
+    assertEqual([s.level.doors[0].locked, s.level.player.hint], [true, "tip_door_locked"], "the door after the touch Use");
     // The gamepad's d-pad right (button 15 of the standard mapping).
     const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     const getGamepads = navigator.getGamepads;
@@ -1739,11 +1740,18 @@ export const tests = {
       pad.buttons[15] = { pressed: true, value: 1 };
       await sleep(100);
       pad.buttons[15] = { pressed: false, value: 0 };
-      s = await until((s) => s.level.doors[0].open, "the d-pad right to open the door");
+      await sleep(300);
+      s = await state();
     } finally {
       navigator.getGamepads = getGamepads;
     }
-    assert(!s.level.player.hint, "no hint once open");
+    assertEqual([s.level.doors[0].locked, s.level.player.hint], [true, "tip_door_locked"], "the door after the d-pad right");
+    // Turned back to the start view, nothing has a hint.
+    const back = s.level.yaw;
+    down("ArrowLeft");
+    await until((s) => s.level.yaw < back - Math.PI + 0.08, "the left arrow to turn back", 3000);
+    up("ArrowLeft");
+    await until((s) => !s.level.player.hint, "no hint turned away");
     for (let i = 0; i < 50 && !use.hidden; i++) await sleep(20);
     assert(use.hidden, "Use hidden once nothing has a hint");
     return "";

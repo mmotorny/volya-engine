@@ -199,16 +199,15 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
     press(&mut run, use_key);
     assert!(run.level.state().doors[0].locked);
 
-    // TODO(#876): the stub. Facing the door again, a use unlocks it: the
-    // hint tip_door_open (4.3), still in the way; the next use opens it and
-    // the run goes on through the doorway.
+    // 2.5: facing the door again, a use leaves it locked and in the way.
     run.level
         .set_camera([feet[0], feet[1] + h, feet[2]], angles);
     run.frames(2);
+    assert_eq!(run.hint().as_deref(), Some("tip_door_locked"));
     press(&mut run, use_key);
     let d = &run.level.state().doors[0];
-    assert!(!d.locked && !d.open, "{d:?}");
-    assert_eq!(run.hint().as_deref(), Some("tip_door_open"));
+    assert!(d.locked && d.section == "ph_door@locked", "{d:?}");
+    assert_eq!(run.hint().as_deref(), Some("tip_door_locked"));
     run.input.handle(Event::Key {
         key: Key::W,
         pressed: true,
@@ -216,11 +215,4 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
     run.frames(60);
     let stopped = across(run.feet(), leaf.centre, n) - leaf.half_size[k];
     assert!(stopped > 0.25, "{stopped} m from the face");
-    press(&mut run, use_key);
-    assert!(run.level.state().doors[0].open);
-    assert_eq!(run.hint(), None);
-    run.frames(100);
-    let beyond = across(run.feet(), leaf.centre, n);
-    eprintln!("after the door opened: {beyond:.2} m from the leaf's plane");
-    assert!(beyond < -0.5, "{beyond} m: not through the doorway");
 }
