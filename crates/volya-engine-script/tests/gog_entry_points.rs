@@ -194,6 +194,16 @@ fn a_new_games_calls_into_the_shipped_scripts() {
         loaded,
         [Value::from("table table table table"), "function".into()]
     );
+    // Spec C 5.3: the scripts' registrations are in `clsid`, the trader's
+    // and the stalker's among them.
+    let ids = g
+        .scripts()
+        .exec(
+            "=clsid",
+            b"return clsid.script_stalker, clsid.script_trader",
+        )
+        .unwrap();
+    assert_eq!(ids, [Value::Number(33.0), Value::Number(35.0)]);
     // What failed to load in the new state, for the record (engine names of
     // specs not implemented).
     let failures = g.scripts().take_failures();
