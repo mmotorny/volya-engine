@@ -1614,7 +1614,7 @@ pub struct NewGameLoad {
     /// ([`NewGameLoad::set_prefetched`]).
     prefetched: Option<Arc<objects::Prefetched>>,
     /// The offline simulation once `st_creating_new_game` made it, shared
-    /// with the scripts' `alife()` from `st_client_spawning` on
+    /// with the scripts' `alife()` from then on
     /// ([`NewGameLoad::share_simulation`]).
     simulation: SharedSimulation,
     info_portions: Option<SharedInfoPortions>,

@@ -817,6 +817,20 @@ end
         )
         .unwrap();
     assert_eq!(loaded, [Value::from("table"), "table".into()]);
+    // The New Game's objects were made through the object factory (spec C
+    // 6.1): `alife()` gives the `esc_lager` smart terrain's script object,
+    // its fields as `se_smart_terrain`'s constructor set them, and the same
+    // object for the trader its binder was given.
+    let made = scripts
+        .scripts()
+        .exec(
+            "=t",
+            b"local sim = alife() local t = sim:object('esc_lager')\n\
+              return t.registred, t:clsid() == clsid.smart_terrain, \
+              sim:object('escape_trader'):clsid() == clsid.script_trader",
+        )
+        .unwrap();
+    assert_eq!(made, [Value::Boolean(false), true.into(), true.into()]);
     eprintln!(
         "scripts: startup {startup_ms:.1} ms, game scripts' pool {} K; the New Game's frames \
          with calls into scripts {script_ms:.1} ms, the pool after it {} K",

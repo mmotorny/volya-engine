@@ -2041,6 +2041,17 @@ impl App {
                         loading.set_physics_settings(PhysicsSettings::from_console(&self.console));
                         let ran = loading.runs_work().then(|| loading.stage());
                         let step = loading.step(tree, data, now);
+                        // The simulation's server objects in the scripts,
+                        // after the New Game caption's own work.
+                        if step.is_ok()
+                            && ran == Some(Stage::CreatingNewGame)
+                            && let Some(scripts) = self.scripts.as_mut()
+                            && let Err(e) =
+                                crate::scripts::creating_new_game(scripts, loading, data)
+                        {
+                            self.failed.get_or_insert(e.message);
+                            return;
+                        }
                         // The level's client objects in the scripts, after
                         // the spawning caption's own work.
                         if step.is_ok()

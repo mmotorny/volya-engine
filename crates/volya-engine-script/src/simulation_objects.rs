@@ -29,20 +29,20 @@ use std::rc::Rc;
 use volya_engine_core::config::Config;
 use volya_engine_core::simulation::class_of;
 use volya_engine_formats::cp1251;
-use volya_engine_formats::object::ObjectRecord;
+use volya_engine_formats::object::{Kind, ObjectRecord};
 
 use crate::classes::{Conversion, EnginePart, OverrideFailure};
 use crate::files::FileSystem;
 use crate::game_object::game_bytes;
 use crate::loader::Scripts;
-use crate::object_factory::{CreatedObject, ObjectFactory, class_id};
+use crate::object_factory::{CreatedObject, ObjectFactory, class_id, id_text};
 use crate::services::EngineServices;
 use crate::simulation::AlifeSimulator;
 use crate::story::Story;
 use crate::values::{lua_number, to_f32};
 use crate::{Error, ErrorKind, Value};
 
-pub use classes::{CLASSES, Class, dispatched, engine_class_of};
+pub use classes::{CLASSES, Class, dispatched, engine_class, engine_class_of};
 
 /// What the engine's own implementation of a dispatched method left for
 /// the engine to finish once the call returns ([`SimulationObject`]): the
@@ -123,9 +123,10 @@ impl SimulationObject {
         }
     }
 
-    /// The object scripts get for the simulation's object `id` whose state
-    /// is `record` (spec K): of the class of its kind ([`engine_class_of`],
-    /// TODO(#950): its script object's), its state the simulation's.
+    /// An object standing for the simulation's object `id` whose state is
+    /// `record` (spec K), for an object the engine holds no server object
+    /// for ([`Scripts::create_simulation_objects`]): of the class of its
+    /// kind ([`engine_class_of`]), its state the simulation's.
     pub fn view(
         id: u16,
         record: &ObjectRecord,
@@ -233,12 +234,17 @@ impl DerefMut for StateMut<'_> {
 }
 
 /// The engine's own state of simulation objects: the server objects the
-/// engine holds for its objects by id ([`Scripts::server_object_for`]), and
-/// the game time the engine's `on_death` stamps (5.8).
+/// engine holds for the simulation's objects by id
+/// ([`Scripts::create_simulation_objects`]), which spec K's members hand
+/// out; the ids of those spec K's `release` took from the simulation,
+/// whose server objects the engine is to release
+/// ([`Scripts::release_simulation_objects`]); and the game time the
+/// engine's `on_death` stamps (5.8).
 #[derive(Debug, Default)]
 pub struct SimulationObjects {
     pub game_time: u64,
     held: HashMap<u16, Held>,
+    released: Vec<u16>,
 }
 
 /// A server object the engine holds ([`SimulationObjects`]).
@@ -253,6 +259,22 @@ struct Held {
 impl SimulationObjects {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The engine part of the server object held for object `id`.
+    pub fn held(&self, id: u16) -> Option<EnginePart> {
+        self.held.get(&id).map(|h| h.part)
+    }
+
+    /// How many server objects the engine holds.
+    pub fn held_count(&self) -> usize {
+        self.held.len()
+    }
+
+    /// Objects `ids` left the simulation: their server objects are to be
+    /// released.
+    pub(crate) fn released(&mut self, ids: impl IntoIterator<Item = u16>) {
+        self.released.extend(ids);
     }
 }
 
@@ -335,8 +357,11 @@ impl Scripts {
             .game_object_state
             .as_ref()
             .ok_or_else(|| api("the game object basics aren't registered"))?;
+        // Spec K's members hand out the server objects held here.
+        let state =
+            (self.simulation_state.as_ref()).map_or_else(Rc::default, |r| Rc::clone(&r.ctx.held));
         let ctx = Context {
-            state: Rc::default(),
+            state,
             services: Rc::clone(&basics.services),
             files: Rc::clone(&basics.files),
             factory: Rc::clone(&self.factory),
@@ -710,14 +735,83 @@ impl Scripts {
         self.simulation_call(zone, "task", &[Value::Object(obj)], Conversion::Value)
     }
 
+    /// The New Game's or the load's objects created through the object
+    /// factory (spec C 6.1; offline-simulation.md 8.1 step 3.1, 8.2): the
+    /// server object of each object of spec K's simulation, in creation
+    /// order (a New Game's in increasing spawn index, a load's in
+    /// increasing id), held by the engine from then on: a script entry's
+    /// initialised (2.2), an engine entry's the engine's own object of its
+    /// kind's class ([`engine_class`]). Each object's state is the
+    /// simulation's. The scripts' `STATE_Read` and the registration calls
+    /// (5.1, 5.3, 5.4) are not made (TODO(#1219): until spec I's packets
+    /// let scripts read their state; the shipped smart terrains' scripts
+    /// read their configuration there). Objects already held are kept.
+    pub fn create_simulation_objects(&mut self, system: &Config) -> Result<(), Error> {
+        let ctx = self.simulation_context()?;
+        let alife =
+            (ctx.alife.clone()).ok_or_else(|| api("the simulation registry isn't registered"))?;
+        let mut order: Vec<(u32, u16, String)> = {
+            let a = alife.borrow();
+            let sim = (a.simulation.as_ref()).ok_or_else(|| api("there is no simulation"))?;
+            sim.objects()
+                .map(|o| {
+                    let index = o.spawn_index.unwrap_or(u32::MAX);
+                    (index, o.id, o.record.header.section.to_string())
+                })
+                .collect()
+        };
+        order.sort_unstable_by_key(|&(index, id, _)| (index, id));
+        for (_, id, section) in order {
+            if ctx.state.borrow().held.contains_key(&id) {
+                continue;
+            }
+            let held = self.new_server_object(system, &section)?;
+            ctx.state.borrow_mut().held.insert(id, held);
+            self.simulation_object(held.part, |o| {
+                o.record = None;
+                o.simulation = Some((id, Rc::clone(&alife)));
+            })?;
+        }
+        Ok(())
+    }
+
+    /// The server object of configuration section `section` (spec C 6.1):
+    /// through the factory, a script entry's object initialised (2.2), an
+    /// engine entry's the engine's own object of its kind's class. An
+    /// entry of no simulation kind is fatal (the original asserts "Can't
+    /// create entity.").
+    fn new_server_object(&mut self, system: &Config, section: &str) -> Result<Held, Error> {
+        let created = self.create_server_object(system, section)?;
+        Ok(match created.object {
+            CreatedObject::Script(part) => Held {
+                part,
+                scripted: true,
+            },
+            CreatedObject::Engine { entry_id, .. } => {
+                let text = cp1251::decode(id_text(entry_id).trim_ascii_end());
+                let Ok(kind) = Kind::from_class_id(&text) else {
+                    let message = "Can't create entity.".to_owned();
+                    *self.fatal.borrow_mut() = Some(message.clone());
+                    return Err(Error {
+                        kind: ErrorKind::Fatal,
+                        message,
+                    });
+                };
+                let class = engine_class(&text, kind);
+                Held {
+                    part: self.new_simulation_object(class, &game_bytes(section))?,
+                    scripted: false,
+                }
+            }
+        })
+    }
+
     /// The server object the engine holds for simulation object `record`
     /// (its id), for the online object spawning from it to get (spec M
-    /// 10.2, spec L 5.1): made on first need, through the object factory
-    /// for a script entry's class id (which initialises it, 2.2) or as the engine's
-    /// own object of its kind's class ([`engine_class_of`]) otherwise; its
-    /// state set to `record` each time (TODO(#950): the simulation holds
-    /// its objects as these and reads their states through
-    /// [`Scripts::read_state`]).
+    /// 10.2, spec L 5.1): the one [`Scripts::create_simulation_objects`]
+    /// made, or one made now as it makes them; its state the simulation's
+    /// object's when spec K's simulation holds it, else set to `record`
+    /// each time (without its scripts' `STATE_Read`, TODO(#213)).
     pub fn server_object_for(
         &mut self,
         system: &Config,
@@ -729,22 +823,7 @@ impl Scripts {
         let part = match held {
             Some(h) => h.part,
             None => {
-                let section = record.header.section.as_str();
-                let created = self.create_server_object(system, section)?;
-                let held = match created.object {
-                    CreatedObject::Script(part) => Held {
-                        part,
-                        scripted: true,
-                    },
-                    CreatedObject::Engine { .. } => {
-                        let part = self
-                            .new_simulation_object(engine_class_of(record), &game_bytes(section))?;
-                        Held {
-                            part,
-                            scripted: false,
-                        }
-                    }
-                };
+                let held = self.new_server_object(system, record.header.section.as_str())?;
                 ctx.state.borrow_mut().held.insert(id, held);
                 held.part
             }
@@ -770,19 +849,51 @@ impl Scripts {
         Ok(part)
     }
 
-    /// Releases the server objects [`Scripts::server_object_for`] made (the
-    /// level is left or a New Game starts over it).
+    /// The engine destroyed objects `removed` (they left the simulation),
+    /// and spec K's `release` took others from it: the server objects held
+    /// for them are released (a script entry's with
+    /// [`Scripts::release_object`], spec C 6.2). Ids without one are
+    /// skipped.
+    pub fn release_simulation_objects(&mut self, removed: &[u16]) -> Result<(), Error> {
+        let Ok(state) = self.simulation_objects() else {
+            return Ok(());
+        };
+        let held: Vec<Held> = {
+            let mut s = state.borrow_mut();
+            let mut ids = std::mem::take(&mut s.released);
+            ids.extend_from_slice(removed);
+            ids.iter().filter_map(|id| s.held.remove(id)).collect()
+        };
+        for h in held {
+            self.release_held(h)?;
+        }
+        Ok(())
+    }
+
+    fn release_held(&mut self, h: Held) -> Result<(), Error> {
+        if h.scripted {
+            self.release_object(h.part)?;
+        } else {
+            self.lua_mut().release_engine_object(h.part)?;
+        }
+        Ok(())
+    }
+
+    /// Releases every server object the engine holds (the simulation ends:
+    /// the level is left or a New Game starts over it), in increasing id.
     pub fn release_server_objects(&mut self) -> Result<(), Error> {
         let Ok(state) = self.simulation_objects() else {
             return Ok(());
         };
-        let held: Vec<Held> = state.borrow_mut().held.drain().map(|(_, h)| h).collect();
+        let held: Vec<Held> = {
+            let mut s = state.borrow_mut();
+            s.released.clear();
+            let mut held: Vec<(u16, Held)> = s.held.drain().collect();
+            held.sort_unstable_by_key(|&(id, _)| id);
+            held.into_iter().map(|(_, h)| h).collect()
+        };
         for h in held {
-            if h.scripted {
-                self.release_object(h.part)?;
-            } else {
-                self.lua_mut().release_engine_object(h.part)?;
-            }
+            self.release_held(h)?;
         }
         Ok(())
     }

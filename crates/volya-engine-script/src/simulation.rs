@@ -14,7 +14,8 @@
 //! What scripts change is the simulation itself, held by
 //! [`AlifeSimulator`] while a game runs, and the events the engine acts
 //! on ([`AlifeSimulator::take_events`]). The simulation objects scripts
-//! get are spec J's objects of their kinds ([`SimulationObject`]), which refer to
+//! get are the server objects the engine holds for them (spec J's,
+//! [`SimulationObject`], made through the object factory), which refer to
 //! the simulation's own object by id. See docs/architecture/scripts.md,
 //! Simulation registry.
 
@@ -69,8 +70,9 @@ pub const INTERACTIVE: u32 = 0x08;
 pub const IN_RESTRICTIONS: u32 = 4;
 
 /// A simulation object as scripts hold it: spec J's, standing for the
-/// simulation's object by id ([`SimulationObject::view`]).
+/// simulation's object by id.
 pub use crate::simulation_objects::SimulationObject;
+use crate::simulation_objects::SimulationObjects;
 
 /// The part of the one `alife_simulator` object.
 #[derive(Clone, Copy, Debug)]
@@ -174,6 +176,9 @@ impl AlifeSimulator {
 #[derive(Clone)]
 pub(crate) struct Context {
     pub state: Rc<RefCell<AlifeSimulator>>,
+    /// The server objects the engine holds for the simulation's objects
+    /// (spec J's state, shared with its registration).
+    pub held: Rc<RefCell<SimulationObjects>>,
     pub objects: Rc<RefCell<GameObjects>>,
     pub services: Rc<RefCell<EngineServices>>,
     pub files: Rc<RefCell<FileSystem>>,
@@ -302,15 +307,20 @@ pub(crate) fn new_vector(o: &Objects, v: [f32; 3]) -> Value {
 }
 
 /// The simulation object `id` as scripts get it, or nil when the
-/// simulation has none: an object of spec J's class of its kind, whose
-/// state is the simulation's (TODO(#950): its script object's).
+/// simulation has none: the server object the engine holds for it (spec
+/// J, through the object factory: a scripted object's script object), or,
+/// for one it holds none for, a new object of spec J's class of its kind;
+/// its state is the simulation's.
 fn object_value(ctx: &Context, o: &Objects, sim: &Simulation, id: Option<u16>) -> Value {
     match id.and_then(|id| sim.object(id)) {
-        Some(x) => {
-            let view =
-                SimulationObject::view(x.id, &x.record, Rc::clone(&ctx.state), &ctx.system());
-            o.new_object(view.class, view)
-        }
+        Some(x) => match ctx.held.borrow().held(x.id) {
+            Some(part) => Value::Object(part),
+            None => {
+                let view =
+                    SimulationObject::view(x.id, &x.record, Rc::clone(&ctx.state), &ctx.system());
+                o.new_object(view.class, view)
+            }
+        },
         None => Value::Nil,
     }
 }
@@ -570,7 +580,7 @@ fn create(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
         // For an online parent before it is handed to the server (7.2).
         a.rounds_left = count;
     }
-    // Step 4 (spec J's script calls, 7.4: TODO(#950)); the supplies of
+    // Step 4 (spec J's script calls, 7.4: TODO(#1219)); the supplies of
     // step 5 are not created (TODO(#1221)).
     sim.register_created(record, None, &system)
         .map_err(|e| ctx.failed_check(name, &e.to_string(), &[]))?;
@@ -657,7 +667,7 @@ fn release(ctx: &Context, o: &Objects, args: &[Value]) -> Results {
         return Ok(Vec::new());
     }
     // 4.3: an object whose story id has no entry gives a log line. Spec J's
-    // `on_unregister` comes first (7.4): TODO(#950).
+    // `on_unregister` comes first (7.4): TODO(#1219).
     let mut missing = Vec::new();
     let mut stack = vec![id];
     while let Some(x) = stack.pop() {
@@ -673,9 +683,13 @@ fn release(ctx: &Context, o: &Objects, args: &[Value]) -> Results {
             );
         }
     }
-    for x in sim.release(id) {
-        state.brains.remove(&x);
+    let released = sim.release(id);
+    for x in &released {
+        state.brains.remove(x);
     }
+    // Their server objects go once the call returns (our placement: the
+    // engine releases them with the frame's destroyed objects).
+    ctx.held.borrow_mut().released(released);
     for story_id in missing {
         ctx.log(&format!(
             "Cannot find story object with id [{story_id}] in the Story registry!"
@@ -905,6 +919,7 @@ impl Scripts {
         let story = (self.registered_story()).ok_or_else(|| api("the story isn't registered"))?;
         let ctx = Context {
             state,
+            held: Rc::default(),
             objects: Rc::clone(&basics.objects),
             services: Rc::clone(&basics.services),
             files: Rc::clone(&basics.files),

@@ -183,8 +183,9 @@ pub fn stage(scripts: &mut GameScripts, stage: Stage, data: &GameData) -> Result
             // this edition, so no coroutine.
         }
         Stage::LoadingAlifeSimulator => scripts.create_simulation(SERVER_OPTIONS, &data.system)?,
-        // The New Game's records (offline 8.1) are the simulation's
-        // (TODO(#950): their script server classes through the factory).
+        // The New Game's records (offline 8.1) are the simulation's, their
+        // server objects made after the caption's work
+        // ([`creating_new_game`]).
         Stage::ClientConnectingTo => {
             scripts.create_game_object(GAME_TYPE, false)?;
         }
@@ -295,6 +296,22 @@ pub struct ClientSpawning<'a> {
     pub info_portions: Option<SharedInfoPortions>,
 }
 
+/// `st_creating_new_game` (3.3 step 9.4), after the caption's own work,
+/// which made the New Game's simulation (offline-simulation.md 8.1): the
+/// simulation shared with the scripts' `alife()` from here on (script API
+/// K), and every object's server object created through the object
+/// factory (spec C 6.1, script API J 2.2; our placement: the original makes
+/// each as it creates the object from its record, the simulation here
+/// creates them all first). A script error is fatal.
+pub fn creating_new_game(
+    scripts: &mut GameScripts,
+    loading: &mut Loading,
+    data: &GameData,
+) -> Result<(), Error> {
+    loading.share_simulation(Rc::clone(scripts.simulation()));
+    scripts.scripts().create_simulation_objects(&data.system)
+}
+
 /// `st_client_spawning` (3.3 step 11.4), after the caption's own work
 /// (our placement: the objects' visuals and shells are made by it): the
 /// level vertices' light bytes, the game's information portions shared
@@ -309,8 +326,8 @@ pub fn client_spawning(
     now: u64,
 ) -> Result<(), Error> {
     let mut characters = Characters::new(tree, data);
-    // Script API K: `alife()` is the level's simulation from here on, its
-    // binders' calls among the first to reach it.
+    // Script API K: `alife()` is the level's simulation (shared since
+    // `st_creating_new_game`), its binders' calls among the first here.
     loading.share_simulation(Rc::clone(scripts.simulation()));
     let spawning = loading.client_objects().map_err(io_fatal)?;
     let paths = Rc::new(spawning.paths);
@@ -365,7 +382,8 @@ pub fn client_spawning(
 /// server and game times and the game clock (script API H); the player's placement, its feet and its body's
 /// heading (our reading of M 4); unless the game is `paused`, each
 /// object's scheduled update ([`scheduled_updates`]); the objects that
-/// went offline or were removed released and destroyed (L 5.5), those
+/// went offline or were removed released and destroyed (L 5.5), the
+/// removed ones' server objects released (script API J), those
 /// that came online spawned (M 2.1); the player's use action on the object
 /// it targeted (M 6.3), which raises its `use_object` (spec O 4, id 15),
 /// and its talk offer ([`offer_used_talk`]);
@@ -433,6 +451,11 @@ pub fn level_frame(
             physics.borrow_mut().shells.remove(id);
         }
     }
+    // Script API J: then the server objects of the objects that left the
+    // simulation, and of those script API K's `release` took from it.
+    scripts
+        .scripts()
+        .release_simulation_objects(&changes.removed)?;
     for &id in &changes.online {
         if let Some(object) = level.client_object(id) {
             let mut characters = Characters::new(tree, data);

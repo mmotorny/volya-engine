@@ -455,14 +455,19 @@ pub fn members(class: &Class) -> Vec<(&'static str, &'static str)> {
     out
 }
 
-/// The class of the engine's own server object for `record` (our reading
-/// where the spec names none: the class whose bases hold its kind's blocks,
-/// sav.md 7.4.2; artefacts as the scripted artefact's base, 6;
-/// TODO(#950) the simulation's own objects).
+/// The class of the engine's own server object for `record`
+/// ([`engine_class`] of its class id and kind).
 pub fn engine_class_of(record: &ObjectRecord) -> &'static str {
+    engine_class(record.class_id.as_str(), record.kind())
+}
+
+/// The class of the engine's own server object of class id `id`, of kind
+/// `kind` (our reading where the spec names none: the class whose bases
+/// hold its kind's blocks, sav.md 7.4.2; artefacts as the scripted
+/// artefact's base, 6).
+pub fn engine_class(id: &str, kind: Kind) -> &'static str {
     use Kind::*;
-    let id = record.class_id.as_str();
-    match record.kind() {
+    match kind {
         Player => "cse_alife_creature_actor",
         Stalker => "cse_alife_human_stalker",
         Trader => "cse_alife_trader",
