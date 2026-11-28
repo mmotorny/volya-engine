@@ -62,7 +62,10 @@ volya_library(
 volya_integration_tests(
     common_tags = ["gamedata"],
     crate = ":volya-engine-script",
-    compile_data = ["//crates/volya-engine-formats:tests/support/gog_archives.rs"],
+    compile_data = [
+        "tests/support/shipped_scripts.rs",
+        "//crates/volya-engine-formats:tests/support/gog_archives.rs",
+    ],
     deps = [
         "//crates/volya-engine-core",
         "//crates/volya-engine-formats",

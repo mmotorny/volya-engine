@@ -117,6 +117,32 @@ local function prefetch(name)
   load(name, true)
 end
 
+-- The value an engine-used name `A.m` names, if it is of type `kind`, else
+-- nil (docs/behavior/script-api-class-ids-and-the-object-factory.md 3.2,
+-- 4): namespace `A` is loaded first (2.2.4), then must be a table reached
+-- from the globals by raw access, and `m` is its raw field. A name without
+-- a `.` is a raw field of the globals.
+local function resolve(name, kind)
+  if type(name) ~= "string" then return nil end
+  local t, member = globals, name
+  local dot = find(name, "%.[^.]*$")
+  if dot then
+    local namespace = sub(name, 1, dot - 1)
+    member = sub(name, dot + 1)
+    load(namespace, true)
+    local parts, n = components(namespace)
+    if not parts then return nil end
+    for i = 1, n do
+      if type(t) ~= "table" then return nil end
+      t = rawget(t, parts[i])
+    end
+  end
+  if type(t) ~= "table" then return nil end
+  local value = rawget(t, member)
+  if type(value) ~= kind then return nil end
+  return value
+end
+
 setmetatable(globals, { __index = kept(ENTRY, "index") })
 globals.prefetch = kept(ENTRY, "prefetch")
 
@@ -125,6 +151,8 @@ return function(op, a, b)
     return index(b)
   elseif op == "prefetch" then
     prefetch(a)
+  elseif op == "resolve" then
+    return resolve(a, b)
   elseif op == "globals" then
     -- Startup loads `_G` without the test (2.2.1).
     load("_G", false)

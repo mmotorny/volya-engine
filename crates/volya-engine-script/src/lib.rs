@@ -5,8 +5,9 @@
 //! the original embeds (docs/behavior/script-environment.md), vendored
 //! unmodified in `vendor/luajit-1.0.3` (build.rs patches a copy, adding the
 //! original's C-style comments) and run without its machine-code compiler,
-//! behind a thin safe API; [`loader`] loads the game's script files, and
-//! [`classes`] gives scripts classes deriving from engine classes. See
+//! behind a thin safe API; [`loader`] loads the game's script files,
+//! [`classes`] gives scripts classes deriving from engine classes, and
+//! [`object_factory`] keeps the class ids and creates objects by them. See
 //! docs/architecture/scripts.md.
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
@@ -22,6 +23,7 @@ pub mod classes;
 mod ffi;
 mod libc;
 pub mod loader;
+pub mod object_factory;
 pub mod selftest;
 
 use std::collections::HashSet;

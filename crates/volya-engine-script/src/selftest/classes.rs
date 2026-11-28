@@ -135,7 +135,7 @@ fn state() -> Result<(Lua, Made), String> {
 /// Helpers for the Lua checks: `eq`, `raises`, and `failures`, which
 /// [`run`] reads. Objects are compared with `rawequal`: their `==` is an
 /// operator (7.2).
-const PRELUDE: &str = r#"
+pub(super) const PRELUDE: &str = r#"
 local failures = {}
 local function show(v)
   local t = type(v)
@@ -163,6 +163,11 @@ fn run(lua: &mut Lua, name: &str, body: &str) -> Result<(), String> {
     let results = lua
         .exec(&format!("={name}"), code.as_bytes())
         .map_err(|e| format!("{name}: {e}"))?;
+    failures_of(name, &results)
+}
+
+/// The failures a check after [`PRELUDE`] returned.
+pub(super) fn failures_of(name: &str, results: &[Value]) -> Result<(), String> {
     let Some(Value::Table(failures)) = results.first() else {
         return Err(format!("{name} returned {results:?}"));
     };

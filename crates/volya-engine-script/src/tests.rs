@@ -60,6 +60,49 @@ mod classes {
     }
 }
 
+/// The object factory's checks, one test per section of
+/// docs/behavior/script-api-class-ids-and-the-object-factory.md (all of
+/// them run in [`selftest`] too, on every target).
+mod object_factory {
+    use crate::selftest::object_factory as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn class_ids() {
+        section(checks::class_ids);
+    }
+
+    #[test]
+    fn the_object_factory() {
+        section(checks::factory);
+    }
+
+    #[test]
+    fn register() {
+        section(checks::register);
+    }
+
+    #[test]
+    fn class_registrators() {
+        section(checks::registrators);
+    }
+
+    #[test]
+    fn clsid() {
+        section(checks::clsid);
+    }
+
+    #[test]
+    fn creation_through_the_factory() {
+        section(checks::creation);
+    }
+}
+
 #[test]
 fn rust_panics_become_lua_errors() {
     let mut lua = Lua::new().unwrap();

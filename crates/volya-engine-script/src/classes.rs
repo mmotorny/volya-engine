@@ -31,9 +31,14 @@ use crate::{
 pub struct EnginePart(u64);
 
 impl EnginePart {
-    fn value(self) -> f64 {
+    pub(crate) fn value(self) -> f64 {
         // Ids stay far below 2^53: exact as Lua numbers.
         self.0 as f64
+    }
+
+    /// The part whose id C passed as `value`.
+    pub(crate) fn from_value(value: f64) -> Self {
+        EnginePart(value as u64)
     }
 }
 
@@ -311,6 +316,16 @@ impl Lua {
         // SAFETY: the state is open; `release` outlives the call.
         let status =
             unsafe { ffi::volya_open_classes_protected(self.state.as_ptr(), &mut release) };
+        self.check(status)
+    }
+
+    /// Sets the global `name` to the object factory's tools
+    /// (csrc/volya_class.c; object_factory.lua takes and clears it).
+    pub(crate) fn open_factory_tools(&mut self, name: &str) -> Result<(), Error> {
+        let name = cstring(name)?;
+        // SAFETY: the state is open; `name` outlives the call.
+        let status =
+            unsafe { ffi::volya_open_factory_tools_protected(self.state.as_ptr(), name.as_ptr()) };
         self.check(status)
     }
 

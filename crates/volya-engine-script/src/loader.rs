@@ -7,8 +7,8 @@
 //! prefix), and a [`Scripts`] state that loads namespaces at startup, on
 //! request and on access to an undefined global, as the original does.
 //!
-//! Loading runs a script's top level; nothing else of the game is called
-//! here (the class registrators of `script.ltx` need the engine's API).
+//! Loading runs a script's top level; the class registrators of
+//! `script.ltx` are called by [`crate::object_factory`].
 
 use std::cell::RefCell;
 use std::io;
@@ -20,6 +20,7 @@ use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx::value;
 
 use crate::classes::{Conversion, EngineClass, EnginePart, OverrideFailure};
+use crate::object_factory::{self, ObjectFactory};
 use crate::{Error, ErrorKind, Lua, Value};
 
 /// The path alias of the scripts' directory (2.1).
@@ -223,7 +224,9 @@ pub struct Scripts {
     lua: Lua,
     failures: Rc<RefCell<Vec<Failure>>>,
     /// The fatal error's message, once raised.
-    fatal: Rc<RefCell<Option<String>>>,
+    pub(crate) fatal: Rc<RefCell<Option<String>>>,
+    /// The object factory, made on first use ([`crate::object_factory`]).
+    pub(crate) factory: Rc<RefCell<Option<ObjectFactory>>>,
 }
 
 impl Scripts {
@@ -283,16 +286,22 @@ impl Scripts {
         })?;
         lua.register_kept_factory("__volya_kept")?;
         lua.exec_kept("=script_loader", include_bytes!("loader.lua"), ENTRY)?;
+        let factory = Rc::new(RefCell::new(None));
+        object_factory::install(&mut lua, Rc::clone(&factory))?;
         Ok(Scripts {
             lua,
             failures,
             fatal,
+            factory,
         })
     }
 
     /// Runs `f` on the state unless it is stopped; the fatal error if it
     /// was raised before or during `f`.
-    fn guarded<T>(&mut self, f: impl FnOnce(&mut Lua) -> Result<T, Error>) -> Result<T, Error> {
+    pub(crate) fn guarded<T>(
+        &mut self,
+        f: impl FnOnce(&mut Lua) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let stopped = |fatal: &RefCell<Option<String>>| {
             fatal.borrow().clone().map(|message| Error {
                 kind: ErrorKind::Fatal,

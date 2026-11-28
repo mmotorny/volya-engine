@@ -860,3 +860,143 @@ int volya_open_classes_protected(lua_State *L, volya_rust_fn *release)
 {
   return lua_cpcall(L, open_classes, release);
 }
+
+/* --- The object factory's tools ------------------------------------------ */
+
+/* What the object factory (docs/behavior/script-api-class-ids-and-the-
+** object-factory.md; src/object_factory.lua) needs of the class system:
+** making the factory object, constructing engine objects, and taking an
+** object's engine part over for the engine. Only that trusted chunk gets
+** them, through a global it takes and clears. */
+
+static char adopted_key; /* Engine part id -> the object the engine holds. */
+
+/* A new object of class arg 1, without calling `__init` and without an
+** engine part (the factory object, 3.1). */
+static int tool_object(lua_State *L)
+{
+  volya_object *o;
+  if (!is_class(L, 1)) return luaL_error(L, "not a class");
+  lua_settop(L, 1);
+  lua_getfenv(L, 1);
+  o = (volya_object *)lua_newuserdata(L, sizeof *o);
+  o->ok = 1;
+  o->has_part = 0;
+  o->part = 0;
+  lua_getfield(L, 2, "metatable");
+  lua_setmetatable(L, 3);
+  lua_newtable(L);
+  lua_setfenv(L, 3);
+  return 1;
+}
+
+/* Whether arg 1 is an engine class. */
+static int tool_is_engine(lua_State *L)
+{
+  lua_pushboolean(L, is_class(L, 1) && is_engine_class(L, 1));
+  return 1;
+}
+
+/* An object of engine class arg 1 whose engine part its constructor makes
+** from the other args, as `super` would (no part when none matches). */
+static int tool_construct(lua_State *L)
+{
+  int n = lua_gettop(L) - 1;
+  if (!is_class(L, 1) || !is_engine_class(L, 1)) return luaL_error(L, "not an engine class");
+  luaL_checkstack(L, n + 8, "too many arguments");
+  lua_pushcfunction(L, tool_object);
+  lua_pushvalue(L, 1);
+  lua_call(L, 1, 1);
+  lua_pushvalue(L, 1);
+  lua_remove(L, 1);
+  /* The arguments at 1..n, the object, the class. */
+  construct_part(L, n + 2, n + 1, n);
+  lua_pushvalue(L, n + 1);
+  return 1;
+}
+
+/* Takes arg 1's engine part over for the engine (6.2): the engine holds
+** the object until it releases the part. Returns the part's id; false for
+** an object without one; nil for a value that isn't an object. */
+static int tool_adopt(lua_State *L)
+{
+  volya_object *o = to_object(L, 1);
+  if (o == NULL) {
+    lua_pushnil(L);
+    return 1;
+  }
+  if (!o->has_part) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  push_registry(L, &adopted_key);
+  lua_pushnumber(L, o->part);
+  lua_pushvalue(L, 1);
+  lua_rawset(L, -3);
+  lua_pushnumber(L, o->part);
+  return 1;
+}
+
+/* Releases the engine part whose id is arg 1 if the engine holds it: the
+** part is released and its object no longer held. Returns whether it was. */
+static int tool_release(lua_State *L)
+{
+  volya_object *o;
+  lua_settop(L, 1);
+  push_registry(L, &adopted_key);
+  lua_pushvalue(L, 1);
+  lua_rawget(L, 2);
+  o = to_object(L, 3);
+  if (o != NULL) release_part(L, o);
+  lua_settop(L, 2);
+  lua_pushvalue(L, 1);
+  lua_pushnil(L);
+  lua_rawset(L, 2);
+  lua_pushboolean(L, o != NULL);
+  return 1;
+}
+
+/* The name of class arg 1's engine type, else its own name. */
+static int tool_type_name(lua_State *L)
+{
+  if (!is_class(L, 1)) return luaL_error(L, "not a class");
+  lua_settop(L, 1);
+  lua_getfenv(L, 1);
+  lua_getfield(L, 2, "engine");
+  if (is_class(L, 3)) {
+    lua_getfenv(L, 3);
+    lua_getfield(L, -1, "name");
+  } else {
+    lua_getfield(L, 2, "name");
+  }
+  return 1;
+}
+
+static int open_factory_tools(lua_State *L)
+{
+  static const luaL_Reg tools[] = {
+    {"object", tool_object},       {"is_engine", tool_is_engine},
+    {"construct", tool_construct}, {"adopt", tool_adopt},
+    {"release", tool_release},     {"type_name", tool_type_name},
+    {NULL, NULL},
+  };
+  const char *name = (const char *)lua_touserdata(L, 1);
+  const luaL_Reg *t;
+  lua_pushlightuserdata(L, &adopted_key);
+  lua_newtable(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+  lua_newtable(L);
+  for (t = tools; t->name != NULL; t++) {
+    lua_pushcfunction(L, t->func);
+    lua_setfield(L, -2, t->name);
+  }
+  lua_setfield(L, LUA_GLOBALSINDEX, name);
+  return 0;
+}
+
+/* Sets the global `name` to the object factory's tools (the class system
+** open). */
+int volya_open_factory_tools_protected(lua_State *L, const char *name)
+{
+  return lua_cpcall(L, open_factory_tools, (void *)name);
+}
