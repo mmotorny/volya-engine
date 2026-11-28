@@ -177,6 +177,7 @@ fn started(trees: Rc<GameTrees>, aliases: &PathAliases) -> (GameScripts, Config)
         times: Rc::default(),
         sounds: Rc::default(),
         simulation: Rc::default(),
+        level: Rc::default(),
         files,
         window_files: Rc::default(),
     })

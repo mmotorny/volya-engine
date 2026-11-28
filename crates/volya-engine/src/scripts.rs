@@ -37,8 +37,9 @@ use crate::script::game_object::callbacks::ObjectEvent;
 use crate::script::game_object::object_binder::update_delta;
 use crate::script::game_object::physics::{LevelQueries, PhysicsEvent, PhysicsShell};
 use crate::script::game_object::{
-    EngineState, Event, GameObjects, ObjectClass, Physics, Restrictor, SpawnData, Visual,
+    EngineState, Event, GameObjects, Kinds, ObjectClass, Physics, Restrictor, SpawnData, Visual,
 };
+use crate::script::level::{Level, LevelEvent, LevelVertices};
 use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
 use crate::script::services::EngineServices;
@@ -108,6 +109,7 @@ pub fn start(
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::new(RefCell::new(window_files(data, resolution))),
+        level: Rc::default(),
     })
     .map_err(fatal)
 }
@@ -237,6 +239,11 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     // Script API K: `alife()` is nil until the next level's simulation.
     scripts.simulation().borrow_mut().end();
     scripts.scripts().release_server_objects()?;
+    // Script API N 6.5: the spawn manager's table emptied and the level
+    // gone, with the game's patrol paths.
+    scripts.scripts().end_level()?;
+    scripts.level().borrow_mut().patrol_paths = None;
+    scripts.level().borrow_mut().take_events();
     scripts.scripts().destroy_default_trade()
 }
 
@@ -268,6 +275,11 @@ pub struct ClientObject<'a> {
 pub struct ClientSpawning<'a> {
     pub objects: Vec<ClientObject<'a>>,
     pub vertex_lights: Vec<u8>,
+    /// The level vertices' positions, links and cover values (script API
+    /// N 3).
+    pub vertices: Option<LevelVertices>,
+    /// The level's directory name (script API N 2.2).
+    pub level_name: Option<String>,
     pub game_time: u64,
     pub time_factor: f32,
     pub physics: Rc<RefCell<LevelPhysics>>,
@@ -294,6 +306,7 @@ pub fn client_spawning(
     // binders' calls among the first to reach it.
     loading.share_simulation(Rc::clone(scripts.simulation()));
     let spawning = loading.client_objects().map_err(io_fatal)?;
+    let paths = Rc::new(spawning.paths);
     {
         let mut o = scripts.objects().borrow_mut();
         o.level_vertex_lights = spawning.vertex_lights;
@@ -310,11 +323,23 @@ pub fn client_spawning(
         let mut p = physics.borrow_mut();
         p.world = Some(Box::new(ScriptWorld(spawning.physics)));
         p.level = Some(Box::new(ScriptLevel {
-            collision: spawning.collision,
-            paths: spawning.paths,
+            collision: Arc::clone(&spawning.collision),
+            paths: Rc::clone(&paths),
         }));
         p.current_holder = None;
     }
+    // Script API N: the level created, with its name, its `level.cform`
+    // header's box and its level vertices, and the game's patrol paths
+    // (our placement: the specs have them from the level's creation and
+    // the simulation's spawn data, before any object's binder reads them).
+    scripts.level().borrow_mut().patrol_paths = Some(paths);
+    let name = spawning.level_name.map(|n| n.into_bytes());
+    let bounding_volume = (spawning.collision.bbox_min, spawning.collision.bbox_max);
+    scripts.scripts().start_level(Level {
+        name,
+        bounding_volume,
+        vertices: spawning.vertices,
+    })?;
     scripts.story().borrow_mut().info_portions = spawning.info_portions;
     scripts.scripts().exec("=fake_player", FAKE_PLAYER)?;
     scripts
@@ -376,8 +401,21 @@ pub fn level_frame(
         queued.copied().filter(|&id| o.get(id).is_some()).collect()
     };
     if !queue.is_empty() {
+        // Script API N 6.5: the creatures among them (not the player)
+        // drop the spawn manager's entries they requested.
+        let creatures: Vec<u16> = {
+            let o = scripts.objects().borrow();
+            let creature = |id: &&u16| {
+                o.get(**id)
+                    .is_some_and(|o| o.kinds.has(Kinds::LIVING) && !o.kinds.has(Kinds::PLAYER))
+            };
+            queue.iter().filter(creature).copied().collect()
+        };
         let released = scripts.scripts().release_destroyed(&queue);
         released.map_err(|f| override_fatal(scripts, f))?;
+        for id in creatures {
+            scripts.scripts().spawn_requester_gone(id)?;
+        }
         let physics = scripts.scripts().physics_state()?;
         for id in &queue {
             physics.borrow_mut().shells.remove(id);
@@ -412,6 +450,7 @@ pub fn level_frame(
     for factor in scripts.times().borrow_mut().take_time_factors() {
         level.set_time_factor(factor);
     }
+    apply_level_events(scripts);
     Ok(())
 }
 
@@ -427,6 +466,17 @@ fn apply_simulation_events(scripts: &GameScripts, level: &mut LevelScreen) {
         match event {
             SimulationEvent::Destroy { id, .. } => level.release_object(id),
             SimulationEvent::SpawnedOnline { .. } => {}
+        }
+    }
+}
+
+/// Applies what script API N's functions asked of the engine: a phantom's
+/// spawn request (2.6) has no path to the game server's spawning yet
+/// (TODO(#1117)), so it is dropped.
+fn apply_level_events(scripts: &mut GameScripts) {
+    for event in scripts.level().borrow_mut().take_events() {
+        match event {
+            LevelEvent::SpawnPhantom { .. } => {}
         }
     }
 }
@@ -689,9 +739,10 @@ pub fn spawn_client_object(
         let physics = scripts.scripts().physics_state()?;
         (physics.borrow_mut().shells).insert(object.id, PhysicsShell::clone(&shell));
     }
+    let id = object.id;
     let created = scripts.scripts().create_client_object(data.class_id)?;
     let spawned = match created.object {
-        CreatedObject::Script(client) => scripts.scripts().spawn(client, data).map(|_| ()),
+        CreatedObject::Script(client) => scripts.scripts().spawn(client, data),
         CreatedObject::Engine { entry_id, sides } => {
             let game_type = scripts.services().borrow().game_type as u32;
             let class = match sides {
@@ -704,10 +755,18 @@ pub fn spawn_client_object(
             let binding = (class == ObjectClass::Player).then_some(FAKE_PLAYER_BINDING);
             (scripts.scripts())
                 .spawn_engine_object_with_binding(class, data, binding)
-                .map(|_| ())
+                .map(|_| true)
         }
     };
-    spawned.map_err(|f| override_fatal(scripts, f))
+    let spawned = spawned.map_err(|f| override_fatal(scripts, f))?;
+    // Script API N 6.4, 6.5: the spawn manager's entries awaiting it are
+    // called once its spawn routine succeeds; a failed spawn drops those
+    // it requested.
+    if spawned {
+        scripts.scripts().client_spawned(id)
+    } else {
+        scripts.scripts().spawn_requester_gone(id)
+    }
 }
 
 /// What the engine gives `object` as it spawns in the scripts (spec M 3):
@@ -822,7 +881,7 @@ pub fn apply_physics_events(
 /// (spec N).
 struct ScriptLevel {
     collision: Arc<CollisionWorld>,
-    paths: PatrolPaths,
+    paths: Rc<PatrolPaths>,
 }
 
 /// The explosive's ray down (2.1, believed below it): its length is
@@ -1086,7 +1145,7 @@ mod tests {
         }]);
         let level = ScriptLevel {
             collision: Arc::new(collision),
-            paths,
+            paths: Rc::new(paths),
         };
         let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-4);
         assert!(near(level.distance_below([-5.0, 3.0, 5.0], 10.0), 3.0));

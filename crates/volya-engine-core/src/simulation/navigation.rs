@@ -6,16 +6,18 @@
 //! the checks of 1.8, and the level vertex at a position (5.2). Both are
 //! held in the file cache, standing for the files the original maps
 //! (docs/architecture/memory.md, File-backed data), each a leaner
-//! structure under its file's path: the positions under `level.ai`'s, the
-//! cross table's distinct cells and their indices under `level.gct`'s.
+//! structure under its file's path: the positions, links and cover values
+//! under `level.ai`'s, the cross table's distinct cells and their indices
+//! under `level.gct`'s.
 
 use std::io::{self, BufReader};
+use std::sync::Arc;
 
 use crate::file_cache;
 use crate::vfs::Vfs;
 use volya_engine_formats::cross_table::CrossTable;
 use volya_engine_formats::game_graph::GameGraph;
-use volya_engine_formats::level_ai::LevelAi;
+use volya_engine_formats::level_ai::{LevelAi, LevelAiLinks};
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -25,7 +27,11 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[derive(Debug)]
 pub struct Navigation {
     pub level_id: u8,
-    pub ai: LevelAi,
+    /// Shared with the scripts (script-api-level.md 3).
+    pub ai: Arc<LevelAi>,
+    /// Each vertex's links and cover values, as [`Navigation::read`] reads
+    /// them, for the scripts (script-api-level.md 3.1); `None` otherwise.
+    pub links: Option<Arc<LevelAiLinks>>,
     pub cross: CrossTable,
     /// Byte 11 of each `level.ai` vertex, as [`Navigation::read`] reads
     /// it, for the scripts (script-api-game-object-basics.md 4); empty
@@ -76,7 +82,8 @@ impl Navigation {
         });
         Ok(Self {
             level_id,
-            ai,
+            ai: Arc::new(ai),
+            links: None,
             cross,
             vertex_lights: Vec::new(),
             order,
@@ -93,9 +100,12 @@ impl Navigation {
             |name: &str, e: io::Error| io::Error::new(e.kind(), format!("{dir}\\{name}: {e}"));
         let path = format!("{dir}\\level.ai");
         let f = tree.open(&path).map_err(|e| file("level.ai", e))?;
-        let (ai, vertex_lights) =
-            LevelAi::read_in_with_lights(BufReader::new(f), |len| file_cache::hold(&path, len))
-                .map_err(|e| file("level.ai", e))?;
+        let (ai, vertex_lights, links) = LevelAi::read_in_with_lights_and_links(
+            BufReader::new(f),
+            |len| file_cache::hold(&path, len),
+            |len| file_cache::hold(&path, len),
+        )
+        .map_err(|e| file("level.ai", e))?;
         let path = format!("{dir}\\level.gct");
         let cross = match tree.open(&path) {
             Ok(f) => CrossTable::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
@@ -107,6 +117,7 @@ impl Navigation {
         };
         let mut navigation = Self::new(graph, level_id, ai, cross)?;
         navigation.vertex_lights = vertex_lights;
+        navigation.links = Some(Arc::new(links));
         Ok(navigation)
     }
 

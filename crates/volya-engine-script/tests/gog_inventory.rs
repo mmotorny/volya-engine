@@ -273,6 +273,7 @@ fn started() -> Option<(GameScripts, Rc<RefCell<GameObjects>>)> {
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

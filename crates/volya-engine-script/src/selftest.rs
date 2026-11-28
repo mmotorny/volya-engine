@@ -6,8 +6,8 @@
 //! and files, game objects, object binders, object event callbacks, the
 //! story state, the engine's entry points, the dialog files' functions, the
 //! dialogs and trade, time, the sound, the simulation registry, the
-//! scripted actions, the window description files and movement, sight
-//! and memory,
+//! scripted actions, the window description files, movement, sight
+//! and memory, and the level,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -22,6 +22,7 @@ pub mod entry_points;
 pub mod files;
 pub mod game_object;
 pub mod inventory;
+pub mod level;
 mod loading;
 pub mod movement_sight_and_memory;
 pub mod object_binder;
@@ -115,6 +116,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = window_files::check() {
+        fail(e);
+    }
+    if let Err(e) = level::check() {
         fail(e);
     }
     if failures.is_empty() {

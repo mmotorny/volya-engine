@@ -91,6 +91,7 @@ use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
 use crate::script::dialogs::Event as DialogEvent;
 use crate::script::game_object::callbacks::ObjectEvent;
+use crate::script::level::LevelVertices;
 use crate::script::simulation::AlifeSimulator;
 use crate::script::story::SharedInfoPortions;
 use crate::scripts::{ClientObject, ClientSpawning};
@@ -1834,7 +1835,9 @@ impl NewGameLoad {
     /// (offline-simulation.md 9.1) as the scripts' spawning takes them, in
     /// the level list's order, without those inside a container (as the
     /// level's visuals); and byte 11 of each level vertex, taken from the
-    /// navigation data; at the game clock's time.
+    /// navigation data, with its positions, links and cover values for the
+    /// scripts (script-api-level.md 3); the level's name; at the game
+    /// clock's time.
     pub fn client_objects(&mut self) -> io::Result<ClientSpawning<'_>> {
         let clock = earlier(self.clock.as_ref(), "game clock")?;
         let (game_time, time_factor) = (clock.time(), clock.time_factor());
@@ -1844,6 +1847,13 @@ impl NewGameLoad {
             .map(|n| std::mem::take(&mut n.vertex_lights))
             .unwrap_or_default();
         let sim = &*sim;
+        let vertices = (sim.navigation()).and_then(|n| {
+            let links = n.links.as_ref()?;
+            Some(LevelVertices {
+                ai: Arc::clone(&n.ai),
+                links: Arc::clone(links),
+            })
+        });
         let spawned = earlier(self.spawned.as_ref(), "objects")?;
         let shared = earlier(self.physics.as_ref(), "physics world")?;
         let physics = shared.borrow();
@@ -1867,6 +1877,8 @@ impl NewGameLoad {
         Ok(ClientSpawning {
             objects,
             vertex_lights: lights,
+            vertices,
+            level_name: self.name.clone(),
             game_time,
             time_factor,
             physics: Rc::clone(shared),

@@ -175,6 +175,7 @@ fn started() -> Option<(GameScripts, Rc<RefCell<EngineServices>>)> {
         sounds: Rc::new(RefCell::new(ScriptSounds::new())),
         simulation: Rc::default(),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

@@ -196,6 +196,7 @@ fn started(
         times: Rc::default(),
         sounds: Rc::default(),
         simulation: Rc::default(),
+        level: Rc::default(),
         files: Rc::clone(&fs),
         window_files: Rc::default(),
     })

@@ -81,6 +81,7 @@ fn start() -> Option<(GameScripts, Rc<RefCell<AlifeSimulator>>)> {
         sounds: Rc::default(),
         simulation: Rc::clone(&alife),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     {

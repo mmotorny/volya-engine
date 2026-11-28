@@ -251,6 +251,8 @@ pub struct Scripts {
     pub(crate) scripted_actions_state: Option<crate::scripted_actions::Registered>,
     /// The inventory, once registered ([`crate::inventory`]).
     pub(crate) inventory_state: Option<crate::inventory::Registered>,
+    /// The level, once registered ([`crate::level`]).
+    pub(crate) level_state: Option<crate::level::Registered>,
 }
 
 impl Scripts {
@@ -327,6 +329,7 @@ impl Scripts {
             simulation_objects_state: None,
             scripted_actions_state: None,
             inventory_state: None,
+            level_state: None,
         })
     }
 

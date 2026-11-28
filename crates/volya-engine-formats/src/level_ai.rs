@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A level's `levels\<level>\level.ai`, only the header and each level
-//! vertex's position (docs/behavior/offline-simulation.md section 3). Not
+//! vertex's position (docs/behavior/offline-simulation.md section 3), and
+//! on request its links and cover values
+//! (docs/behavior/script-api-level.md 3.1, [`LevelAiLinks`]). Not
 //! chunked; read as a stream, keeping 5 of each vertex's 21 bytes (its
 //! packed column and row and its height, as stored) in one block of bytes
-//! the reader's caller provides ([`LevelAi::read_in`]): the engine's file
-//! cache counts it against the file (docs/architecture/memory.md,
-//! File-backed data).
+//! the reader's caller provides ([`LevelAi::read_in`]), and the links and
+//! cover values (14 more) in another: the engine's file cache counts them
+//! against the file (docs/architecture/memory.md, File-backed data).
 
 use std::fmt;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -30,6 +32,11 @@ const VERTEX_LIGHT: usize = 11;
 pub const KEPT: usize = 5;
 /// The largest packed column and row (section 5.2).
 pub const PACKED_LIMIT: u32 = 0x7F_FFFF;
+/// Bytes kept of a vertex for [`LevelAiLinks`]: its four links (bytes
+/// 0–11) and its cover values (12–13), as stored.
+pub const LINKS_KEPT: usize = 14;
+/// A link's value meaning none (script-api-level.md 3.1).
+pub const NO_LINK: u32 = 0x7F_FFFF;
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -111,7 +118,7 @@ impl LevelAi {
         file: impl Read + Seek,
         alloc: impl FnOnce(usize) -> io::Result<B>,
     ) -> io::Result<Self> {
-        Self::read_with(file, alloc, None)
+        Self::read_with(file, alloc, None, NO_LINKS).map(|(ai, _)| ai)
     }
 
     /// [`Self::read_in`], also giving byte 11 of each vertex in order (the
@@ -122,15 +129,35 @@ impl LevelAi {
         alloc: impl FnOnce(usize) -> io::Result<B>,
     ) -> io::Result<(Self, Vec<u8>)> {
         let mut lights = Vec::new();
-        let ai = Self::read_with(file, alloc, Some(&mut lights))?;
+        let (ai, _) = Self::read_with(file, alloc, Some(&mut lights), NO_LINKS)?;
         Ok((ai, lights))
     }
 
-    fn read_with<B: DerefMut<Target = [u8]> + Send + Sync + 'static>(
+    /// [`Self::read_in_with_lights`], also keeping each vertex's links and
+    /// cover values in the zeroed bytes `alloc_links` gives for their size
+    /// ([`LevelAiLinks`]).
+    pub fn read_in_with_lights_and_links<
+        B: DerefMut<Target = [u8]> + Send + Sync + 'static,
+        L: DerefMut<Target = [u8]> + Send + Sync + 'static,
+    >(
+        file: impl Read + Seek,
+        alloc: impl FnOnce(usize) -> io::Result<B>,
+        alloc_links: impl FnOnce(usize) -> io::Result<L>,
+    ) -> io::Result<(Self, Vec<u8>, LevelAiLinks)> {
+        let mut lights = Vec::new();
+        let (ai, links) = Self::read_with(file, alloc, Some(&mut lights), Some(alloc_links))?;
+        Ok((ai, lights, links.expect("asked for")))
+    }
+
+    fn read_with<
+        B: DerefMut<Target = [u8]> + Send + Sync + 'static,
+        L: DerefMut<Target = [u8]> + Send + Sync + 'static,
+    >(
         mut file: impl Read + Seek,
         alloc: impl FnOnce(usize) -> io::Result<B>,
         mut lights: Option<&mut Vec<u8>>,
-    ) -> io::Result<Self> {
+        alloc_links: Option<impl FnOnce(usize) -> io::Result<L>>,
+    ) -> io::Result<(Self, Option<LevelAiLinks>)> {
         let length = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
         let mut head = [0u8; HEADER_SIZE];
@@ -165,6 +192,18 @@ impl LevelAi {
         if let Some(lights) = lights.as_deref_mut() {
             lights.reserve_exact(n);
         }
+        let mut links = match alloc_links {
+            Some(alloc) => {
+                let links = alloc(n * LINKS_KEPT)?;
+                if links.len() != n * LINKS_KEPT {
+                    return Err(invalid("level.ai: no room for the links"));
+                }
+                Some(links)
+            }
+            None => None,
+        };
+        let mut links_out =
+            (links.as_deref_mut()).map(|l| l.as_chunks_mut::<LINKS_KEPT>().0.iter_mut());
         // A batch of whole vertices at a time.
         let mut buffer = vec![0u8; VERTEX_SIZE * 4096];
         let mut out = kept.as_chunks_mut::<KEPT>().0.iter_mut();
@@ -175,6 +214,11 @@ impl LevelAi {
             file.read_exact(bytes)?;
             for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut out) {
                 to.copy_from_slice(&v[VERTEX_PACKED..]);
+            }
+            if let Some(out) = links_out.as_mut() {
+                for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut *out) {
+                    to.copy_from_slice(&v[..LINKS_KEPT]);
+                }
             }
             if let Some(lights) = lights.as_deref_mut() {
                 lights.extend(
@@ -187,10 +231,12 @@ impl LevelAi {
             }
             left -= batch;
         }
-        Ok(Self {
+        let links = links.map(|l| LevelAiLinks { bytes: Box::new(l) });
+        let ai = Self {
             header,
             vertices: Box::new(kept),
-        })
+        };
+        Ok((ai, links))
     }
 
     pub fn len(&self) -> usize {
@@ -272,6 +318,79 @@ impl LevelAi {
     }
 }
 
+/// No links asked for ([`LevelAi::read_with`]).
+const NO_LINKS: Option<HeapLinks> = None;
+
+/// Links kept on the heap.
+type HeapLinks = fn(usize) -> io::Result<Vec<u8>>;
+
+/// Each level vertex's links and cover values (script-api-level.md 3.1):
+/// bytes 0–13 of its record, as stored.
+pub struct LevelAiLinks {
+    bytes: Box<dyn Bytes>,
+}
+
+impl fmt::Debug for LevelAiLinks {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LevelAiLinks")
+            .field("vertices", &self.len())
+            .finish()
+    }
+}
+
+impl LevelAiLinks {
+    /// The vertices' (links, cover values), kept on the heap: links 0 to
+    /// 3 (−x, +z, +x, −z; [`NO_LINK`] for none), cover values *c*0 to
+    /// *c*3 (each 0 … 15).
+    pub fn new(vertices: &[([u32; 4], [u8; 4])]) -> Self {
+        let mut bytes = Vec::with_capacity(vertices.len() * LINKS_KEPT);
+        for (links, cover) in vertices {
+            let packed = (links.iter().enumerate()).fold(0u128, |p, (i, &l)| {
+                p | (u128::from(l & NO_LINK) << (23 * i))
+            });
+            bytes.extend(&packed.to_le_bytes()[..12]);
+            let c = (cover.iter().enumerate())
+                .fold(0u16, |c, (i, &v)| c | (u16::from(v & 15) << (4 * i)));
+            bytes.extend(c.to_le_bytes());
+        }
+        Self {
+            bytes: Box::new(bytes),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len() / LINKS_KEPT
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    fn vertex(&self, k: u32) -> Option<&[u8; LINKS_KEPT]> {
+        self.bytes.as_chunks::<LINKS_KEPT>().0.get(k as usize)
+    }
+
+    /// Level vertex `k`'s four links, 23 bits each at bits 0, 23, 46 and
+    /// 69 of bytes 0–11: −x, +z, +x, −z; [`NO_LINK`] for none.
+    pub fn links(&self, k: u32) -> Option<[u32; 4]> {
+        let v = self.vertex(k)?;
+        let mut b = [0u8; 16];
+        b[..12].copy_from_slice(&v[..12]);
+        let packed = u128::from_le_bytes(b);
+        Some(std::array::from_fn(|i| {
+            ((packed >> (23 * i)) as u32) & NO_LINK
+        }))
+    }
+
+    /// Level vertex `k`'s cover values *c*0 to *c*3: bits 0–3, 4–7, 8–11
+    /// and 12–15 of the little-endian 16-bit value at bytes 12–13.
+    pub fn cover(&self, k: u32) -> Option<[u8; 4]> {
+        let v = self.vertex(k)?;
+        let c = u16::from_le_bytes([v[12], v[13]]);
+        Some(std::array::from_fn(|i| ((c >> (4 * i)) & 15) as u8))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -334,5 +453,31 @@ pub(crate) mod tests {
                 .unwrap();
         assert_eq!(lights, [0xF3, 0x70]);
         assert_eq!(ai, LevelAi::read(io::Cursor::new(&file[..])).unwrap());
+    }
+
+    #[test]
+    fn gives_each_vertexs_links_and_cover() {
+        let mut file = level_ai_file(7.0, 3.5, &[(0, 0, 0), (2, 3, 65535)]);
+        // Vertex 0 of `l01_escape` (script-api-level.md 8.1), bytes 0-13.
+        let record = [
+            0xff, 0xff, 0xff, 0x00, 0x00, 0xc0, 0x05, 0x00, 0xe0, 0xff, 0xff, 0x0f, 0x93, 0x7d,
+        ];
+        file[HEADER_SIZE + VERTEX_SIZE..][..LINKS_KEPT].copy_from_slice(&record);
+        let (ai, lights, links) = LevelAi::read_in_with_lights_and_links(
+            io::Cursor::new(&file[..]),
+            |len| Ok(vec![0; len]),
+            |len| Ok(vec![0; len]),
+        )
+        .unwrap();
+        assert_eq!(ai, LevelAi::read(io::Cursor::new(&file[..])).unwrap());
+        assert_eq!(lights, [0, 0x0f]);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links.links(1), Some([NO_LINK, 1, 23, NO_LINK]));
+        assert_eq!(links.cover(1), Some([3, 9, 13, 7]));
+        assert_eq!(links.links(0), Some([0; 4]));
+        assert_eq!(links.links(2), None);
+        let made =
+            LevelAiLinks::new(&[([0; 4], [0; 4]), ([NO_LINK, 1, 23, NO_LINK], [3, 9, 13, 7])]);
+        assert_eq!(made.bytes[LINKS_KEPT..], record[..]);
     }
 }

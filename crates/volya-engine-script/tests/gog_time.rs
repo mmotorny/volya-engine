@@ -296,6 +296,7 @@ fn the_names_on_a_started_game_state() {
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     times

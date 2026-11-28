@@ -292,6 +292,7 @@ fn the_traders_scheme_calls() {
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

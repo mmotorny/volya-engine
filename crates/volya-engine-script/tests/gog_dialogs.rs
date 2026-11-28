@@ -129,6 +129,7 @@ fn game() -> Option<Game> {
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::default(),
+        level: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

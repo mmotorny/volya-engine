@@ -25,6 +25,7 @@ use crate::classes::EngineClass;
 use crate::dialogs::DialogsAndTrade;
 use crate::files::FileSystem;
 use crate::game_object::GameObjects;
+use crate::level::LevelState;
 use crate::loader::{Common, Prefix, Scripts, Trees};
 use crate::object_factory::{CreatedObject, class_id, id_text, keeps_lua};
 use crate::services::EngineServices;
@@ -134,6 +135,7 @@ pub struct Startup {
     pub simulation: Rc<RefCell<AlifeSimulator>>,
     /// The window description files' state (script API G3).
     pub window_files: Rc<RefCell<WindowFiles>>,
+    pub level: Rc<RefCell<LevelState>>,
 }
 
 impl Startup {
@@ -166,8 +168,8 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y,
-    /// K, J, V, G3, S; A, C and E [`Scripts::new`] registers).
+    /// The engine interface of the specs implemented (B, F, H, M, N, P, R,
+    /// T, Y, K, J, V, G3, S; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -191,7 +193,8 @@ impl Startup {
             Rc::clone(&self.trees),
             self.aliases.clone(),
         )?;
-        scripts.register_inventory()
+        scripts.register_inventory()?;
+        scripts.register_level(Rc::clone(&self.level))
     }
 }
 
@@ -382,6 +385,11 @@ impl GameScripts {
     /// The window description files' state (script API G3).
     pub fn window_files(&self) -> &Rc<RefCell<WindowFiles>> {
         &self.startup.window_files
+    }
+
+    /// The level and patrol paths script API N's names read.
+    pub fn level(&self) -> &Rc<RefCell<LevelState>> {
+        &self.startup.level
     }
 
     /// The engine's calls into scripts so far, oldest first.

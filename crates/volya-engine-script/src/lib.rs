@@ -30,6 +30,7 @@ mod ffi;
 pub mod files;
 pub mod game_object;
 pub mod inventory;
+pub mod level;
 mod libc;
 pub mod loader;
 pub mod object_factory;

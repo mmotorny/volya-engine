@@ -1593,3 +1593,19 @@ mod inventory {
         section(checks::worked_example);
     }
 }
+
+/// Script API N's checks, one test per section of
+/// docs/behavior/script-api-level.md (all of them run in [`selftest`] too,
+/// on every target).
+mod level {
+    use crate::selftest::level::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

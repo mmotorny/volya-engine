@@ -80,6 +80,7 @@ fn started() -> Option<(GameScripts, Rc<RefCell<EngineServices>>)> {
         sounds: Rc::default(),
         simulation: Rc::default(),
         window_files: Rc::new(RefCell::new(window_files)),
+        level: Rc::default(),
     })
     .unwrap();
     Some((scripts, services))
