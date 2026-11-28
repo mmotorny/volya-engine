@@ -43,6 +43,7 @@ pub type Check = fn() -> Result<(), String>;
 pub const SECTIONS: &[(&str, Check)] = &[
     ("1 registered", registered),
     ("2.1 values at spawn", values_at_spawn),
+    ("2.1 an empty profile", empty_profile),
     ("2.3 lists and tables", lists_and_tables),
     ("3 change_team", change_team),
     ("4.1 relation", relation),
@@ -184,13 +185,14 @@ fn monster_update() -> MonsterLikeUpdate {
     }
 }
 
-/// A Trader-like block of community position `community`.
+/// A Trader-like block of community position `community`, profile
+/// `default`.
 fn trader_like(community: i32, rank: i32, reputation: i32) -> TraderLike {
     TraderLike {
         money: 0,
         specific_character: String::new().into(),
         trader_flags: 0,
-        character_profile: String::new().into(),
+        character_profile: "default".into(),
         community,
         rank,
         reputation,
@@ -237,9 +239,10 @@ fn monster(id: u16, section: &str, team: [u8; 3]) -> ObjectRecord {
 }
 
 /// The simulation's records: the player (actor, rank 100, reputation 10),
-/// the stalker (stalker, 650, 60; team 1, 2, 3), the trader (trader, 330,
-/// 23), the dog (team 7, 8, 9), the flesh and the cat.
-fn records() -> Vec<ObjectRecord> {
+/// the stalker (stalker, 650, 60; team 1, 2, 3; profile
+/// `stalker_profile`, name `Wolf`), the trader (trader, 330, 23), the dog
+/// (team 7, 8, 9), the flesh and the cat.
+fn records(stalker_profile: &str) -> Vec<ObjectRecord> {
     let player = Object::Player(Box::new(Player {
         creature: creature([0; 3]),
         trader: trader_like(0, 100, 10),
@@ -262,7 +265,11 @@ fn records() -> Vec<ObjectRecord> {
         },
     }));
     let stalker = Object::Stalker(Box::new(Stalker {
-        trader: trader_like(1, 650, 60),
+        trader: TraderLike {
+            character_profile: stalker_profile.into(),
+            character_name: "Wolf".into(),
+            ..trader_like(1, 650, 60)
+        },
         monster: monster_like([1, 2, 3]),
         equipment_preferences: Vec::new(),
         main_weapon_preferences: Vec::new(),
@@ -341,6 +348,11 @@ fn message(e: Error) -> String {
 /// global `obj(id)` giving handles, the simulation running with
 /// [`records`] and the objects online.
 fn state() -> Result<State, String> {
+    state_with("esc_stalker")
+}
+
+/// [`state`] with the stalker's profile `stalker_profile`.
+fn state_with(stalker_profile: &str) -> Result<State, String> {
     let tree = Rc::new(Tree(
         [("gamedata/scripts/_g.script".to_owned(), Vec::new())]
             .into_iter()
@@ -392,7 +404,8 @@ fn state() -> Result<State, String> {
             stay_after_death: 0,
         },
     );
-    sim.load(records(), &system).map_err(|e| e.to_string())?;
+    sim.load(records(stalker_profile), &system)
+        .map_err(|e| e.to_string())?;
     alife.borrow_mut().simulation = Some(sim);
     let spawned = [
         (ObjectClass::Player, data(PLAYER, "actor", "O_ACTOR")),
@@ -486,8 +499,23 @@ pub fn values_at_spawn() -> Result<(), String> {
          eq(tsg(item), '-1 -1 -1', 'not an entity')\n\
          raises(function() return lone:team() end, '#1198', 'no simulation object')\n\
          eq(dog:character_rank(), 401, \"the section's rank\")\n\
-         eq(flesh:character_rank(), 0, 'no rank key')",
+         eq(flesh:character_rank(), 0, 'no rank key')\n\
+         eq(stalker:profile_name(), 'esc_stalker', \"the stalker's profile\")\n\
+         eq(stalker:character_name(), 'Wolf', \"the stalker's name\")\n\
+         eq(trader:profile_name(), 'default', \"the trader's profile\")\n\
+         eq(dog:profile_name(), nil, 'no Trader-like block')\n\
+         eq(lone:profile_name(), nil, 'no simulation object')",
     )
+}
+
+/// docs/behavior/character-identity.md 5: a stalker whose simulation
+/// object has an empty character profile can't come online.
+pub fn empty_profile() -> Result<(), String> {
+    match state_with("") {
+        Err(e) if e.contains("an empty character profile") => Ok(()),
+        Err(e) => Err(format!("another error: {e}")),
+        Ok(_) => Err("came online".into()),
+    }
 }
 
 /// 2.3: a name without a number gets 0; a value's category; the shifted

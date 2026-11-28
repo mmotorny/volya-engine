@@ -8,7 +8,8 @@
 //! section's binding, `xr_motivator`'s, whose `reinit` and `net_spawn`
 //! build the shipped scripts' planners on its motivation manager (10,
 //! 12.1): `state_mgr`'s evaluators and actions and its own body-state
-//! planner, the anomaly evaluator replaced by a constant, and the camp
+//! planner, the anomaly evaluator replaced by a constant, the script
+//! themes' sound collections on the stalker's profile, and the camp
 //! scheme's parts (its `add_to_binder` in place of the logic set-up the
 //! scripts reach later, on other specs' names). Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
@@ -129,16 +130,22 @@ fn started() -> Option<(GameScripts, u16, Result<(), String>)> {
         a.simulation = Some(sim);
         a.graph_file = Some(graph_file.into());
     }
+    // The engine's reinitialisation sets the stalker's sound prefix to its
+    // specific character's `snd_config` (creature-sounds.md 1.2 step 2):
+    // the empty text without one, as this New Game leaves it.
+    {
+        let mut sounds = scripts.sounds().borrow_mut();
+        let player = sounds.creatures.players.entry(stalker).or_default();
+        player.prefix = Some(Vec::new());
+    }
     let s = scripts.scripts();
-    // What the motivator's `net_spawn` does after its planner part stops on
-    // other specs' names: its sound loading on `profile_name()`
-    // (TODO(#1225)), so none is loaded; the logic set-up (TODO(#1077)), in
-    // whose place what it does for the camp scheme's first start (12.1),
-    // `xr_kamp.add_to_binder`.
+    // What the motivator's `net_spawn` does after its planner part and its
+    // sound loading stops on other specs' names: the logic set-up
+    // (TODO(#1077)), in whose place what it does for the camp scheme's
+    // first start (12.1), `xr_kamp.add_to_binder`.
     s.exec(
         "=fake_logic",
-        b"xr_sound.load_sound = function() end\n\
-          xr_gulag.setup_gulag_and_logic_on_spawn = function(obj)\n\
+        b"xr_gulag.setup_gulag_and_logic_on_spawn = function(obj)\n\
           xr_kamp.add_to_binder(obj, nil, 'kamp', 'kamp1@esc_lager', {})\n\
           end",
     )
@@ -187,8 +194,15 @@ fn a_campfire_stalker_builds_its_planners() {
     let Some((mut scripts, stalker, spawned)) = started() else {
         return;
     };
+    let collections = (scripts.sounds().borrow().creatures.players)
+        .get(&stalker)
+        .map_or(0, |p| p.collections.len());
     let s = scripts.scripts();
     assert_eq!(spawned, Ok(()), "spawning; {:?}", s.take_failures());
+    // `net_spawn`'s sound loading, on its profile (`profile_name()`):
+    // the script themes' collections (creature-sounds.md 1.2 step 3).
+    eprintln!("its sound collections: {collections}");
+    assert!(collections > 0, "its sound collections");
     let manager = s
         .motivation_manager(stalker)
         .expect("its motivation manager");

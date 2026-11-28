@@ -30,7 +30,7 @@ use volya_engine_formats::object::{Object, ObjectRecord, TraderLike};
 use crate::classes::ObjectMaker;
 use crate::files::FileSystem;
 use crate::game_object::members::Handle;
-use crate::game_object::{GameObject, GameObjects, Kinds, ObjectClass};
+use crate::game_object::{GameObject, GameObjects, Kinds, ObjectClass, game_bytes};
 use crate::loader::Scripts;
 use crate::services::{EngineServices, Fatal, report_fatal};
 use crate::simulation::AlifeSimulator;
@@ -1048,8 +1048,9 @@ fn actor_stats(c: &mut Call, name: &str, args: &[Value]) -> Results {
 /// from its simulation object's Creature block (0 without one), a
 /// monster's team the number of its species when not 255; a living
 /// object's monster community; an inventory owner's community, rank and
-/// reputation from the Trader-like block; a monster's rank from its
-/// section; a stalker's relation flags 0.
+/// reputation from the Trader-like block, a stalker's or trader's
+/// profile and name too; a monster's rank from its section; a stalker's
+/// relation flags 0.
 fn come_online(ctx: &Context, id: u16) -> Result<(), String> {
     let system = ctx.system();
     let mut objects = (ctx.objects.try_borrow_mut()).map_err(|_| "the game objects are in use")?;
@@ -1092,6 +1093,20 @@ fn come_online(ctx: &Context, id: u16) -> Result<(), String> {
     }
     if kinds.has(Kinds::INVENTORY_OWNER) && !kinds.has(Kinds::MONSTER) {
         r.character = record.and_then(trader_like).map(character_from);
+    }
+    // A stalker's or trader's profile and name (character-identity.md 5),
+    // an empty profile an assertion failure.
+    let identity = record.and_then(|record| match &record.object {
+        Object::Stalker(s) => Some(&s.trader),
+        Object::Trader(t) => Some(&t.trader),
+        _ => None,
+    });
+    if let (Some(t), Some(owner)) = (identity, o.owner.as_mut()) {
+        if t.character_profile.is_empty() {
+            return Err(ctx.crash("character profile", "an empty character profile"));
+        }
+        owner.profile = Some(game_bytes(t.character_profile.as_str()));
+        owner.character_name = game_bytes(t.character_name.as_str());
     }
     if kinds.has(Kinds::MONSTER) {
         r.monster_rank =
