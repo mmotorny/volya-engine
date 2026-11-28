@@ -13,6 +13,9 @@
 //! the files do not change while the program runs). A dialog's contents
 //! are read once per [`Dialogs`] and then shared ([`Arc`]); reading them
 //! again gives the same value.
+//!
+//! [`conditions`] tests a dialog's and a phrase's conditions and runs a
+//! phrase's effects (DG-2).
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -26,6 +29,8 @@ use volya_engine_formats::xml::Document;
 use crate::config::PathAliases;
 use crate::info_portions::{Declarations, read_gameplay};
 use crate::vfs::Vfs;
+
+pub mod conditions;
 
 /// The dialogs loaded so far, by dialog index, and the documents read for
 /// them, by list item.

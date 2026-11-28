@@ -11,9 +11,9 @@
 //!
 //! Which files are read and the dialog id space (sections 1, 3.1) are the
 //! start step's (`volya_engine_core::info_portions::Declarations`); loading
-//! a dialog by id (3.2) is `volya_engine_core::dialogs`. What the lists
-//! decide and do is DG-2's, how a talk starts DG-3's, how a dialog proceeds
-//! DG-4's.
+//! a dialog by id (3.2) is `volya_engine_core::dialogs`, and what the lists
+//! decide and do (DG-2) `volya_engine_core::dialogs::conditions`. How a
+//! talk starts is DG-3's, how a dialog proceeds DG-4's.
 
 use std::io;
 
@@ -52,9 +52,10 @@ fn first_or_empty<'a>(parent: &'a Element, name: &str) -> &'a str {
 /// The six lists a dialog and a phrase carry (section 6): each the values
 /// of all children of that name in document order; a child without text
 /// gives an absent value (`None`).
-// TODO(#900): what an absent value does when the list is used is
-// unestablished here (section 11), DG-2's; none occurs in the shipped
-// files.
+// TODO(#1071): what an absent value does when the list is used is
+// unestablished (section 11; DG-2 does not settle it); none occurs in the
+// shipped files. `volya_engine_core::dialogs::conditions` takes it as the
+// empty text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConditionsAndEffects {
     /// Script function names.
@@ -130,7 +131,8 @@ pub struct Dialog {
     pub priority: i32,
     /// The value of the first `caption` element.
     pub caption: Option<String>,
-    /// The dialog's own conditions and effects (DG-2).
+    /// The dialog's own conditions and effects: only its conditions are
+    /// used (DG-2 1); its effects are never run.
     pub lists: ConditionsAndEffects,
     pub body: Body,
 }

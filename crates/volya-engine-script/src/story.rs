@@ -775,6 +775,11 @@ impl Scripts {
             })
     }
 
+    /// The story registered, for the engine's own questions.
+    pub(crate) fn registered_story(&self) -> Option<Rc<RefCell<Story>>> {
+        self.story_state.as_ref().map(|r| Rc::clone(&r.ctx.story))
+    }
+
     /// Runs what the engine parts asked of the Lua side.
     fn drain_story(&mut self) -> Result<(), Error> {
         self.guarded(|lua| lua.call_kept(STORY_ENTRY, &["drain".into()]).map(drop))

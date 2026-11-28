@@ -71,7 +71,7 @@ fn declarations() -> Declarations {
     .unwrap()
 }
 
-fn state() -> InfoPortions {
+pub(crate) fn state() -> InfoPortions {
     InfoPortions::new(Arc::new(declarations()), PLAYER)
 }
 
@@ -495,7 +495,7 @@ fn the_dialog_child_offers_its_dialog_in_every_talk() {
     // 6: held portions' dialogs, then the partner's, each tried once,
     // filtered by their conditions and ordered by priority.
     let mut s = state();
-    let mut all = |_: &str| true;
+    let mut all = |_: &mut InfoPortions, _: &str| Ok(true);
     assert_eq!(
         s.dialog_list(&["trader_info", "trader_jobs"], &mut all)
             .unwrap(),
@@ -509,9 +509,9 @@ fn the_dialog_child_offers_its_dialog_in_every_talk() {
         ["trader_info", "actor_break_dialog"]
     );
     let mut tried = Vec::new();
-    let mut none = |id: &str| {
+    let mut none = |_: &mut InfoPortions, id: &str| {
         tried.push(id.to_owned());
-        id != "trader_info"
+        Ok(id != "trader_info")
     };
     assert_eq!(
         s.dialog_list(&["trader_info", "actor_break_dialog"], &mut none)
@@ -529,7 +529,7 @@ fn a_dialog_child_naming_no_dialog_stops_the_game_when_the_list_is_built() {
     // 6 step 3, 8.
     let mut s = state();
     s.give(PLAYER, "bad_dialog", 1).unwrap();
-    let e = s.dialog_list(&[], &mut |_| true).unwrap_err();
+    let e = s.dialog_list(&[], &mut |_, _| Ok(true)).unwrap_err();
     assert_eq!(e.to_string(), "item not found, id no_dialog");
 }
 

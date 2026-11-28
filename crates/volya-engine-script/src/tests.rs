@@ -832,3 +832,19 @@ mod physics {
         section(checks::door_scheme);
     }
 }
+
+/// The dialog files' functions' checks, one test per section of
+/// docs/behavior/script-api-dialogs-and-trade.md 3 (all of them run in
+/// [`selftest`] too, on every target).
+mod dialogs {
+    use crate::selftest::dialogs::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

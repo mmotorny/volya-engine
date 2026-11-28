@@ -23,6 +23,7 @@
 #![allow(unsafe_code)]
 
 pub mod classes;
+pub mod dialogs;
 pub mod entry_points;
 mod ffi;
 pub mod files;

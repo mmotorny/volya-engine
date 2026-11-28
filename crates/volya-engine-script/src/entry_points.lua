@@ -79,7 +79,7 @@ end
 
 -- Section 1: resolves `name` to a function and calls it with the arguments.
 -- ("missing") when it doesn't resolve; else as `protected`, the first
--- result converted by `conversion` ("text", "number" or "none").
+-- result converted by `conversion` ("text", "number", "truth" or "none").
 local function call(name, conversion, ...)
   local f = resolve(name, "function")
   if f == nil then return "missing" end
@@ -87,6 +87,8 @@ local function call(name, conversion, ...)
   if outcome ~= "ok" then return outcome, result end
   if conversion == "text" then return "ok", text_of(result) end
   if conversion == "number" then return "ok", number_of(result) end
+  -- The runtime's truth value: false for false and nil (also no result).
+  if conversion == "truth" then return "ok", result ~= nil and result ~= false end
   return "ok"
 end
 

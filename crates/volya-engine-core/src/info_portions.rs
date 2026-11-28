@@ -579,13 +579,15 @@ impl InfoPortions {
     /// `dialog` child of each portion it holds, in list order, then each of
     /// the partner's `actor_dialogs`, each id tried once and looked up (an
     /// undeclared dialog stops the game), kept when `conditions` (the
-    /// dialog's own, `dialogue-scope` DG-2) holds for it, ordered by
-    /// `priority`, highest first. Dialogs of equal priority keep the order
-    /// tried (unestablished, 6; our reading).
+    /// dialog's own, `crate::dialogs::conditions::dialog_test`) holds for
+    /// it, ordered by `priority`, highest first. Dialogs of equal priority
+    /// keep the order tried (unestablished, 6; our reading). `conditions`
+    /// gets this state, for the portions its test asks about; an error it
+    /// returns stops the build.
     pub fn dialog_list(
         &mut self,
         actor_dialogs: &[&str],
-        conditions: &mut dyn FnMut(&str) -> bool,
+        conditions: &mut dyn FnMut(&mut Self, &str) -> io::Result<bool>,
     ) -> io::Result<Vec<String>> {
         let declarations = Arc::clone(&self.declarations);
         let held: Vec<&str> = (self.list(self.player).iter())
@@ -599,7 +601,7 @@ impl InfoPortions {
                 continue;
             }
             let index = declarations.dialogs.look_up(id, &mut self.log)?;
-            if conditions(id) {
+            if conditions(self, id)? {
                 list.push((declarations.dialog_priorities[index], id.to_owned()));
             }
         }

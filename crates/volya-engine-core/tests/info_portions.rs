@@ -387,7 +387,7 @@ fn the_first_path_uses_the_trader_portions() {
         .count();
     assert_eq!(callbacks, 5);
     // 6: `global_dialogs` gives the first talk `actor_break_dialog`.
-    let offered = s.dialog_list(&[], &mut |_| true).unwrap();
+    let offered = s.dialog_list(&[], &mut |_, _| Ok(true)).unwrap();
     assert_eq!(offered, ["actor_break_dialog"]);
     // 8: a bad task child stops the game on the player character only.
     s.give(7, "gar_help_newbie", time).unwrap();

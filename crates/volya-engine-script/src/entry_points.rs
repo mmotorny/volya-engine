@@ -177,7 +177,7 @@ fn api(message: impl Into<String>) -> Error {
 }
 
 /// Runs the entry points' chunk on a state whose loader is installed.
-fn install(lua: &mut Lua) -> Result<(), Error> {
+pub(crate) fn install(lua: &mut Lua) -> Result<(), Error> {
     lua.register_kept_factory("__volya_kept")?;
     lua.exec_kept("=entry_points", include_bytes!("entry_points.lua"), ENTRY)
 }
@@ -196,11 +196,11 @@ fn register_stand_ins(scripts: &mut Scripts) -> Result<(), Error> {
 }
 
 /// `text` as the game's bytes.
-fn lua_text(text: &str) -> Value {
+pub(crate) fn lua_text(text: &str) -> Value {
     Value::String(cp1251::encode(text).unwrap_or_else(|| text.as_bytes().to_vec()))
 }
 
-fn text_of(v: &Value) -> String {
+pub(crate) fn text_of(v: &Value) -> String {
     match v {
         Value::String(s) => cp1251::decode(s),
         v => format!("{v:?}"),
@@ -209,10 +209,12 @@ fn text_of(v: &Value) -> String {
 
 /// How a call's first result is kept (1.2).
 #[derive(Clone, Copy)]
-enum Keep {
+pub(crate) enum Keep {
     Nothing,
-    /// Lua's string conversion: `None` for a non-string.
+    /// Lua's string conversion: nil for a non-string.
     Text,
+    /// The runtime's truth value, as a boolean.
+    Truth,
 }
 
 impl Scripts {
@@ -240,27 +242,26 @@ impl Scripts {
     }
 
     /// Resolves `function` and calls it with `args` (1): `Ok(None)` when it
-    /// doesn't resolve, else its first result as `keep` keeps it. A script
-    /// error is fatal (`LUA error: …`).
-    fn call_entry(
+    /// doesn't resolve, else its first result as `keep` keeps it (nil for
+    /// [`Keep::Nothing`]). A script error is fatal (`LUA error: …`).
+    pub(crate) fn call_entry(
         &mut self,
         function: &str,
         keep: Keep,
         args: &[Value],
-    ) -> Result<Option<Option<Vec<u8>>>, Error> {
+    ) -> Result<Option<Value>, Error> {
         let conversion = match keep {
             Keep::Nothing => "none",
             Keep::Text => "text",
+            Keep::Truth => "truth",
         };
         let mut all = vec![Value::from("call"), lua_text(function), conversion.into()];
         all.extend_from_slice(args);
         let results = self.guarded(|lua| lua.call_kept(ENTRY, &all))?;
         match results.as_slice() {
             [Value::String(o)] if o == b"missing" => Ok(None),
-            [Value::String(o), Value::String(text), ..] if o == b"ok" => {
-                Ok(Some(Some(text.clone())))
-            }
-            [Value::String(o), ..] if o == b"ok" => Ok(Some(None)),
+            [Value::String(o), result, ..] if o == b"ok" => Ok(Some(result.clone())),
+            [Value::String(o)] if o == b"ok" => Ok(Some(Value::Nil)),
             [Value::String(o), message, ..] if o == b"error" => {
                 Err(self.stop(format!("LUA error: {}", text_of(message))))
             }
@@ -356,7 +357,10 @@ impl GameScripts {
                 .scripts
                 .stop(format!("failed to get the game type function {function}")));
         };
-        let text = result.filter(|t| !t.is_empty());
+        let text = match result {
+            Value::String(t) if !t.is_empty() => Some(t),
+            _ => None,
+        };
         self.calls.push(EngineCall::GameType {
             function,
             game_type: game_type.to_owned(),
