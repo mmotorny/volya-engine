@@ -59,22 +59,22 @@ pub fn check() -> Result<(), String> {
     }
 }
 
-const STALKER: u16 = 10;
-const PLAYER: u16 = 0;
-const RIFLE: u16 = 20;
-const ZONE: u16 = 30;
-const BLOODSUCKER: u16 = 40;
-const SCRIPT_ZONE: u16 = 50;
-const TRADER: u16 = 60;
+pub(super) const STALKER: u16 = 10;
+pub(super) const PLAYER: u16 = 0;
+pub(super) const RIFLE: u16 = 20;
+pub(super) const ZONE: u16 = 30;
+pub(super) const BLOODSUCKER: u16 = 40;
+pub(super) const SCRIPT_ZONE: u16 = 50;
+pub(super) const TRADER: u16 = 60;
 
 /// A test state: the scripts, the engine objects, the services.
-struct State {
-    s: Scripts,
-    objects: Rc<RefCell<GameObjects>>,
-    services: Rc<RefCell<EngineServices>>,
+pub(super) struct State {
+    pub s: Scripts,
+    pub objects: Rc<RefCell<GameObjects>>,
+    pub services: Rc<RefCell<EngineServices>>,
 }
 
-fn data(id: u16, name: &str, section: &str, class: &str) -> SpawnData {
+pub(super) fn data(id: u16, name: &str, section: &str, class: &str) -> SpawnData {
     SpawnData {
         id,
         name: name.as_bytes().to_vec(),
@@ -93,7 +93,7 @@ fn data(id: u16, name: &str, section: &str, class: &str) -> SpawnData {
 /// A state with the services, configuration and files and game object
 /// basics registered, `_G` loaded, a global `obj(id)` giving handles, and
 /// objects of several kinds.
-fn state() -> Result<State, String> {
+pub(super) fn state() -> Result<State, String> {
     let tree = Tree(
         [
             ("gamedata/scripts/_g.script", ""),
@@ -770,27 +770,38 @@ obj({RIFLE}):set_nonscript_usable(false)
             }],
         || format!("events {events:?}"),
     )?;
-    // 6.3: the use flag and the player's use action.
+    // 6.3: the use flag and the player's use action, the scripted use (its
+    // callback, spec O) first.
+    run(
+        &mut t.s,
+        "6.3",
+        &format!(
+            r#"
+used = {{}}
+for _, id in ipairs({{{RIFLE}, {STALKER}}}) do
+  obj(id):set_callback(callback.use_object, function(o, who)
+    used[#used + 1] = {{o:id(), who:id()}}
+  end)
+end
+"#
+        ),
+    )?;
     let used = t.s.player_use(RIFLE, PLAYER).map_err(|e| e.to_string())?;
     let other = t.s.player_use(STALKER, PLAYER).map_err(|e| e.to_string())?;
     ensure(
         used == UseAction::ScriptedOnly && other == UseAction::EngineHandling,
         || format!("use actions {used:?} {other:?}"),
     )?;
-    let events = t.objects.borrow_mut().take_events();
-    ensure(
-        events
-            == [
-                Event::UseCallback {
-                    object: RIFLE,
-                    user: Some(PLAYER),
-                },
-                Event::UseCallback {
-                    object: STALKER,
-                    user: Some(PLAYER),
-                },
-            ],
-        || format!("the scripted use first: {events:?}"),
+    run(
+        &mut t.s,
+        "6.3",
+        &format!(
+            r#"
+eq(#used, 2, "both used")
+eq(used[1][1], {RIFLE}, "the rifle") eq(used[1][2], {PLAYER}, "by the player")
+eq(used[2][1], {STALKER}, "the stalker") eq(used[2][2], {PLAYER}, "by the player")
+"#
+        ),
     )?;
     fatal(
         &format!("obj({STALKER}):enable_anomaly()"),
@@ -928,6 +939,7 @@ eq(plain:getVisible(), 1, "getVisible")
 eq(type(plain:Visual()), "userdata", "Visual")
 eq(type(plain:Visual().dcast_PKinematicsAnimated), "function", "an IRender_Visual")
 eq(sw:Visual(), nil, "no visual")
+obj(70):set_callback(callback.use_object, function(o, who) own_use = {{o:id(), who:id()}} end)
 eq(plain:use(obj({PLAYER})), true, "use returns true")
 eq(obj(70):spawn_ini():r_string("logic", "cfg"), "door.ltx", "spawned with its data")
 eq(CPhysicObject():getEnabled(), 0, "a new client object isn't spawned")
@@ -937,14 +949,15 @@ raises(function() return CPhysicObject(1) end, "", "one constructor taking no ar
 "#
         ),
     )?;
-    let events = t.objects.borrow_mut().take_events();
-    ensure(
-        events
-            == [Event::UseCallback {
-                object: 70,
-                user: Some(PLAYER),
-            }],
-        || format!("the engine's own use: {events:?}"),
+    run(
+        &mut t.s,
+        "10",
+        &format!(
+            r#"
+eq(own_use and own_use[1], 70, "the engine's own use calls the use_object callback")
+eq(own_use and own_use[2], {PLAYER}, "with the user")
+"#
+        ),
     )?;
     ensure(t.s.destroy_object(70) == Ok(true), || "destroy".into())?;
     let unbound =

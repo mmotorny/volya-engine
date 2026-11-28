@@ -268,72 +268,14 @@ impl Lua {
         args: &[Value],
         call: bool,
     ) -> Result<Vec<Value>, Error> {
-        let mut flat = Vec::new();
-        for arg in args {
-            flatten(arg, &mut flat)?;
-        }
-        let mut results = Results::default();
-        let mut run = ffi::Run {
-            code: chunk.map_or(std::ptr::null(), |(code, _)| code.as_ptr().cast()),
-            len: chunk.map_or(0, |(code, _)| code.len()),
-            name: chunk.map_or(std::ptr::null(), |(_, name)| name.as_ptr()),
-            global: global.map_or(std::ptr::null(), |g| g.as_ptr()),
-            registry: c_int::from(registry),
-            call: c_int::from(call),
-            load_status: 0,
-            args: flat.as_ptr(),
-            nargs: args.len(),
-            read: read_results,
-            ctx: (&mut results as *mut Results).cast(),
-        };
-        // SAFETY: the state is open; everything `run` points to outlives the call.
-        let status = unsafe { ffi::volya_run_protected(self.state.as_ptr(), &mut run) };
-        // A load error is raised again to leave lua_cpcall: report its own status.
-        self.check(if run.load_status != 0 {
-            run.load_status
-        } else {
-            status
-        })?;
-        match results.error {
-            Some(message) => Err(api_error(message)),
-            None => Ok(results.values),
-        }
+        // SAFETY: the state is open.
+        unsafe { run_on(self.state.as_ptr(), chunk, global, registry, args, call) }
     }
 
     /// Turns a protected call's status into a result, popping the error.
     fn check(&mut self, status: c_int) -> Result<(), Error> {
-        if status == 0 {
-            return Ok(());
-        }
-        let l = self.state.as_ptr();
-        // SAFETY: a failed protected call leaves its error at the top. Only
-        // scalars are read (a table isn't traversed): nothing is pushed.
-        let message = unsafe {
-            let message = match ffi::lua_type(l, -1) {
-                ffi::LUA_TTABLE => "(error object is a table value)".to_owned(),
-                ffi::LUA_TUSERDATA => "(error object is a userdata value)".to_owned(),
-                _ => match read_value(l, -1, &mut HashSet::new()) {
-                    Ok(Value::String(s)) => String::from_utf8_lossy(&s).into_owned(),
-                    Ok(Value::Number(n)) => number_text(n),
-                    Ok(Value::Nil) => "(error object is nil)".to_owned(),
-                    Ok(Value::Boolean(b)) => format!("(error object is a boolean value: {b})"),
-                    Ok(Value::Other(kind)) => format!("(error object is a {kind} value)"),
-                    Ok(Value::Table(_) | Value::Object(_)) | Err(_) => {
-                        unreachable!("not a table or userdata")
-                    }
-                },
-            };
-            ffi::lua_settop(l, -2);
-            message
-        };
-        let kind = match status {
-            ffi::LUA_ERRSYNTAX => ErrorKind::Syntax,
-            ffi::LUA_ERRERR => ErrorKind::ErrorHandler,
-            // Never: the allocator aborts instead.
-            ffi::LUA_ERRMEM => ErrorKind::Runtime,
-            _ => ErrorKind::Runtime,
-        };
-        Err(Error { kind, message })
+        // SAFETY: the state is open.
+        unsafe { check_status(self.state.as_ptr(), status) }
     }
 }
 
@@ -342,6 +284,132 @@ impl Drop for Lua {
         // SAFETY: the state is open; its functions are dropped after it closes.
         unsafe { ffi::lua_close(self.state.as_ptr()) };
     }
+}
+
+/// Runs a chunk or calls a global or kept function on `l`, protected
+/// ([`Lua::run`]).
+///
+/// # Safety
+/// `l` is an open state (or a thread of one).
+unsafe fn run_on(
+    l: *mut LuaState,
+    chunk: Option<(&[u8], &CString)>,
+    global: Option<&CString>,
+    registry: bool,
+    args: &[Value],
+    call: bool,
+) -> Result<Vec<Value>, Error> {
+    let mut flat = Vec::new();
+    for arg in args {
+        flatten(arg, &mut flat)?;
+    }
+    let mut results = Results::default();
+    let mut run = ffi::Run {
+        code: chunk.map_or(std::ptr::null(), |(code, _)| code.as_ptr().cast()),
+        len: chunk.map_or(0, |(code, _)| code.len()),
+        name: chunk.map_or(std::ptr::null(), |(_, name)| name.as_ptr()),
+        global: global.map_or(std::ptr::null(), |g| g.as_ptr()),
+        registry: c_int::from(registry),
+        call: c_int::from(call),
+        load_status: 0,
+        args: flat.as_ptr(),
+        nargs: args.len(),
+        read: read_results,
+        ctx: (&mut results as *mut Results).cast(),
+    };
+    // SAFETY: the caller's contract; everything `run` points to outlives the call.
+    let status = unsafe { ffi::volya_run_protected(l, &mut run) };
+    // A load error is raised again to leave lua_cpcall: report its own status.
+    // SAFETY: the caller's contract.
+    unsafe {
+        check_status(
+            l,
+            if run.load_status != 0 {
+                run.load_status
+            } else {
+                status
+            },
+        )?;
+    }
+    match results.error {
+        Some(message) => Err(api_error(message)),
+        None => Ok(results.values),
+    }
+}
+
+/// Turns a protected call's status on `l` into a result, popping the error.
+///
+/// # Safety
+/// `l` is an open state (or a thread of one).
+unsafe fn check_status(l: *mut LuaState, status: c_int) -> Result<(), Error> {
+    if status == 0 {
+        return Ok(());
+    }
+    // SAFETY: a failed protected call leaves its error at the top. Only
+    // scalars are read (a table isn't traversed): nothing is pushed.
+    let message = unsafe {
+        let message = match ffi::lua_type(l, -1) {
+            ffi::LUA_TTABLE => "(error object is a table value)".to_owned(),
+            ffi::LUA_TUSERDATA => "(error object is a userdata value)".to_owned(),
+            _ => match read_value(l, -1, &mut HashSet::new()) {
+                Ok(Value::String(s)) => String::from_utf8_lossy(&s).into_owned(),
+                Ok(Value::Number(n)) => number_text(n),
+                Ok(Value::Nil) => "(error object is nil)".to_owned(),
+                Ok(Value::Boolean(b)) => format!("(error object is a boolean value: {b})"),
+                Ok(Value::Other(kind)) => format!("(error object is a {kind} value)"),
+                Ok(Value::Table(_) | Value::Object(_)) | Err(_) => {
+                    unreachable!("not a table or userdata")
+                }
+            },
+        };
+        ffi::lua_settop(l, -2);
+        message
+    };
+    let kind = match status {
+        ffi::LUA_ERRSYNTAX => ErrorKind::Syntax,
+        ffi::LUA_ERRERR => ErrorKind::ErrorHandler,
+        // Never: the allocator aborts instead.
+        ffi::LUA_ERRMEM => ErrorKind::Runtime,
+        _ => ErrorKind::Runtime,
+    };
+    Err(Error { kind, message })
+}
+
+thread_local! {
+    /// The states (or threads) running a Rust function or a default
+    /// implementation, innermost last: what [`call_kept_within`] re-enters.
+    static RUNNING: std::cell::RefCell<Vec<*mut LuaState>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Marks `l` as running Rust code until dropped.
+struct Running;
+
+impl Running {
+    fn enter(l: *mut LuaState) -> Self {
+        RUNNING.with(|r| r.borrow_mut().push(l));
+        Running
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.with(|r| r.borrow_mut().pop());
+    }
+}
+
+/// Calls the function [`Lua::exec_kept`] kept at `key` with `args` from
+/// inside a Rust function Lua is calling or a default implementation an
+/// engine call runs (re-entering the state running it): for engine
+/// behaviour that calls scripts in the middle of a member. `Err` outside
+/// one.
+pub(crate) fn call_kept_within(key: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
+    let key = cstring(key)?;
+    let Some(l) = RUNNING.with(|r| r.borrow().last().copied()) else {
+        return Err(api_error("no Lua state is running Rust code"));
+    };
+    // SAFETY: a state in `RUNNING` is open: it is running the Rust code
+    // that called this.
+    unsafe { run_on(l, None, Some(&key), true, args, true) }
 }
 
 /// A number as Lua writes it (`%.14g`, spec 2.5).
@@ -531,10 +599,12 @@ unsafe extern "C" fn invoke(data: *mut c_void, l: *mut LuaState, out: *mut ffi::
         let args: Result<Vec<Value>, String> = (1..=ffi::lua_gettop(l))
             .map(|i| read_value(l, i, &mut HashSet::new()))
             .collect();
+        let running = Running::enter(l);
         let result = args.and_then(|args| {
             catch_unwind(AssertUnwindSafe(|| f(&args)))
                 .unwrap_or_else(|_| Err("a Rust function panicked".into()))
         });
+        drop(running);
         let mut reply = Reply {
             _values: Vec::new(),
             flat: Vec::new(),

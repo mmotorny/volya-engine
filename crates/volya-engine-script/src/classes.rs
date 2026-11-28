@@ -884,7 +884,10 @@ impl Lua {
             .try_borrow_mut()
             .map_err(|_| api_error("the engine part is in use"))?;
         let objects = self.classes.objects(part.0, &data, &**borrowed);
-        let results = default(&mut **borrowed, &objects, args).map_err(api_error)?;
+        let running = crate::Running::enter(self.state.as_ptr());
+        let results = default(&mut **borrowed, &objects, args);
+        drop(running);
+        let results = results.map_err(api_error)?;
         Ok(match conversion {
             Conversion::Nothing => Value::Nil,
             _ => results.into_iter().next().unwrap_or(Value::Nil),

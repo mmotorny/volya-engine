@@ -690,3 +690,19 @@ mod entry_points {
         section(checks::call_order);
     }
 }
+
+/// Object event callbacks' checks, one test per section of
+/// docs/behavior/script-api-object-event-callbacks.md (all of them run in
+/// [`selftest`] too, on every target).
+mod object_callbacks {
+    use crate::selftest::object_callbacks::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

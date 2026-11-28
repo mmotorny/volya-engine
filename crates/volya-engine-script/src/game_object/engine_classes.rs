@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use super::callbacks::{self, ObjectEvent};
 use super::members::Handle;
 use super::{CLIENT_BASE, Context, Event, ObjectClass, SCRIPT_ZONE_CLASSES, client_classes};
 use crate::Value;
@@ -262,14 +263,13 @@ fn game_object_base(ctx: &Context) -> EngineClass {
         .overridable("net_Import", |_: &mut ClientObject, _| Ok(Vec::new()))
         .overridable("use", move |c: &mut ClientObject, args| {
             used.stopped()?;
-            let mut objects = used.objects.borrow_mut();
             let user = match args.first() {
-                Some(Value::Object(part)) => objects.of_handle(*part),
+                Some(Value::Object(part)) => used.objects.borrow().of_handle(*part),
                 _ => None,
             };
             // Before it spawns there is no callback to call (our choice).
             if let Some(object) = c.object {
-                objects.push(Event::UseCallback { object, user });
+                callbacks::raise_within(&used, object, &ObjectEvent::UseObject { user })?;
             }
             Ok(vec![Value::Boolean(true)])
         })

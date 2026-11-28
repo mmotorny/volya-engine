@@ -20,6 +20,7 @@
 //! [`Scripts::destroy_object`]. See docs/architecture/scripts.md, Game
 //! objects.
 
+pub mod callbacks;
 mod engine_classes;
 pub mod members;
 pub mod object_binder;
@@ -611,12 +612,6 @@ pub enum Event {
         object: u16,
         wounded: bool,
     },
-    /// `CGameObject:use`'s callback `use_object`, id 15 (10.1), with the
-    /// user. TODO(#1028): spec O's callbacks call it.
-    UseCallback {
-        object: u16,
-        user: Option<u16>,
-    },
     /// `explosive:explode()` (10.4).
     Explode {
         object: u16,
@@ -813,6 +808,7 @@ impl Scripts {
             self.register_class(class)?;
         }
         object_binder::install(self, &ctx)?;
+        callbacks::register(self, &ctx)?;
         self.game_object_state = Some(Registered {
             objects: ctx.objects,
             services: ctx.services,
@@ -1026,6 +1022,7 @@ impl Scripts {
         let Some(object) = objects.borrow_mut().objects.remove(&id) else {
             return Ok(false);
         };
+        self.forget_callbacks(id, object.kinds)?;
         if let Some(handle) = object.handle {
             objects.borrow_mut().handles.remove(&handle);
             self.lua_mut().release_engine_object(handle)?;
@@ -1063,7 +1060,8 @@ impl Scripts {
 
     /// Object `id`'s scripted use by `user` (10.1, 10.2): a script class's
     /// `use` override or the engine's own, which calls the object's
-    /// `use_object` callback ([`Event::UseCallback`]) and returns true.
+    /// `use_object` callback (spec O, [`callbacks::ObjectEvent::UseObject`])
+    /// and returns true.
     pub fn use_object(&mut self, id: u16, user: Option<u16>) -> Result<bool, OverrideFailure> {
         let objects = self.game_objects()?;
         let (client, who) = {
@@ -1083,9 +1081,7 @@ impl Scripts {
                 Ok(!matches!(result, Value::Nil | Value::Boolean(false)))
             }
             None => {
-                objects
-                    .borrow_mut()
-                    .push(Event::UseCallback { object: id, user });
+                self.raise(id, &callbacks::ObjectEvent::UseObject { user })?;
                 Ok(true)
             }
         }
