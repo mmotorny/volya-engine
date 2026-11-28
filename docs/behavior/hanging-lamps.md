@@ -12,9 +12,11 @@ the data is marked **believed**.
 
 Builds on (not repeated):
 
-- `docs/behavior/level-objects.md` (here "LO"): which objects are online (section 2, including the
-  renderer match of the light flags, 2.3), the object transform *X* (3.4), model files, bones and the bind
-  pose (4.1, 4.4), and section 6, which this specification completes and in places settles (section 10).
+- `docs/behavior/offline-simulation.md` (here "OS"): which objects are online (section 6.5, including the
+  renderer match of the light flags, 6.5.2).
+- `docs/behavior/object-visual-and-transform.md` (here "OV"): the lamp's visual (sections 1, 2) and its
+  transform *X* (section 4).
+- `docs/formats/skeleton-ogf.md` (here "SK"): model files, bones and the bind pose (sections 1, 4).
 - `docs/formats/sav.md` section 7.4.2: the hanging-lamp block and its field names, used below.
 - `docs/behavior/dynamic-lights.md` (here "DL"): the light record a lamp's light is (section 2: fields,
   update thresholds, the shadow setting and projected texture having no effect), which lights are drawn
@@ -27,7 +29,7 @@ Builds on (not repeated):
   3.1: the engine's global clock *T* in seconds (real time, stopped while the game is paused).
 
 Conventions: matrices in the row-vector convention (a point **p** is transformed as [**p** 1] · M; rows
-counted from 0), as in LO. "f32" is IEEE 754 single precision; *K* is the f32 nearest to 1/255 (bit pattern
+counted from 0), as in OV. "f32" is IEEE 754 single precision; *K* is the f32 nearest to 1/255 (bit pattern
 `0x3B808081`). "The lamp" is the in-game object a lamp record becomes while it is online. Every fact carries
 the name of its check, a script in `checks/hanging-lamps/` of the dirty workspace (`run_all.py` runs them all;
 `gen.py`, run first, produces the static-analysis outputs the binary checks read): `hl_bin.py` (binaries),
@@ -35,7 +37,7 @@ the name of its check, a script in `checks/hanging-lamps/` of the dirty workspac
 
 ## 1. Overview
 
-1. A lamp record that comes online (LO section 2) creates a **main light**, optionally a **glow** and an
+1. A lamp record that comes online (OS section 6.5) creates a **main light**, optionally a **glow** and an
    **ambient light**, all as light records of DL section 2, and starts **on** if its health is above 0
    (section 3).
 2. Each frame, while its health is above 0 and its main light is on, the lamp places its lights at its
@@ -76,13 +78,13 @@ again afterwards. Checks: `hl_bin.py` HL-B1, HL-B2.
 |---|---|
 | 0x01 | the lamp gets a physics shell (section 3.4) |
 | 0x02 | the main light's shadow setting (DL section 3.2); no effect in the first renderer (DL section 2.5) |
-| 0x04 | the lamp exists for the first renderer (LO section 2.3) |
-| 0x08 | the lamp exists for the second renderer (LO section 2.3); otherwise no effect |
+| 0x04 | the lamp exists for the first renderer (OS section 6.5.2) |
+| 0x08 | the lamp exists for the second renderer (OS section 6.5.2); otherwise no effect |
 | 0x10 | the main light is a spot light; clear: a point light |
 | 0x20 | the lamp has an ambient light |
 | 0x40, 0x80, 0x100 … 0x8000 | no effect: the game reads no bit of the flags other than the six above |
 
-A lamp with neither 0x04 nor 0x08 is a fatal error (LO section 2.3). In the data the bits above 0x20 occur
+A lamp with neither 0x04 nor 0x08 is a fatal error (OS section 6.5.2). In the data the bits above 0x20 occur
 only together, as 0xB540, in 11 records (flag values 0xB55C, 0xB55E, 0xB57C, 0xB57D); every record has 0x08,
 36 have 0x04. Checks: `hl_bin.py` HL-B1, HL-B5, HL-B7; `hl_data.py` HL-D1.
 
@@ -117,7 +119,7 @@ no visible effect (glows.md section 1). Checks: `hl_bin.py` HL-B1, HL-B2.
 
 In this order:
 
-1. If the record names a model (LO section 3), the light bone and the ambient bone are looked up by name in
+1. If the record names a model (OV sections 1, 2), the light bone and the ambient bone are looked up by name in
    it; a name that is empty or not a bone of the model gives "no bone" (believed; every shipped record with a
    model names bones of it, section 9.1). A lamp without a model has no bones.
 2. The physics skeleton state of the record is applied (which bones are visible and the root bone; sav.md
@@ -149,8 +151,8 @@ colour. Checks: `hl_bin.py` HL-B2, HL-B3.
 
 ### 4.2 Placement
 
-The model's bones are first brought up to date for the frame. With *X* the lamp's transform (LO section 3.4)
-and *B*(*b*) the current model-space matrix of bone *b* (at rest its bind matrix, LO section 4.4):
+The model's bones are first brought up to date for the frame. With *X* the lamp's transform (OV section 4)
+and *B*(*b*) the current model-space matrix of bone *b* (at rest its bind matrix, SK section 4):
 
 - *M* = *B*(light bone) · *X*, or *M* = *X* when there is no light bone.
 - Main light: direction = row 2 of *M*, second ("right") vector = row 0, position = row 3 (the record stores
@@ -217,7 +219,7 @@ Checks: `hl_bin.py` HL-B5.
 
 ### 5.4 Going offline
 
-Every shipped lamp record has state flags 0x02 set and 0x04 clear (LO section 2.3), so a lamp of the actor's
+Every shipped lamp record has state flags 0x02 set and 0x04 clear (OS section 6.5.2), so a lamp of the actor's
 level that comes online stays online for the whole stay on the level, at any distance. Checks: `hl_data.py`
 HL-D1.
 
@@ -321,7 +323,21 @@ animators `light\light alarm_idle` 9, `tv light 1` 7, `light 40 hz` 4, `light\li
 
 ### 9.3 First level at the start
 
-The five online lamps (LO section 6) all have colour `0x00FFFFFF`, light bone and ambient bone `bone_lamp`,
+Of the 27 lamp records of `l01_escape`, 5 have light-flags bit 0x04 and come online at the start (OS
+section 9.1); the other 22 do not, 11 of them without a model; the flag values on the level are 0x2A, 0x38,
+0x3A, 0xB55C, 0xB57C and 0xB57D [HLO-1, HLO-2]. The 5 online lamps are 3 lamps `physics\light\lampa_01_on`
+(`trader_light_0000` at 5.7 m, `trader_light_0003` at 1.5 m, `trader_light_0005` at 241.9 m from the actor's
+stored position) and 2 television sets `physics\decor\tv_1` (`trader_tv_0000` at 2.6 m, `trader_tv_0002` at
+286.3 m) [HLO-1]. All five are spot lights without shadows (bit 0x10 set, 0x02 clear); the three lamps have
+no ambient light (bit 0x20 clear), the television sets have one (`trader_tv_0002` also has bit 0x01).
+For example the block of `trader_light_0003`: colour 0x00FFFFFF, brightness 0.8, colour animator
+`light 40 hz`, range 2.0, light flags 0xB55C, fixed bones `link`, health 100, virtual size 0.1, ambient radius
+2.0, ambient power 0.3, ambient texture `lights\lights_duolight02grey` (present but unused, bit 0x20 being
+clear), light texture empty, light bone `bone_lamp`, cone 2.094395, glow `glow\glow_orange` radius 0.3,
+ambient bone `bone_lamp` [HLO-3]. (Checks [HLO-*n*]: `checks/level-objects-split/run_all.py` of the dirty
+workspace.)
+
+The five online lamps all have colour `0x00FFFFFF`, light bone and ambient bone `bone_lamp`,
 glow `glow\glow_orange`, cone 120°, health > 0, no logic; all come online on:
 
 | Record | Flags | Brightness | Animator | Range | Glow radius | Spawn colour | Main light at rest: position; direction |
@@ -349,17 +365,8 @@ Checks: `hl_data.py` HL-D5.
 
 ## 10. Statements of earlier specifications settled here
 
-- LO section 6, light-flag bits other than 0x01 – 0x20: they have no effect (section 2.2).
-- LO section 6, "its position is believed to be the translation row": it is row 3 (section 4.2, also
-  glows.md section 2.2); the ambient light is placed the same way at its own bone.
-- LO section 6, colour "= (R, G, B) / 255 × brightness": only until the first animated frame; with an
-  animator the record's colour is replaced by the animator's (section 4.3).
-- LO section 6, "the lights are on only if the lamp's health > 0": at coming online; afterwards hits,
-  breaking and scripts switch them (section 5), and switching on does not require health > 0, though the
-  per-frame placement and colour do (4.1).
-- LO section 6, "empty name in old records = the light bone" (ambient bone): no shipped record is of such an
-  old version (all are version 118); an empty ambient bone occurs only in records without a model, whose
-  lights are placed at *X* (sections 3.4, 4.2, 9.1).
+None remain: the lamp statements of the former `level-objects.md` section 6, which this specification
+settled, are stated in sections 2 – 5 and 9.3.
 
 ## 11. Unestablished
 
@@ -374,7 +381,9 @@ Checks: `hl_data.py` HL-D5.
 
 ## 12. Provenance
 
-- Date: 2026-11-24.
+- Date: 2026-11-24; revised 2026-11-27: references to `level-objects.md` replaced by the specifications its
+  content moved to when it was split by system, and its first-level lamp facts (section 6 and 7.2 there)
+  moved into section 9.3 unchanged.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\xrGame.dll` and `bin\XR_3DA.exe` (static analysis), all files under `bin\`
   (string search).

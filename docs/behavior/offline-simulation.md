@@ -23,12 +23,6 @@ Builds on (not repeated here):
   - sav.md 7.4.1 describes the four location fields of the Monster-like update as offline movement
     fields. Offline travel (section 7) neither reads nor writes them (section 5.4).
 - `docs/behavior/start-position.md`: locating records in `spawns\all.spawn`; the world coordinate system.
-- `docs/behavior/level-objects.md` (2.2–2.5): the switch distances, the predicates *on* and *off*, their
-  scripted replacements and the switching rule. Section 6 adds when and for which objects the rule is
-  evaluated. Correction: level-objects.md 2.4 gives `process_time` as 900 µs and calls the combination
-  of `process_time` and `objects_per_update` unestablished. `process_time` sets a time limit of about
-  900 s on one switch pass (6.2), and `objects_per_update` limits the scheduled updates, not the switch
-  pass (7.1).
 - `docs/behavior/level-loading.md` (2.2, 5.11): the first fields of `game.graph`, given in full here.
 - `docs/formats/chunks.md` (chunk sequences, lookup by id), `docs/formats/ltx-config.md`.
 
@@ -38,6 +32,10 @@ compared as a whole. Sizes in bytes. Game time is in game milliseconds (sav.md 1
 coordinates (start-position.md section 1) unless called global. "The actor" is the player's object
 (section `actor`). Configuration keys without a section are read from the object's own configuration
 section (the section named in its spawn packet).
+
+**Checks.** The facts of section 6.5, the limits of the switch pass in 6.2 and the worked example of
+section 9.1 carry bracketed ids: [SW-*n*] and [LO0-*n*] name the checks of the dirty workspace's
+`checks/level-objects-split/` (`run_all.py`, which also runs `lo0.py`; decoders `sp.py`, `pres.py`).
 
 ## 1. `game.graph`
 
@@ -341,8 +339,12 @@ it comes back to an object already visited in this pass, or once it has run for
 
     process_time − update_monster_factor · process_time · 10⁻⁶   seconds of real time
 
-with `[alife]` `process_time = 900` and `update_monster_factor = 0.1` (about 900 s), so with the shipped
-values every pass visits every object of the list.
+[LO0-4b, LO0-5a] with `[alife]` `process_time = 900` and `update_monster_factor = 0.1` [LO0-1] (about 900 s:
+899.99991 s) [LO0-2, LO0-3], so with the shipped values every pass visits every object of the list [LO0-3,
+LO0-5a]. `process_time` is read as an integer number of seconds in this formula, although the comment beside
+it in `config\alife.ltx` says microseconds [LO0-1, LO0-4a, LO0-4b, LO0-5a]. `objects_per_update` (`[alife]`:
+10) [LO0-1] limits only the scheduled updates that follow the switch pass in the same update (7.1), not the
+switch pass [LO0-5b, LO0-5c, LO0-6].
 
 For each visited object, in this order:
 
@@ -351,9 +353,9 @@ For each visited object, in this order:
 2. If it has no parent and uses the level graph, its location is brought up to date (5.2).
 3. If it has a parent, nothing more happens. If it is offline: a stalker or monster is entered in or
    taken out of the schedule as 7.1's condition now says; then the object switches online if the rule of
-   level-objects.md 2.4 says so (online distance 135 m); if it stays offline and its kind does not keep
-   its client data (sav.md 8), its client data is discarded. If it is online: it switches offline if
-   that rule says so (offline distance 165 m).
+   6.5.3 says so (online distance 135 m); if it stays offline and its kind does not keep its client data
+   (sav.md 8), its client data is discarded. If it is online: it switches offline if that rule says so
+   (offline distance 165 m).
 4. If the object is removable now, it is removed as in step 1.
 
 The distance is the straight-line distance between the object's position and the actor's position.
@@ -374,6 +376,80 @@ id is −1, its death time is not 0, and the game time has reached death time +
 `stay_after_death_time_interval` hours (`[monsters_common]`, `config\creatures\monsters.ltx`: 36).
 Objects of other kinds are never removable this way. Removed objects are not saved. As removal happens
 only in the switch pass, bodies on other levels stay until their level is current.
+
+### 6.5 The switch rule
+
+#### 6.5.1 Switch distances
+
+From section `[alife]` of `config\alife.ltx` (dbb) [SW-1]:
+
+| Key | Value | Use |
+|---|---|---|
+| `switch_distance` | 150 | *d* |
+| `switch_factor` | 0.1 | *f* |
+
+The **online distance** is *d* · (1 − *f*) = **135 m**, the **offline distance** *d* · (1 + *f*) = **165 m**
+[SW-1]. The distance is the Euclidean distance in three dimensions between the object's position and the
+actor's position (at the start: the positions stored in the spawn packets, start-position.md section 3.1).
+The scripts can change the switch distance at run time (`alife():switch_distance`); none does before the
+first frame of a New Game (believed: no call is reachable from the start-game callbacks).
+
+#### 6.5.2 Switch capability of an object
+
+Two predicates, **can switch online** (*on*) and **can switch offline** (*off*), are evaluated per object.
+With *F* the object's state flags (`u32`, sav.md 7.4.1) and *m* the object's **renderer match** (below):
+
+- *on* = *m* and (*F* & 0x02 ≠ 0), for every kind;
+- *off* = (not *m*) or (*F* & 0x04 ≠ 0), except:
+  - for the kinds zone, anomaly, visual anomaly, torrid zone, level changer, restrictor, smart zone, team
+    base, breakable and climbable (sav.md 7.4.2): *off* = false;
+  - for creatures (player, stalker, monster, crow, phantom, monster group): *off* = ((not *m*) or
+    (*F* & 0x04 ≠ 0)) and health > 0 (health from the Creature block). Dead creatures never switch offline;
+  - for ammunition (`AMMO`, `A_*`): *off* = ((not *m*) or (*F* & 0x04 ≠ 0)) and rounds left ≠ 0 (the
+    state's `u16` rounds left; 10 or 20 in every ammunition record of `l01_escape`) [SW-7].
+
+The **renderer match** *m* is true for every kind except the hanging lamp (`O_HLAMP`), for which it is true
+only if the lamp's light flags (hanging-lamp block, `u16`) have bit 0x04 set and the first renderer is in use
+(bit 0x08 plays the same role for the second renderer). A lamp with neither bit set is a fatal error ("no
+renderer type set for hanging-lamp") [SW-8]; every shipped lamp record has one of them [SW-4]. So a lamp
+marked only for the second renderer never comes online with the first renderer.
+
+Scripted kinds (class ids marked † in sav.md 7.4.2) can replace both predicates from their scripts; 6.5.4
+lists the replacements that exist in the shipped scripts.
+
+#### 6.5.3 The rule
+
+For each object of the current level's list (6.1), whenever the switch pass (6.2) visits it:
+
+- **offline** object: if *on* is false, it stays offline. Otherwise, if *off* is false it switches online
+  regardless of distance; otherwise it switches online when its distance to the actor is ≤ 135 m.
+- **online** object: if *off* is false, it stays online. Otherwise, if *on* is false it switches offline;
+  otherwise it switches offline when its distance to the actor is > 165 m.
+
+All objects start offline at a New Game (6.1). The level's objects are believed to have all been evaluated
+once during the 30 frames in which the loading image is still shown (level-loading.md 2.3), so the first
+visible frame shows the result of one evaluation at the start positions: an object is present if *on* and
+(not *off* or distance ≤ 135 m).
+
+#### 6.5.4 Scripted replacements (shipped scripts)
+
+`scripts\class_registrator.script` binds scripted class ids to classes in `scripts\se_*.script`. The
+following replace *on* and/or *off* (static reading of the scripts) [SW-9, SW-9b]. Distances computed by
+these scripts are measured from the position of the object's level-graph node (`level.vertex_position` of
+the Object block's level-graph node) to the actor's current position, not from the record's position.
+
+| Class ids | Script | Replacement |
+|---|---|---|
+| `AI_STL_S` | `se_stalker.script` | *off*: if the object's job-online value is set (true, false or a condition list), *off* = not that value; else the engine's *off*. *on*: false if the object's `dont_spawn_online` field is true (set by no shipped script); else the job-online value if set; else, if the record's custom data has no `[spawner]` section, the engine's *on*; else (key `cond` of `[spawner]`): if the actor exists and is dead, the current online state; while offline, (the condition list holds) and the engine's *on*; while online, the condition list holds |
+| `SM_*` | `se_monster.script` | *off* as for `AI_STL_S`. *on*: the job-online value if set; else, without a `[spawner]` section, the engine's *on*; else, while offline: false if the actor does not exist or is dead; false if the spawner sets `check_distance = true` and the distance is < *r*; otherwise (the `[spawner]` condition holds) and the engine's *on*. While online: true if the actor does not exist or is dead, or if the condition holds; false if `check_distance` is set and the distance is > *r*; else the engine's *on*. *r* is the spawner's `min_distance` if given, else 150. No monster record of `l01_escape` sets `check_distance` |
+| `SCRPTART` | `se_artefact.script` | for sections `af_electra_flash`, `af_electra_moonlight`, `af_electra_sparkler` only (others: engine predicates): *on* = the current online state if the actor does not exist or is dead; true if the artefact has a parent; for an offline artefact: true only if the game hour is 0 … 4 (`utils.electro_art_enabled`) and the distance is at least 50 m; for an online one: true if the hour is 0 … 4 or the distance is < 50 m |
+| `SCRPTCAR` | `se_car.script` | *on*: the engine's *on* without a `[spawner]` section, else the `[spawner]` condition |
+
+Smart terrains (`SMRTTRRN`) set a character's job-online value when the character **begins** a job
+(`scripts\xr_gulag.script`: an offline character begins when it is at its job's graph point); jobs of the
+first level's smart terrains are defined with `online = true` (e.g. `scripts\gulag_escape.script`) [SW-11].
+Whether any character begins such a job before the first frame, which would bring it online regardless of
+distance, is **unestablished**; the counts of section 9.1 assume none does.
 
 ## 7. Offline travel
 
@@ -672,6 +748,78 @@ Configuration (`config\alife.ltx`, `[alife]`): `switch_distance = 150`, `switch_
 `schedule_max = 1`, `normal_time_factor = 10`; `config\creatures\monsters.ltx` `[monsters_common]`
 `stay_after_death_time_interval = 36`.
 
+### 9.1 Worked example: online objects at the start of a New Game on `l01_escape`
+
+Every record of the shipped `spawns\all.spawn` has an Object block; 870 of the 8,641 records are on
+`l01_escape`, all with parent id 0xFFFF (no container) [SW-2]. Applying 6.5 to them gives 671 online
+objects [SW-3]; distances are from the actor's stored position.
+
+**State at the start** (believed, from the scripts and the records): the job-online value of every stalker
+and monster record of the level is "not set" (the job-online byte, sav.md 7.5, is 2 in all of them). Every
+`[spawner]` section of the level's records (10 stalkers, 13 monsters) has a `cond` that requires an
+information portion (`{+escape_stalker_help}`, `{+esc_fanat_spawn}`, `{+escape_lager_spawn_killers}`,
+`{+tutorial_wounded_start}`, `{+escape_stalker_dog_spawn}`, `{+esc_boar_dogs_restrictor}`,
+`{+esc_dog_spawn}`); the actor has none of them at the start (they are given later by dialogs and scripts),
+so all 23 are absent [SW-5]. The start time is 05:30 (level-loading.md 2.6), so the three electra artefacts
+of the level are absent [SW-10].
+
+| Class id | Records | Online |
+|---|---|---|
+| `AI_CROW` | 55 | 55 |
+| `AI_STL_S` | 63 | 32 |
+| `AI_TRD_S` | 1 | 1 |
+| `AMMO` | 9 | 1 |
+| `ARTEFACT` | 3 | 1 |
+| `C_HLCP_S` | 1 | 1 |
+| `E_STLK` | 2 | 0 |
+| `II_ATTCH` | 1 | 0 |
+| `II_BANDG` | 4 | 0 |
+| `II_BOTTL` | 17 | 3 |
+| `II_EXPLO` | 6 | 0 |
+| `II_FOOD` | 15 | 2 |
+| `II_MEDKI` | 2 | 0 |
+| `LVL_CHNG` | 1 | 1 |
+| `O_ACTOR` | 1 | 1 |
+| `O_BRKBL` | 49 | 49 |
+| `O_CLMBL` | 14 | 14 |
+| `O_HLAMP` | 27 | 5 |
+| `O_INVBOX` | 25 | 5 |
+| `O_PHYS_S` | 69 | 69 |
+| `P_DSTRBL` | 127 | 127 |
+| `RE_SPAWN` | 9 | 9 |
+| `SCRPTART` | 3 | 0 |
+| `SMRTTRRN` | 41 | 41 |
+| `SM_BOARW` | 10 | 0 |
+| `SM_DOG_S` | 48 | 0 |
+| `SM_FLESH` | 8 | 1 |
+| `SM_P_DOG` | 2 | 0 |
+| `SPC_RS_S` | 75 | 75 |
+| `WP_BM16`, `WP_LR300`, `WP_PM`, `WP_WALTH` | 1 each | 0 |
+| `ZS_MBALD` | 96 | 96 |
+| `ZS_MINCE` | 4 | 4 |
+| `Z_MBALD` | 60 | 60 |
+| `Z_RADIO` | 18 | 18 |
+
+[SW-3] Of the kinds with a model (`object-visual-and-transform.md`): 69 `O_PHYS_S` and 127 `P_DSTRBL`
+physics objects, 49 breakables, 5 hanging lamps, 5 inventory boxes, 7 items (1 `AMMO`, 1 `ARTEFACT`,
+3 `II_BOTTL`, 2 `II_FOOD`), 0 weapons, 0 outfits, 32 stalkers, 1 trader, 1 monster, 55 crows, 1 helicopter.
+
+Characteristic cases: all physics objects, breakables, crows, the helicopter and the 5 online lamps are
+online at any distance because their state flags lack bit 0x04 or their kind never switches offline; the 5
+inventory boxes and 7 items are online by distance (≤ 135 m); the 16 soldiers of the checkpoint and the
+special-forces group (state flags 0xFFFFFFBB) are online at any distance; the 8 dead stalker bodies (health
+0) are online at any distance; the 8 camp stalkers within 135 m are online by distance; of the 27 hanging
+lamps only the 5 with light-flags bit 0x04 come online [SW-4, SW-6].
+
+The 32 online stalkers: `esc_lager1` … `esc_lager7`, `esc_wolf` (distance 25 … 78 m, state flags
+0xFFFFFFBF), `esc_specnaz1` … `6`, `esc_blokpost_soldier1` … `9`, `esc_blokpost_commander` (232 … 267 m,
+state flags 0xFFFFFFBB), and the bodies `esc_stalker_corpse`, `esc_tutorial_dead_novice`,
+`esc_stalker_corps1`, `esc_stalker_corps1_0000`, `esc_stalker_corps1_0001`, `esc_trup_bratka`,
+`esc_stalker_0000`, `esc_trup_scene` (health 0, 166 … 764 m). The online monster is `esc_suicidal_flesh`
+(state flags 0xFFFFFFF3, 70 m) [SW-6]. Absent because of a `[spawner]` section: 10 stalkers (`esc_fox`,
+`esc_stalker_fanat`, `esc_stalker`, `esc_killer1` … `esc_killer8` without `esc_killer5`) and 13 monsters
+[SW-5, SW-5b].
+
 ## 10. Unestablished
 
 - The trailing 116 bytes of `game.graph` (1.7); the choice of a vertex's level points (1.5); the 16
@@ -683,6 +831,8 @@ Configuration (`config\alife.ltx`, `[alife]`): `switch_distance = 150`, `switch_
 - Smart-terrain acceptance, suitability, joining and job logic (scripts, 7.2); the supply rules and the
   random generator behind them, hence most New Game ids (8.1).
 - The scheduled updates of kinds other than stalkers and monsters (7.1).
+- Whether smart-terrain jobs force characters online before the first frame (6.5.4), and the exact run-time
+  script state at the first switch evaluation (believed as stated in 9.1).
 - Everything here is static: none of it was observed in the running game.
 
 ## 11. Provenance
@@ -704,4 +854,13 @@ Configuration (`config\alife.ltx`, `[alife]`): `switch_distance = 150`, `switch_
   search and the configuration they read. Throwaway decoders written in the dirty workspace from this
   text decoded every file named above, checked every count, sum and invariant of section 9, and ran the
   path search of 7.4 against a shortest-path search.
+- Section 6.5, the limits of 6.2 with their checks and section 9.1 were moved here unchanged on 2026-11-27
+  from sections 2.2 – 2.6, 7.1 and 8 of `level-objects.md` (dated 2026-11-24), when that specification was
+  split by system. Their analysis: static analysis of the shipped binary for the switch predicates of every
+  simulation object kind and the switching rule and the renderer match of hanging lamps; reading of the
+  game's scripts (`class_registrator.script`, `se_*.script`, `utils.script`, `xr_gulag.script`,
+  `gulag_escape.script`) and configuration (`config\gameplay\npc_profile.xml`, `character_desc_*.xml`,
+  `info_*.xml`, `dialogs_escape.xml`) as data; for 6.2 the `[alife]` values, the constant of the time limit
+  read from `bin\xrGame.dll`, and static analysis of the binary's reading of the `[alife]` keys, the setup
+  of the two limits, the switch pass and the scheduled updates (checks LO0-1 … LO0-6).
 - No leaked source code, derived projects or third-party documentation of the engine were used.

@@ -3,16 +3,17 @@
 Behaviour specification of the **projected light texture** of the game's first (static-lighting)
 renderer: which objects receive it, what each object's part of it shows and when it is redrawn, the
 per-object **approximate colour** it is cleared with (the light estimate whose mean is the object's
-brightness value), and how the model programs sample it. It completes `docs/behavior/level-objects.md`
-sections 5.3 – 5.5, which define the element choice and the colour equation of element 0 of the model
-shaders but leave the texture's content unestablished. Where a fact could not be established it is marked
+brightness value), the per-object sky and sun visibility behind both, and how the model programs sample it.
+It completes `docs/behavior/model-shading.md` sections 5 – 7, which define the element choice and the colour
+equation of element 0 of the model shaders. Where a fact could not be established it is marked
 **unestablished**.
 
 Conventions:
 
 - Builds on `docs/behavior/static-shading.md` (here "SS": shader resolution, elements, weather inputs,
-  fog, render-state vocabulary, light-map and vertex-colour inputs), `docs/behavior/level-objects.md`
-  ("LO": objects, receivers, the model colour equations, per-object visibility values),
+  fog, render-state vocabulary, light-map and vertex-colour inputs), `docs/behavior/model-shading.md`
+  ("MS": the model shaders, the element choice, the model colour equations),
+  `docs/behavior/object-visual-and-transform.md` (the object transform, section 4),
   `docs/behavior/dynamic-lights.md` ("DL": light records, the directional records A and B),
   `docs/formats/ogf.md` (visual types) and `docs/formats/level.md` (sectors).
 - Vectors are rows, `·` is the dot product, `sat(x)` = clamp(x, 0, 1) per component, `trunc` rounds
@@ -21,13 +22,15 @@ Conventions:
   global clock in milliseconds.
 - Every fact carries the name of its check, a script in `checks/object-light/` of the dirty workspace
   (`run_all.py` runs them all; the binary checks read the disassembly listings of
-  `checks/dynamic-lights/out/`, produced by that directory's `dump.py`).
+  `checks/dynamic-lights/out/`, produced by that directory's `dump.py`). The facts of section 5.2 step 1
+  and of the smoothing in 5.3 that were moved here from the earlier object specification carry the ids
+  [LS-*n*] of `checks/level-objects-split/run_all.py` or no id where that specification had none.
 
 ## 1. Overview
 
 1. The renderer keeps one 512 × 512 texture with 8 bits per channel (alpha, red, green, blue), divided into
    100 **cells** of 51 × 51 pixels (section 2).
-2. Each frame, objects close enough to the camera become **receivers** (LO 5.3). Each receiver owns a cell;
+2. Each frame, objects close enough to the camera become **receivers** (section 3.1). Each receiver owns a cell;
    a cell is redrawn only when its receiver is new to it, has moved out of the volume the cell was drawn
    for, or after a random 30 … 90 s (section 3).
 3. Drawing a cell clears it to the receiver's **approximate colour** (section 5) and then draws, seen from
@@ -36,7 +39,7 @@ Conventions:
    colour and its **sun visibility** in alpha (section 4).
 4. A receiver's meshes are drawn with element 0 of their model shader: each vertex looks up its cell
    straight below itself, and the pixel takes that light plus the sun term weighted by the looked-up sun
-   visibility, blended with the object's own estimate (LO 5.5; section 6).
+   visibility, blended with the object's own estimate (MS 7; section 6).
 
 ## 2. The texture and its cells
 
@@ -64,7 +67,7 @@ frame when all of these hold (OL-2):
    actor) answers yes (OL-14);
 3. it is not already a receiver in this frame;
 4. |*E* − *C*| + *R* < 50 · *R*, with *C*, *R* the model's header sphere centre transformed by the object's
-   transform and its radius (as LO 5.3);
+   transform and its radius (as MS 5);
 5. the object lies in a sector (an object outside every sector logs `! Invalid object '<name>' position.
    Outside of sector structure.` and is not a receiver).
 
@@ -181,7 +184,7 @@ are never drawn here.)
 
 ### 5.1 Inputs kept per object
 
-Every object with a model keeps (LO 5.4): the sky visibility target and smoothed value *h*, the sun
+Every object with a model keeps: the sky visibility target and smoothed value *h*, the sun
 visibility target and smoothed value *s*, a list of **tracked lights** (each with a visibility energy *e*
 and a smoothed visibility *σ*), and the approximate colour **A**. Initial values (OL-12): *h* = 0.5,
 *s* = 0.2, **A** = (0, 0, 0), no tracked lights. Three tracking options, all on initially: lights (1),
@@ -191,9 +194,24 @@ sun (2), sky (4); whether any game object turns them off is **unestablished**.
 
 A **full update** of an object (OL-12), with **o** = *C* + (0, 0.3 *R*, 0) (*C*, *R* as in 3.1):
 
-1. sun visibility target (option 2) and sky visibility target (option 4): exactly as LO 5.4 (the sun ray
-   after a random 6 … 12 full updates; five sky directions per full update); at the first full update the
-   smoothed *h* is set to its target.
+1. sun visibility target (option 2) and sky visibility target (option 4); at the first full update the
+   smoothed *h* is set to its target:
+   - **sky visibility** target: from the point **o**, rays of length 50 m are cast in these fixed
+     directions (normalised before use), in this order: (0, 1, 0), (0.52573, 0.85065, 0), (0.16246, 0.85065,
+     0.5), (−0.42533, 0.85065, 0.30902), (−0.42533, 0.85065, −0.30902), (0.16246, 0.85065, −0.5), (0.89443,
+     0.44721, 0), (0.27639, 0.44721, 0.85065), (−0.72361, 0.44721, 0.52573), (−0.72361, 0.44721, −0.52573),
+     (0.27639, 0.44721, −0.85065), (0.68819, 0.52573, 0.5), (−0.26287, 0.52573, 0.80902), (−0.85065, 0.52573,
+     0), (−0.26287, 0.52573, −0.80902), (0.68819, 0.52573, −0.5), (0.95106, 0, 0.30902), (0.58779, 0,
+     0.80902), (0, 0, 1), (−0.58779, 0, 0.80902), (−0.95106, 0, 0.30902), (−0.95106, 0, −0.30902), (−0.58779,
+     0, −0.80902), (0, 0, −1), (0.58779, 0, −0.80902), (0.95106, 0, −0.30902) (26 directions) [LS-1]. Five
+     directions are tested per full update, cycling through the 26 in the listed order. A ray tests against
+     the static collision (believed: `level.cform`); its result is "free" when it hits nothing. The target
+     is the fraction of free results among the tested directions (once all 26 have been tested, among the 26
+     latest results).
+   - **sun visibility** target: a ray of length 500 m from **o** towards the sun (direction −d_B, the
+     direction of the directional record B of DL 3.1), tested against the static collision and other
+     objects, the object itself excluded; target 1 if it hits nothing, else 0; tested again after a random
+     6 … 12 full updates.
 2. *h* and *s* are brought to the current frame (5.3).
 3. If option 1 is on (for every receiver; for other objects only if they cast or receive shadows, which
    every kind of the game does, 3.1): **Disputed in review:** crows (`AI_CROW`) answer no both to casting and
@@ -229,11 +247,13 @@ the sum) cancel; the result is as written (OL-12). The object's **brightness val
   *n* mod *N* where *N* is the length of the list and *n* a counter incremented every frame; if that entry
   is an object that lies in a sector visited in this frame, passes one of that sector's frusta and is not
   hidden by the occlusion test (`occlusion-tests.md`), it gets a full update. So with *N* entries in view each
-  visible object gets one full update every *N* frames or so. The per-object "at most once per frame" of
-  LO 5.4 holds (a second full update in the same frame does nothing).
-- **Smoothing** (LO 5.4: *v* ← *k* · target + (1 − *k*) · *v*, *k* = clamp(frame time, 0, 1)) of *h* and
-  *s* is applied at most once per frame, in each frame in which the values are used: when the object is
-  drawn (its L_dynamic_props), when its cell is drawn, when its brightness is read, and in a full update.
+  visible object gets one full update every *N* frames or so. An object's ray tests run at most once per
+  frame (a second full update in the same frame does nothing).
+- **Smoothing**: *h* and *s* follow their targets, *v* ← *k* · target + (1 − *k*) · *v*, *k* = clamp(frame
+  time in s, 0, 1), applied at most once per frame, in each frame in which the values are used: when the
+  object is drawn (its L_dynamic_props, MS 6), when its cell is drawn, when its brightness is read, and in a
+  full update. Converged values (a still frame long after spawn): *h* = fraction of free directions, *s* = 0
+  or 1. The values at the first visible frame depend on frame times (**unestablished**).
 - **A** changes only in full updates.
 
 ## 6. Sampling in the model programs
@@ -249,18 +269,17 @@ For a receiver drawn in a frame, the constants of its slot are set (OL-10):
   *C*′.y − 0.05] × [*C*′.z − *h* + 0.05, *C*′.z + *h* − 0.05] (OL-7); each vertex's world position is
   clamped into it per axis before mapping;
 - the **factor** φ = c + (1 − c) · *g*², *g* = (|*E* − *C*′| + *R*) / (50 *R*), c = `r1_lmodel_lerp`
-  (OL-10; this settles LO 5.5's "*C*′ believed *C*": *C*′ is the recorded centre of 3.2, taken at the
-  slot's last drawing).
+  (OL-10; *C*′ is the recorded centre of 3.2, taken at the slot's last drawing).
 
 The sampler (OL-13): clamp addressing, linear minification and magnification, no mip levels.
 
-Element 0 of `MODEL   ` / `MODELEbB` (LO 5.5, programs `model_def_hq`, `model_env_hq`; OL-D2): with *t*
+Element 0 of `MODEL   ` / `MODELEbB` (MS 4 and 7, programs `model_def_hq`, `model_env_hq`; OL-D2): with *t*
 the texel at the mapped coordinate of the clamped vertex position, S(**n**) the sun term (sat, a vertex
-colour) and *Q* the model light of LO 5.5:
+colour) and *Q* the model light of MS 7:
 
   light = lerp(*t*.rgb + S(**n**) · *t*.a, *Q*, φ),  C = 2 · light · B.rgb,  A = B.a
 
-(the environment-mapped variant uses its base of LO 5.5). The sun term here is not multiplied by the
+(the environment-mapped variant uses its base of MS 7). The sun term here is not multiplied by the
 object's own sun visibility: the looked-up *t*.a (the sun visibility of the geometry below, or the clear
 alpha) replaces it.
 
@@ -282,15 +301,6 @@ alpha) replaces it.
 
 ## 8. Statements of earlier specifications settled here
 
-- `level-objects.md` 5.5: "how the projected light texture is filled is unestablished; a renderer without
-  it can draw every object with element 1": filled as sections 2 – 4; drawing receivers with element 1
-  instead replaces the baked light under the object by *Q* (ambient, hemisphere by sky visibility, sun by
-  sun visibility), which indoors is near the ambient alone.
-- `level-objects.md` 5.5, "*C*′ the receiver's recorded centre (believed: *C*)": *C*′ = *C* + (0, 0.1 *R*,
-  0) as recorded when its cell was last drawn (section 3.2).
-- `level-objects.md` 5.4, values "updated at most once per frame": full updates follow the schedule of
-  5.3 (the actor every frame, other visible objects in turn); the smoothing happens in frames where the
-  values are used.
 - `dynamic-lights.md` 9, the brightness value "is not used for drawing; how the lights are weighted and
   smoothed is unestablished": the colour behind it is the clear colour of every cell (4.2); weighting and
   smoothing in 5.2.
@@ -307,6 +317,7 @@ alpha) replaces it.
 - The order of the frustum list that the full-update turn counts in (5.3); it makes no difference once all
   entries have had their turn.
 - The rounding of colour outputs to bytes in the render target (believed: as the device converts).
+- The smoothed sky and sun visibility at the first visible frame (5.3).
 
 ## 10. Provenance
 
@@ -321,6 +332,11 @@ alpha) replaces it.
   light tracking and its update schedule, the constants set for receivers, the object classes' answer to
   the shadow-receive query; arithmetic of the conversions emulated in the checks. The checks in
   `checks/object-light/` reproduce every fact.
+- Revised 2026-11-27: the sky and sun visibility rays (5.2 step 1) and the smoothing with its initial and
+  converged values (5.3) were moved here unchanged from section 5.4 of `level-objects.md` (dated 2026-11-24,
+  revised 2026-11-26; static analysis of the per-object light tracking, constants and direction table read
+  from the binary) when that specification was split by system; references to it now name
+  `model-shading.md` and `object-visual-and-transform.md`.
 
 ## Gaps found in review
 
