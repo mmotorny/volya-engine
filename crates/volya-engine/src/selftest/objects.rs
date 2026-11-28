@@ -119,6 +119,7 @@ pub async fn walking_draws_an_offline_stalker(cx: &Context<'_>) -> Outcome {
         .by_name("esc_novice_attacker1")
         .ok_or("esc_novice_attacker1")?;
     let (id, at) = (o.id, o.record.header.position);
+    drop(sim);
     let objects = &screen.world().objects;
     let k = objects
         .instances

@@ -118,7 +118,7 @@ fn the_bunkers_shells_and_the_trader_door() {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
-    let objects = level_objects(level.simulation().unwrap());
+    let objects = level_objects(&level.simulation().unwrap());
     let door = objects
         .iter()
         .find(|o| o.record.header.name.as_str() == "trader_door")

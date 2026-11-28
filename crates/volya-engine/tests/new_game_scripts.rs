@@ -198,6 +198,7 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         .map(|o| o.id)
         .expect("the trader door");
     let vertices = sim.navigation().unwrap().ai.len();
+    drop(sim);
     let scripts = app.game_scripts().unwrap();
     // TODO(#1077): every one, once the interface their binders call is
     // implemented; now those without a binding function and the doors.
@@ -220,6 +221,22 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         "client objects: {} online ({left_out} left out for their binders), {} spawned, {bound} bound",
         online.len(),
         spawned.len()
+    );
+    // Script API K: `alife()` is the level's simulation in the game, the
+    // trader (story id 3) and the player in it.
+    let alife = scripts.scripts().exec(
+        "=alife",
+        b"local a = alife() return a ~= nil and a:story_object(3) ~= nil, \
+          a ~= nil and a:actor() ~= nil, a ~= nil and a:level_name(a:level_id())",
+    );
+    assert_eq!(
+        alife.unwrap(),
+        [
+            Value::Boolean(true),
+            Value::Boolean(true),
+            Value::String(b"l01_escape".to_vec())
+        ],
+        "alife() in the game"
     );
     let lights = scripts.objects().borrow().level_vertex_lights.len();
     assert_eq!(lights, vertices, "a light byte per level vertex");

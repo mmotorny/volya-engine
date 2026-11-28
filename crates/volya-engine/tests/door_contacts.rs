@@ -72,7 +72,7 @@ fn the_leaf_meets_the_players_body() {
     let m = &materials[level.player().body().material() as usize];
     assert_eq!(m.name, "creatures\\actor");
     assert_eq!((m.friction, m.damping, m.spring), (0.8, 1.0, 0.8));
-    let door = level_objects(level.simulation().unwrap())
+    let door = level_objects(&level.simulation().unwrap())
         .into_iter()
         .find(|o| o.record.header.name.as_str() == "trader_door")
         .expect("the trader's door")

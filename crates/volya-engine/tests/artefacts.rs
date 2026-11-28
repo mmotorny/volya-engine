@@ -187,6 +187,7 @@ fn first_level_artefacts_from_game_data() {
             )
         })
         .collect();
+    drop(sim);
     assert_eq!(records.len(), 6, "{records:?}");
     for (name, _) in &records {
         assert!(

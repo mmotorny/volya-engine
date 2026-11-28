@@ -601,6 +601,12 @@ impl Loading {
         self.load.client_objects()
     }
 
+    /// Shares the simulation with the scripts' `alife()`
+    /// ([`NewGameLoad::share_simulation`]).
+    pub fn share_simulation(&mut self, shared: crate::level::SharedSimulation) {
+        self.load.share_simulation(shared);
+    }
+
     /// The caption shown.
     pub fn stage(&self) -> Stage {
         self.stages[self.current]

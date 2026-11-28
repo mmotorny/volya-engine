@@ -539,9 +539,11 @@ fn level_objects_from_game_data() {
         // `esc_novice_attacker1`, loaded but offline, comes online once
         // the player is within 135 m (its drawing is the render-level
         // suite's).
+        drop(sim);
         let sim = screen.simulation().unwrap();
         let o = sim.by_name("esc_novice_attacker1").unwrap();
         let (id, at) = (o.id, o.record.header.position);
+        drop(sim);
         let k = objects.instances.iter().position(|i| i.id == id).unwrap();
         assert!(!objects.instances[k].online);
         let report = screen.state().objects;

@@ -19,7 +19,7 @@
 //! to the GPU on the first frame drawn, so the CPU never holds them whole.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::collections::BTreeMap;
 use std::io;
 use std::rc::Rc;
@@ -88,6 +88,7 @@ use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
 use crate::script::dialogs::Event as DialogEvent;
 use crate::script::game_object::callbacks::ObjectEvent;
+use crate::script::simulation::AlifeSimulator;
 use crate::script::story::SharedInfoPortions;
 use crate::scripts::{ClientObject, ClientSpawning};
 use crate::shading::{self, ShaderLibrary};
@@ -416,9 +417,10 @@ pub struct LevelScreen {
     back: bool,
     /// The sun's fade (sky.md 7.3).
     sun_fade: SunFade,
-    /// The offline simulation (offline-simulation.md); `None` only in the
-    /// unit tests' empty level.
-    simulation: Option<Simulation>,
+    /// The offline simulation (offline-simulation.md), shared with the
+    /// scripts' `alife()` (script API K); none only in the unit tests'
+    /// empty level.
+    simulation: SharedSimulation,
     /// The holders' information portions (info-portions.md), shared with
     /// the scripts' story; `None` only in the unit tests' empty level.
     info_portions: Option<SharedInfoPortions>,
@@ -1497,6 +1499,10 @@ pub type GeometryKeeper =
 /// level's objects (docs/behavior/offline-simulation.md 6.5) are switched online,
 /// spawned with their models, given surfaces and light inputs in the
 /// stages named after those steps (placed there by us).
+/// The offline simulation as the level and the scripts' `alife()` (script
+/// API K) share it.
+pub type SharedSimulation = Rc<RefCell<AlifeSimulator>>;
+
 #[derive(Default)]
 pub struct NewGameLoad {
     name: Option<String>,
@@ -1534,7 +1540,10 @@ pub struct NewGameLoad {
     /// `st_prefetching_objects` or given by the game type
     /// ([`NewGameLoad::set_prefetched`]).
     prefetched: Option<Arc<objects::Prefetched>>,
-    simulation: Option<Simulation>,
+    /// The offline simulation once `st_creating_new_game` made it, shared
+    /// with the scripts' `alife()` from `st_client_spawning` on
+    /// ([`NewGameLoad::share_simulation`]).
+    simulation: SharedSimulation,
     info_portions: Option<SharedInfoPortions>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
@@ -1717,6 +1726,17 @@ fn earlier<T>(value: Option<T>, what: &str) -> io::Result<T> {
 }
 
 impl NewGameLoad {
+    /// Shares the simulation with the scripts' `alife()` (script API K):
+    /// it moves into `shared`, which the load and then the level hold.
+    pub fn share_simulation(&mut self, shared: SharedSimulation) {
+        if Rc::ptr_eq(&self.simulation, &shared) {
+            return;
+        }
+        let sim = self.simulation.borrow_mut().simulation.take();
+        shared.borrow_mut().simulation = sim;
+        self.simulation = shared;
+    }
+
     /// The files the original has mapped and open under `stage`, once it
     /// has run, with their sizes in `tree` (docs/architecture/memory.md,
     /// File-backed data): `all.spawn` while `st_creating_new_game` reads
@@ -1801,11 +1821,12 @@ impl NewGameLoad {
     pub fn client_objects(&mut self) -> io::Result<ClientSpawning<'_>> {
         let clock = earlier(self.clock.as_ref(), "game clock")?;
         let (game_time, time_factor) = (clock.time(), clock.time_factor());
-        let sim = earlier(self.simulation.as_mut(), "simulation")?;
+        let mut shared = self.simulation.borrow_mut();
+        let sim = earlier(shared.simulation.as_mut(), "simulation")?;
         let lights = (sim.navigation_mut())
             .map(|n| std::mem::take(&mut n.vertex_lights))
             .unwrap_or_default();
-        let sim = earlier(self.simulation.as_ref(), "simulation")?;
+        let sim = &*sim;
         let spawned = earlier(self.spawned.as_ref(), "objects")?;
         let shared = earlier(self.physics.as_ref(), "physics world")?;
         let physics = shared.borrow();
@@ -1819,7 +1840,7 @@ impl NewGameLoad {
             .filter(|o| o.online && o.record.header.parent_id == crate::core::simulation::NO_ID)
             .map(|o| ClientObject {
                 id: o.id,
-                record: &o.record,
+                record: o.record.clone(),
                 model: (models.get(&o.id)).map(|&m| (&spawned.models[m], &spawned.names)),
                 physics: physics.script_physics(o.id),
                 shell: physics.script_shell(o.id),
@@ -1915,7 +1936,7 @@ impl NewGameLoad {
                     character.owner.id,
                 ))));
                 self.character = Some(character);
-                self.simulation = Some(sim);
+                self.simulation.borrow_mut().simulation = Some(sim);
                 self.clock = Some(clock);
             }
             // `level.ltx` is read under this caption; a level's files must
@@ -2502,7 +2523,8 @@ impl NewGameLoad {
             // under this caption here (our placement), with the effect
             // library read at launch.
             Stage::LoadingAiObjects => {
-                let sim = earlier(self.simulation.as_mut(), "simulation")?;
+                let mut shared = self.simulation.borrow_mut();
+                let sim = earlier(shared.simulation.as_mut(), "simulation")?;
                 let character = earlier(self.character.as_mut(), "player character")?;
                 let clock = earlier(self.clock.as_ref(), "game clock")?;
                 first_switch_pass(tree, data, sim, character, &dir, clock)?;
@@ -2570,7 +2592,8 @@ impl NewGameLoad {
         let clock = earlier(self.clock, "game clock")?;
         let character = earlier(self.character, "player character")?;
         let spawned = earlier(self.spawned, "objects")?;
-        let simulation = earlier(self.simulation, "simulation")?;
+        let simulation = self.simulation;
+        earlier(simulation.borrow().simulation.as_ref(), "simulation")?;
         let info_portions = earlier(self.info_portions, "information portions")?;
         let footsteps = earlier(self.footsteps, "footsteps")?;
         let player_sphere = earlier(self.player_sphere, "player's model")?;
@@ -2683,7 +2706,7 @@ impl NewGameLoad {
             last: now,
             back: false,
             sun_fade: SunFade::default(),
-            simulation: Some(simulation),
+            simulation,
             info_portions: Some(info_portions),
             motions: crate::level_motions::LevelMotions::new(placements.len()),
             motion_channels,
@@ -3467,7 +3490,8 @@ impl LevelScreen {
     /// or the page hidden. A simulation error is fatal (offline-simulation.md
     /// 6.2, 6.5.2): kept for [`LevelScreen::take_fatal`].
     fn simulate(&mut self) {
-        let Some(sim) = &mut self.simulation else {
+        let mut shared = self.simulation.borrow_mut();
+        let Some(sim) = shared.simulation.as_mut() else {
             return;
         };
         sim.set_actor_position(self.player.state().position);
@@ -3476,6 +3500,7 @@ impl LevelScreen {
             self.clock.game_time().normal_time_factor,
             hour(&self.clock),
         );
+        drop(shared);
         match changes {
             Ok(changes) => self.place_objects(&changes),
             Err(e) => self.record_fatal(e.to_string()),
@@ -3488,10 +3513,30 @@ impl LevelScreen {
         self.info_portions.as_ref()
     }
 
-    /// The simulation's story registry (story id to object id) while it
-    /// runs.
-    pub fn story_registry(&self) -> Option<&BTreeMap<i32, u16>> {
-        self.simulation.as_ref().map(Simulation::story_registry)
+    /// The simulation, shared with the scripts' `alife()` (script API K).
+    pub fn shared_simulation(&self) -> &SharedSimulation {
+        &self.simulation
+    }
+
+    /// Releases online object `id` from the simulation, as the destroy
+    /// event of script API K's `release` asks (its 7.3, believed: the
+    /// online object destroyed, it leaves the simulation as an offline one
+    /// does, at once, our choice), with the objects it carries.
+    pub fn release_object(&mut self, id: u16) {
+        let removed = {
+            let mut shared = self.simulation.borrow_mut();
+            let Some(sim) = shared.simulation.as_mut() else {
+                return;
+            };
+            if let Some(o) = sim.object_mut(id) {
+                o.online = false;
+            }
+            sim.release(id)
+        };
+        self.place_objects(&Changes {
+            removed,
+            ..Changes::default()
+        });
     }
 
     /// Gives the player character each of `ids` by a transfer
@@ -3577,7 +3622,10 @@ impl LevelScreen {
                 self.motion_channels.destroyed(k);
             }
         }
-        let Some(sim) = &self.simulation else { return };
+        let shared = self.simulation.borrow();
+        let Some(sim) = shared.simulation.as_ref() else {
+            return;
+        };
         // A zone record coming online for the first time creates its zone
         // object (zone-idle-effects.md 3.1); zones never go offline.
         if let Some(effects) = &mut self.effects {
@@ -4305,8 +4353,8 @@ impl LevelScreen {
     }
 
     /// The offline simulation.
-    pub fn simulation(&self) -> Option<&Simulation> {
-        self.simulation.as_ref()
+    pub fn simulation(&self) -> Option<Ref<'_, Simulation>> {
+        Ref::filter_map(self.simulation.borrow(), |s| s.simulation.as_ref()).ok()
     }
 
     /// What switched online or offline, or was removed, since the last
@@ -4377,13 +4425,15 @@ impl LevelScreen {
     /// visual loaded with the level and its shell's physics part and
     /// script view.
     pub fn client_object(&self, id: u16) -> Option<ClientObject<'_>> {
-        let o = self.simulation.as_ref()?.object(id)?;
+        let record = self
+            .simulation()
+            .and_then(|s| Some(s.object(id)?.record.clone()))?;
         let objects = &self.world.objects;
         let model = (self.instances.get(&id))
             .map(|&k| (&objects.models[objects.instances[k].model], &objects.names));
         Some(ClientObject {
             id,
-            record: &o.record,
+            record,
             model,
             physics: self.physics.borrow().script_physics(id),
             shell: self.physics.borrow().script_shell(id),
@@ -4416,9 +4466,10 @@ impl LevelScreen {
     /// Object `id`'s instance hidden or shown by the engine's visibility
     /// switch (script API M 6.5), while it is online.
     pub fn set_object_hidden(&mut self, id: u16, hidden: bool) {
+        let shared = self.simulation.borrow();
         let (Some(&k), Some(o)) = (
             self.instances.get(&id),
-            self.simulation.as_ref().and_then(|s| s.object(id)),
+            shared.simulation.as_ref().and_then(|s| s.object(id)),
         ) else {
             return;
         };
@@ -4433,7 +4484,7 @@ impl LevelScreen {
     /// without a simulation (unit tests), one above every id the player
     /// character holds.
     pub fn take_item_id(&mut self) -> io::Result<u16> {
-        if let Some(s) = &mut self.simulation {
+        if let Some(s) = self.simulation.borrow_mut().simulation.as_mut() {
             return s.take_id();
         }
         let held = self
@@ -4675,7 +4726,7 @@ impl LevelScreen {
     /// instances.
     fn objects_report(&self) -> ObjectsReport {
         let mut report = self.world.objects.report();
-        if let Some(sim) = &self.simulation {
+        if let Some(sim) = self.simulation() {
             report.online = sim
                 .level_list()
                 .filter(|&id| sim.object(id).is_some_and(|o| o.online))
@@ -4868,7 +4919,7 @@ impl LevelScreen {
             last: now,
             back: false,
             sun_fade: SunFade::default(),
-            simulation: None,
+            simulation: SharedSimulation::default(),
             info_portions: None,
             placements: Arc::new(Vec::new()),
             motions: Default::default(),

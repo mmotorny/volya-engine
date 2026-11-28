@@ -67,7 +67,7 @@ fn the_characters_talk_state_after_a_new_game() {
             };
             let object = ClientObject {
                 id: o.id,
-                record: &o.record,
+                record: o.record.clone(),
                 model: None,
                 physics: None,
                 shell: None,
@@ -86,7 +86,7 @@ fn the_characters_talk_state_after_a_new_game() {
         assert_eq!(class(&trader.record.header.section), "AI_TRD_S");
         let object = ClientObject {
             id: trader.id,
-            record: &trader.record,
+            record: trader.record.clone(),
             model: None,
             physics: None,
             shell: None,

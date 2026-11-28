@@ -42,6 +42,7 @@ use crate::script::game_object::{
 use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
 use crate::script::services::EngineServices;
+use crate::script::simulation::Event as SimulationEvent;
 use crate::script::story::{Icon, SharedInfoPortions, Story};
 use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
@@ -204,6 +205,8 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     // The creatures' sound state goes with them (script API T 6, 7).
     scripts.sounds().borrow_mut().creatures = Default::default();
     scripts.scripts().clear_level_calls()?;
+    // Script API K: `alife()` is nil until the next level's simulation.
+    scripts.simulation().borrow_mut().end();
     scripts.scripts().destroy_default_trade()
 }
 
@@ -220,7 +223,7 @@ pub fn load_ended(scripts: &GameScripts) {
 /// (trader-door.md 1).
 pub struct ClientObject<'a> {
     pub id: u16,
-    pub record: &'a ObjectRecord,
+    pub record: ObjectRecord,
     pub model: Option<(&'a LoadedModel, &'a Names)>,
     pub physics: Option<Physics>,
     pub shell: Option<Rc<PhysicsShell>>,
@@ -257,6 +260,9 @@ pub fn client_spawning(
     now: u64,
 ) -> Result<(), Error> {
     let mut characters = Characters::new(tree, data);
+    // Script API K: `alife()` is the level's simulation from here on, its
+    // binders' calls among the first to reach it.
+    loading.share_simulation(Rc::clone(scripts.simulation()));
     let spawning = loading.client_objects().map_err(io_fatal)?;
     {
         let mut o = scripts.objects().borrow_mut();
@@ -321,6 +327,9 @@ pub fn level_frame(
     }
     let clock = level.clock();
     (scripts.times().borrow_mut()).level_frame(clock.time(), clock.time_factor());
+    // Script API K's brains move offline characters by the game-time
+    // chunk's factor.
+    scripts.simulation().borrow_mut().normal_time_factor = clock.game_time().normal_time_factor;
     if !paused {
         scheduled_updates(scripts, now as u32)?;
     }
@@ -365,10 +374,27 @@ pub fn level_frame(
     story_frame(scripts, level)?;
     apply_events(scripts, level);
     apply_physics_events(scripts, level)?;
+    apply_simulation_events(scripts, level);
     for factor in scripts.times().borrow_mut().take_time_factors() {
         level.set_time_factor(factor);
     }
     Ok(())
+}
+
+/// What script API K's members asked of the engine: `release` of an
+/// online object destroys it, which then leaves the simulation (7.3,
+/// believed; at once, our choice: its client object goes with the next
+/// frame's changes); an object `create` made in an online parent is already
+/// registered online in it, and items in a parent have no client object
+/// of their own here, so nothing more is done (7.1).
+fn apply_simulation_events(scripts: &GameScripts, level: &mut LevelScreen) {
+    let events = scripts.simulation().borrow_mut().take_events();
+    for event in events {
+        match event {
+            SimulationEvent::Destroy { id, .. } => level.release_object(id),
+            SimulationEvent::SpawnedOnline { .. } => {}
+        }
+    }
 }
 
 /// The scheduled updates of a level frame at server time `now` (spec L
@@ -419,7 +445,8 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
 fn story_frame(scripts: &mut GameScripts, level: &mut LevelScreen) -> Result<(), Error> {
     {
         let mut story = scripts.story().borrow_mut();
-        let registry = level.story_registry();
+        let shared = level.shared_simulation().borrow();
+        let registry = shared.simulation.as_ref().map(|s| s.story_registry());
         if story.story_registry.as_ref() != registry {
             story.story_registry = registry.cloned();
         }
@@ -601,11 +628,11 @@ pub fn spawn_client_object(
     if !binding_runs(system, &object) {
         return Ok(());
     }
-    let data = SpawnData::from_record(object.id, object.record, system).map_err(io_fatal)?;
+    let data = SpawnData::from_record(object.id, &object.record, system).map_err(io_fatal)?;
     let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
     // The character's voice prefix (script API T 6.5).
-    let voice = characters.voice_prefix(object.record).map_err(io_fatal)?;
+    let voice = characters.voice_prefix(&object.record).map_err(io_fatal)?;
     {
         let mut sounds = scripts.sounds().borrow_mut();
         let creatures = &mut sounds.creatures;
@@ -644,11 +671,11 @@ pub fn spawn_client_object(
 /// which a stalker or trader takes as its start dialog and default start
 /// dialog (6.1).
 pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::Result<EngineState> {
-    let start_dialog = characters.start_dialog(object.record)?;
+    let start_dialog = characters.start_dialog(&object.record)?;
     Ok(EngineState {
         visual: object.model.map(|(m, names)| visual_of(m, names)),
         physics: object.physics,
-        restrictor: restrictor_of(object.record),
+        restrictor: restrictor_of(&object.record),
         start_dialog: cp1251::encode(&start_dialog).unwrap_or_else(|| start_dialog.into_bytes()),
     })
 }
