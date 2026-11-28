@@ -79,4 +79,20 @@ rust_test(
     ],
 )
 
+# The static checks are only static checks: every test of //:checks is
+# tagged `check` (the query lists those that aren't).
+genquery(
+    name = "unchecked_tests",
+    expression = "tests(//:static_checks) except attr(tags, '[^a-z_-]check[^a-z_-]', tests(//:static_checks))",
+    scope = ["//:static_checks"],
+)
+
+rust_test(
+    name = "checks_static",
+    srcs = ["checks_static_test.rs"],
+    data = [":unchecked_tests"],
+    env = {"UNCHECKED_TESTS": "$(rootpath :unchecked_tests)"},
+    tags = ["check"],
+)
+
 volya_checks(wasm = False)

@@ -46,8 +46,12 @@ def volya_checks(wasm = True):
         srcs = native.glob(["**"], allow_empty = True),
         visibility = ["//:__pkg__"],
     )
+    # Tagged `check`: an empty `tests` would mean every non-manual test of
+    # the package (the browser suites in tests/browser), the tag keeps it
+    # to static checks.
     native.test_suite(
         name = "checks",
+        tags = ["check"],
         tests = checks,
         visibility = ["//:__pkg__"],
     )

@@ -50,9 +50,18 @@ filegroup(
     visibility = ["//build:__pkg__"],
 )
 
-# The static checks: `bazel test //:checks`.
+# The static checks: `bazel test //:checks`. Each is tagged `check`
+# (//build:checks_static): nothing that builds the engine or runs a browser.
 test_suite(
     name = "checks",
+    tests = [
+        ":static_checks",
+        "//build:checks_static",
+    ],
+)
+
+test_suite(
+    name = "static_checks",
     tests = [
         "//build:gitignore",
         "//build:licenses",
@@ -60,4 +69,5 @@ test_suite(
         "//build:spdx",
         "//platforms/web:notices",
     ] + [p + ":checks" for p in PACKAGES],
+    visibility = ["//build:__pkg__"],
 )

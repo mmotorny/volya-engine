@@ -56,13 +56,14 @@ Both stay as they are, run by `cargo_build_script`:
 
 ## Static checks
 
-Tests in `//:checks` (a `test_suite`), cached like any test. Every package's `BUILD.bazel` ends with `volya_checks()` (`build/checks.bzl`), which makes its `fmt`, `clippy`, `clippy_wasm` and `all_files` from the Rust targets it declares, and the root's `PACKAGES` lists every package: a new package adds both.
+Tests in `//:checks` (a `test_suite`), cached like any test. Every package's `BUILD.bazel` ends with `volya_checks()` (`build/checks.bzl`), which makes its `fmt`, `clippy`, `clippy_wasm` and `all_files` from the Rust targets it declares, and the root's `PACKAGES` lists every package: a new package adds both. Only static checks: nothing that builds the engine or runs a browser (those run in `//...` and by name). Each is tagged `check`; a package's suite takes only tests so tagged (an empty `test_suite` would take every non-manual test of the package), and `//build:checks_static` fails on any test of `//:checks` without the tag (a `genquery` of them).
 
 | Check | Target |
 |---|---|
 | Format | `<package>:fmt`, rules_rust's `rustfmt_test` over the package's Rust targets |
 | Clippy, native and wasm | `<package>:clippy` and `:clippy_wasm`, `rust_clippy_test` (the second on `//build/platforms:wasm32`), failing on warnings (`clippy_flags=-Dwarnings` in `.bazelrc`) |
 | SPDX headers | `//build:spdx`, a Rust test over `//:all_files` (the root's files and every package's) in its runfiles |
+| Static only | `//build:checks_static`: every test of `//:checks` is tagged `check` |
 | Pins | `//build:pins`: MODULE.bazel's wasm-bindgen CLI equals Cargo.lock's crate |
 | Licences | `//build:licenses`: cargo-deny's licences, bans and sources over the workspace in its runfiles, with the toolchain's cargo; `no-sandbox` and `requires-network` (it reads the crates' metadata). cargo-deny is installed on the machine (`@local_tools`, its version an input). Advisories are left to `update`: they change with the day, not with an input. |
 | Third-party notices | `//platforms/web:notices`: the site's notices build (The web app): every crate and component the release wasm links declares its licence, on deny.toml's allow-list, with its text; every served file is ours |
