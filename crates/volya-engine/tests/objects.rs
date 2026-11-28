@@ -158,22 +158,40 @@ fn level_objects_from_game_data() {
             )
         };
 
-        // The stalkers' visuals are their supplies choices' descriptions'
-        // (character-identity.md 4.2, believed; object-visual-and-transform.md
-        // 5.1 has the records', TODO(#1020)).
+        // A stalker shows its supplies choice's visual, one of those its
+        // profile offers (object-visual-and-transform.md 2 item 3, 5.1).
         let sim = screen.simulation().unwrap();
         let mut characters = Characters::new(tree, data);
-        for name in [
-            "esc_lager1",
-            "esc_lager2",
-            "esc_specnaz1",
-            "esc_blokpost_commander",
-            "esc_stalker_corps1_0001",
-        ] {
+        let novice: &[&str] = &[
+            "actors\\novice\\green_stalker_2",
+            "actors\\novice\\green_stalker_3",
+            "actors\\novice\\green_stalker_4",
+            "actors\\novice\\green_stalker_5",
+        ];
+        let offered: [(&str, &[&str]); 5] = [
+            ("esc_lager1", novice),
+            ("esc_lager2", novice),
+            ("esc_specnaz1", &["actors\\soldier\\soldier_spetsnaz"]),
+            (
+                "esc_blokpost_commander",
+                &["actors\\soldier\\soldier_beret_1"],
+            ),
+            (
+                "esc_stalker_corps1_0001",
+                &[
+                    "actors\\neytral\\stalker_neytral_balon_8",
+                    "actors\\neytral\\stalker_neytral_hood_2",
+                    "actors\\neytral\\stalker_neytral_hood_uzor",
+                ],
+            ),
+        ];
+        for (name, offered) in offered {
             let record = &sim.by_name(name).unwrap().record;
             let id = trader_like(record).unwrap().specific_character.clone();
             let visual = model_name(&characters.specific_character(&id).unwrap().visual);
-            assert_eq!(named(name).visual.to_lowercase(), visual, "{name}");
+            let drawn = named(name).visual.to_lowercase();
+            assert_eq!(drawn, visual, "{name}");
+            assert!(offered.contains(&drawn.as_str()), "{name}: {drawn}");
         }
         for name in ["esc_wolf", "esc_trup_scene", "esc_suicidal_flesh"] {
             named(name);

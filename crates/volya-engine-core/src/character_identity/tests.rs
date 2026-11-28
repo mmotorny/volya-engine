@@ -342,6 +342,22 @@ fn a_class_without_defaults_is_an_assertion_failure() {
 }
 
 #[test]
+fn setting_an_empty_id_is_an_assertion_failure() {
+    // Section 3: before any step.
+    let mut w = World::new(vec![], vec![], 1);
+    let mut r = trader("p");
+    let before = r.clone();
+    let mut in_use = InUse::default();
+    let e = w
+        .identities()
+        .set(&mut r, &description("", "novice"), None, Some(&mut in_use))
+        .unwrap_err();
+    assert!(FailedCheck::of(&e).is_some());
+    assert_eq!(r, before);
+    assert_eq!(in_use.len(), 0);
+}
+
+#[test]
 fn rank_and_reputation_bound_the_candidates() {
     let ranked = |id: &str, rank: i32, reputation: i32| SpecificCharacter {
         rank,

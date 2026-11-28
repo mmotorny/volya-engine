@@ -78,7 +78,8 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
 
 /// The visual name an online object shows (`OV` 2): the record's
 /// Visual block, which a stalker's or trader's specific character has
-/// already set (docs/behavior/character-identity.md 3 step 2, 4.2);
+/// already set (docs/behavior/character-identity.md 3 step 2, 4.2): a
+/// stalker shows its supplies choice's `visual` (`OV` 2 item 3);
 /// `None` without a model (`OV` 3: no Visual block, an
 /// empty name, or the actor, whose body the first-person view does not
 /// draw). The configuration's `visual` key is overridden by the Visual
@@ -86,8 +87,6 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
 /// `corpse_visual` (`OV` 2, item 4) is not handled: it applies only to
 /// a body with a non-zero death time, and every dead body of the shipped
 /// file has death time 0 (our omission).
-// TODO(#1020): `OV` 2 item 3 has a stalker keep its record's model; CH-2
-// 4.2 (believed) gives it its supplies choice's, which the New Game sets.
 pub fn visual_name(object: &LevelObject) -> Option<String> {
     let record = &object.record;
     if record.kind() == Kind::Player {

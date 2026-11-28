@@ -237,9 +237,10 @@ impl Identities<'_> {
     }
 
     /// Setting description `d` as `record`'s specific character (section
-    /// 3), in its order; 0 to 3 draws (first name, last name, money).
-    // TODO(#1020): setting an empty id is an assertion failure the spec
-    // does not state (gap 3); no description has an empty id (CH-1 3.1).
+    /// 3), in its order; 0 to 3 draws (first name, last name, money). An
+    /// empty id is an assertion failure before any step (section 3; the
+    /// spec states no text, so the description is ours); no choice passes
+    /// one.
     pub fn set(
         &self,
         record: &mut ObjectRecord,
@@ -247,6 +248,9 @@ impl Identities<'_> {
         masks: Option<&mut Vec<TerrainMask>>,
         in_use: Option<&mut InUse>,
     ) -> io::Result<()> {
+        if d.id.is_empty() {
+            return Err(failed("empty specific character id", None));
+        }
         let stalker = matches!(record.object, Object::Stalker(_));
         // Step 1.
         {
@@ -258,9 +262,9 @@ impl Identities<'_> {
             }
             trader.specific_character = d.id.clone().into();
         }
-        // Step 2.
-        // TODO(#1020): a `visual` that names no model (`ds_zomb_12`, gap 6)
-        // is set like any other; what showing it does is unstated.
+        // Step 2. The text is not checked: one that names no model file
+        // (`ds_zomb_12`, section 9) fails the model lookup when the
+        // character comes online.
         if !d.visual.is_empty() {
             let model: Text = model_name(&d.visual).into();
             match &mut record.object {
