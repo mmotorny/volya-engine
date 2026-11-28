@@ -24,7 +24,8 @@ Builds on (not repeated):
   rules for contacts with movable bodies;
 - `docs/formats/level-cform.md` (cited as `cform`): the static mesh, its triangles' front side (2.3), the game
   materials and their flags (3), the contact properties (4.2), the player's body (5);
-- `docs/behavior/trader-door.md` (cited as `door`).
+- `docs/behavior/player-body-contacts.md` (cited as `pbc`): the player's rules for movable bodies, the outer
+  sphere.
 
 Conventions:
 
@@ -75,7 +76,7 @@ For a pair met in the pass of object A, B being the other [P6]:
   most `1500 − jA − jB` of them.
 - The library collides **A's collision space first and B's second**, asking for at most 810 contacts and using
   at most the first 809 (`world` 4.2) [P6]. The library collides space with space as public 0.5.0 does (every
-  geometry of one with every geometry of the other whose bounds overlap; `door` 3.1).
+  geometry of one with every geometry of the other whose bounds overlap; `library` 6.1).
 - Each contact is then handled as section 2 states; a contact still "made" at the end becomes a contact joint.
 - If at least one contact joint was made, B's group is merged into A's for the rest of the step (`world` 4.2;
   1.6 for the solver requests), and B, if not active, is made active (woken; 1.5) [P6, T2, SR-B12].
@@ -494,7 +495,7 @@ box is that of its four shapes, the outer sphere included. In a pair met in its 
 first geometries, so contact normals point from the movable body towards the player's shape; in a pair met in
 the other object's pass (that object active and earlier in the active objects) the order and the normal's sign
 are reversed. Its contact rules for movable bodies (the touch flag, traction 1, the normal softening) are PH-8's
-(`door` 3.3, `step`). It has no motion rays [P9]. The liquid damping reaches it (2.4: through its pre-step)
+(`pbc` 2, `step`). It has no motion rays [P9]. The liquid damping reaches it (2.4: through its pre-step)
 [C5]. Its class word never gets 0x8, 0x20 or 0x200 (only shells' setters write them) [R3, R6].
 
 **Material.** Its four shapes get material index 0 (`default`) when the body is made (`cform` 5.1) [M1]. The
@@ -544,8 +545,8 @@ What the game does, from the data and sections 1 – 6:
    kept contacts join the player's body and the leaf's body, in the player's group; the door's group merges in
    (carrying its exact-solver request, 1.6) and the door is woken by the first kept contact [C3, T2] (1.5): the
    player's bottom sphere, torso cylinder or head sphere touching the resting door wakes it in that step (their
-   contacts are kept, `door` 3.1); the outer sphere's overlap alone does not (its contacts only set the "blocked"
-   flag, `door` 3.1) [SR-B12b]. From the merge on, the player's body itself requests the exact solver
+   contacts are kept, `pbc` 9); the outer sphere's overlap alone does not (its contacts only set the "blocked"
+   flag, `pbc` 6) [SR-B12b]. From the merge on, the player's body itself requests the exact solver
    (**believed**, 1.6).
 6. **Not involved.** Motion rays (neither object has the ray mark), liquid damping, the level collision of the
    leaf, the group limits (two small groups).
@@ -556,7 +557,6 @@ player's rules of PH-8.
 
 ## 8. Corrections to approved specifications
 
-- `door` 3.2, which takes only active objects as collided: resting objects are collided too (1.5).
 - `world` 4.2 ("no code sets the exact-solver mark"): a merge carries a group's exact-solver request into the
   colliding object's requests (1.6); fixed bones set it (`shells` 3.5).
 
@@ -585,8 +585,8 @@ player's rules of PH-8.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd` (merged view); binary `bin\xrGame.dll`.
 - Data examined: `gamemtl.xr` (materials `default`, `objects\large_metal_trash`, `creatures\actor`),
-  `config\creatures\actor.ltx` (section `actor`), the trader's door record and model (through the trader-door
-  checks' readers).
+  `config\creatures\actor.ltx` (section `actor`), the trader's door record and model (read with the record layouts of
+  `sav.md` 7.4 and the bone data of `bone-physics.md`).
 - Public material: ODE 0.5.0 as released (its source, `include/ode/contact.h` and the collision utilities).
 - `bin\ode.dll`'s export table (its cylinder geometries).
 - Analysis: static analysis of `bin\xrGame.dll` (headless decompilation and instruction listings with Ghidra) of
