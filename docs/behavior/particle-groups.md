@@ -15,9 +15,10 @@ and member flag word; "member", "effect name", "per-particle child name", "birth
 "start time", "stop time" and "time limit" below are P1's), the particle lifecycle specification P2 (an effect
 instance: placement by a matrix *M*, a velocity **w** and a mode, world or local, P2 5.1; play, deferred and immediate
 stop, playing, length, P2 7; the update with *e* ms, P2 8; the particle list, its birth and death notices and the
-particle's position **x** and previous position **x**ₚ, P2 3), `docs/behavior/level-objects.md` (matrix convention).
+particle's position **x** and previous position **x**ₚ, P2 3), `docs/behavior/object-visual-and-transform.md` (matrix
+convention).
 
-Conventions: matrices in the row-vector convention of level-objects.md (a point **p** is placed as [**p** 1] · *M*;
+Conventions: matrices in the row-vector convention of object-visual-and-transform.md (a point **p** is placed as [**p** 1] · *M*;
 rows 0 – 2 are the axes, row 3 the translation). Arithmetic is IEEE single precision (`f32`) unless stated. Times are
 in seconds, *e* in whole milliseconds. "Member *i*" is the *i*-th member of the record (0-based, stored order). Every
 fact carries the name of the check that reproduces it, a script in `checks/particle-groups/` of the dirty workspace;

@@ -22,14 +22,15 @@ Builds on (not repeated here):
     level vertex (section 5.1); progress along a path edge is not saved (section 7.5).
   - sav.md 7.4.1 describes the four location fields of the Monster-like update as offline movement
     fields. Offline travel (section 7) neither reads nor writes them (section 5.4).
-- `docs/behavior/start-position.md`: locating records in `spawns\all.spawn`; the world coordinate system.
+- `docs/formats/sav.md` 10.1: locating records in `spawns\all.spawn`; `docs/behavior/world-coordinates.md` 1:
+  the world coordinate system.
 - `docs/behavior/level-loading.md` (2.2, 5.11): the first fields of `game.graph`, given in full here.
 - `docs/formats/chunks.md` (chunk sequences, lookup by id), `docs/formats/ltx-config.md`.
 
 Conventions: little-endian; `u8`/`u16`/`u32` unsigned, `u24` an unsigned 3-byte integer; `float` IEEE 754
 single; `float3` three floats (x, y, z); `stringZ` zero-terminated (Windows-1251); `guid` 16 raw bytes
 compared as a whole. Sizes in bytes. Game time is in game milliseconds (sav.md 12). Positions are level
-coordinates (start-position.md section 1) unless called global. "The actor" is the player's object
+coordinates (world-coordinates.md section 1) unless called global. "The actor" is the player's object
 (section `actor`). Configuration keys without a section are read from the object's own configuration
 section (the section named in its spawn packet).
 
@@ -390,7 +391,7 @@ From section `[alife]` of `config\alife.ltx` (dbb) [SW-1]:
 
 The **online distance** is *d* · (1 − *f*) = **135 m**, the **offline distance** *d* · (1 + *f*) = **165 m**
 [SW-1]. The distance is the Euclidean distance in three dimensions between the object's position and the
-actor's position (at the start: the positions stored in the spawn packets, start-position.md section 3.1).
+actor's position (at the start: the positions stored in the spawn packets, sav.md section 7.2).
 The scripts can change the switch distance at run time (`alife():switch_distance`); none does before the
 first frame of a New Game (believed: no call is reachable from the start-game callbacks).
 
@@ -855,7 +856,7 @@ state flags 0xFFFFFFBB), and the bodies `esc_stalker_corpse`, `esc_tutorial_dead
   text decoded every file named above, checked every count, sum and invariant of section 9, and ran the
   path search of 7.4 against a shortest-path search.
 - Section 6.5, the limits of 6.2 with their checks and section 9.1 were moved here unchanged on 2026-11-27
-  from sections 2.2 – 2.6, 7.1 and 8 of `level-objects.md` (dated 2026-11-24), when that specification was
+  from sections 2.2 – 2.6, 7.1 and 8 of the earlier object specification (dated 2026-11-24), when that specification was
   split by system. Their analysis: static analysis of the shipped binary for the switch predicates of every
   simulation object kind and the switching rule and the renderer match of hanging lamps; reading of the
   game's scripts (`class_registrator.script`, `se_*.script`, `utils.script`, `xr_gulag.script`,

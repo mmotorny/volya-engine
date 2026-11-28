@@ -19,9 +19,10 @@ Conventions:
 - A **video restart** is the console command `vid_restart` (OS section 5.4): the graphics device is reset
   while the game keeps running. **Device creation** happens once, at startup.
 - "Takes effect **at once**" means: the picture of the next frame drawn after the set shows the new value.
-- Abbreviations of approved specifications: SS `docs/behavior/static-shading.md`, SP
-  `docs/behavior/start-position.md`, SPIC `docs/formats/save-picture.md`, LV `docs/formats/level.md`,
-  OGF `docs/formats/ogf.md`, LO `docs/behavior/level-objects.md`, DL `docs/behavior/dynamic-lights.md`,
+- Abbreviations of approved specifications: SS `docs/behavior/static-shading.md`, VP
+  `docs/behavior/view-projection.md`, SPIC `docs/formats/save-picture.md`, LV `docs/formats/level.md`,
+  OGF `docs/formats/ogf.md`, MS `docs/behavior/model-shading.md`, ODL `docs/behavior/object-detail-level.md`,
+  DL `docs/behavior/dynamic-lights.md`,
   GL `docs/behavior/glows.md`, TO `docs/behavior/torch.md`, SKY `docs/behavior/sky.md`, CF
   `docs/formats/level-cform.md`, LL `docs/behavior/level-loading.md`, CH `docs/formats/chunks.md`.
 
@@ -43,8 +44,8 @@ specified (section 3 proposes where it goes).
 | Variable | Reg. | Kind, range | Read by the first renderer | Effect | Specified | Open |
 |---|---|---|---|---|---|---|
 | `rs_c_gamma`, `rs_c_contrast`, `rs_c_brightness` | E | real 0.5–1.5 [RS-1] | not for drawing: a display gamma ramp set by the engine [RS-5]; the renderer uses the table only for the screen capture (SPIC 4.1) [RS-11] | at once [RS-5] | the ramp's values: SPIC 4.1 | what the ramp applies to and when it is re-applied (2.1) |
-| `rs_vis_distance` | E | real 0.4–1.5 [RS-1] | through the far plane [RS-10, RS-11] | at once, smoothed (SP 7.2) | SP 7.1–7.2, SS 9.2, SKY 8, GL [RS-12] | nothing |
-| `r__geometry_lod` | R | real 0.1–1.2 [RS-1] | yes [RS-10, RS-11] | at once (per frame) [RS-10] | static geometry: SS 10.2, LV 9.4, OGF 8 [RS-12] | objects (LO 4.9, 5.1) (2.3) |
+| `rs_vis_distance` | E | real 0.4–1.5 [RS-1] | through the far plane [RS-10, RS-11] | at once, smoothed (VP 1, 2.2) | VP 2.1–2.2, SS 9.2, SKY 8, GL [RS-12] | nothing |
+| `r__geometry_lod` | R | real 0.1–1.2 [RS-1] | yes [RS-10, RS-11] | at once (per frame) [RS-10] | static geometry: SS 10.2, LV 9.4, OGF 8 [RS-12] | objects (MS 3; ODL 3, 4) (2.3) |
 | `r__detail_density` | R | real 0.2–0.6 [RS-1] | yes [RS-10, RS-11] | when a detail slot is built (2.4) | — [RS-12] | all of detail objects (2.4) |
 | `texture_lod` | E | integer 0–4 [RS-1] | yes, when textures load [RS-8] | at the next texture load; video restart reloads (OS 5.4) | value 0 only: SS 4.2; one-level files: SPIC 6 [RS-12] | levels dropped per value and list (2.5) |
 | `r__tf_aniso` | R | integer 1–16 [RS-1] | yes [RS-7] | at once [RS-7] | value used: SS 4.4 [RS-12] | timing, restart override (2.6) |
@@ -60,7 +61,7 @@ specified (section 3 proposes where it goes).
 | `ph_iterations` | G | integer 15–50 [RS-1] | no (physics solver) | at once [RS-1] | CF 6.1 [RS-12] | nothing for the picture |
 | `r1_dlights`, `r1_dlights_clip` | R | [RS-1] | yes [RS-11] | DL | DL [RS-12] | nothing |
 | `r1_glows_per_frame` | R | integer 2–32 (GL 5) [RS-12] | yes (GL) | GL | GL [RS-12] | nothing |
-| `r1_lmodel_lerp` | R | real 0–0.333 [RS-1] | yes [RS-11] | LO | LO [RS-12] | nothing |
+| `r1_lmodel_lerp` | R | real 0–0.333 [RS-1] | yes [RS-11] | MS 7 | MS 7 [RS-12] | nothing |
 | `r1_pps_u`, `r1_pps_v` | R | real −1–1 [RS-1] | yes, presentation quad [RS-9, RS-11] | per frame [RS-9] | — | (2.7) |
 | `r2_sun_lumscale` | R | DL 8 | yes [RS-10, RS-11] | DL | DL 3.1, 8 [RS-12] | nothing |
 | `rs_stats` | E | on/off [RS-1] | no: engine statistics overlay [RS-11] | at once (per frame) [RS-11] | — | (2.11) |
@@ -91,14 +92,14 @@ They therefore have no effect on the picture of the first renderer.
 `rs_vis_distance` is read in one place, where the environment is blended to give the far plane, every
 frame [RS-10]; the renderer does not import it [RS-11]. Its whole effect (far plane = blended far plane ×
 the value, then smoothed, and everything that depends on the far plane: clipping, glows, sky, rain
-sounds) is in SP 7.1–7.2, SS 9.2, SKY 8, GL and `docs/behavior/sound-rain-thunder.md` [RS-12]. Nothing remains open.
+sounds) is in VP 2.1–2.2, SS 9.2, SKY 8, GL and `docs/behavior/sound-rain-thunder.md` [RS-12]. Nothing remains open.
 
 ### 2.3 Geometry detail level
 
 `r__geometry_lod`, `r1_ssa_lod_a` and `r1_ssa_lod_b` are read by the renderer's per-frame visibility
 pass [RS-10]; a new value takes effect at once. Their use for static geometry (visibility threshold,
 distant-billboard cross-fade, progressive detail) is in SS 10.2, LV 9.4 and OGF 8 [RS-12]. Open: the
-detail level and small-object test of **objects** (LO 4.9 and 5.1 mark them unestablished) [RS-12].
+detail level and small-object test of **objects** (the earlier object specification's 4.9 and 5.1 marked them unestablished; now MS 3, ODL 3 – 4) [RS-12].
 
 ### 2.4 Grass density
 
@@ -210,7 +211,7 @@ notice first. Each item names what it covers and what it builds on.
 | 4 | `frame-presentation` (behaviour) | the off-screen target with `r__supersample`, its presentation quad (`postprocess`, `c_brightness`, `r1_pps_u`, `r1_pps_v`), when the target is used | SS 10.2 | the shipped `user.ltx` has `r__supersample 2`, so the default picture goes through it; the game's post-process effects need their own scope |
 | 5 | `texture-quality` (behaviour) | `texture_lod`: levels dropped (table of 2.5), the list match, files with few levels, when loads pick up a change | SS 4.2, SPIC 6, OS 5.4 | with the shipped `texture_lod 0` nothing is dropped |
 | 6 | `texture-filtering-settings` (behaviour) | `r__tf_aniso`, `r1_tf_mipbias`: application on set and status, at creation, the engine defaults after a video restart, interaction with shader passes | SS 4.4 | may be merged into 5 |
-| 7 | `object-detail-level` (behaviour) | `r__geometry_lod` and the size thresholds for objects (LO 4.9, 5.1) | LV 9.4, OGF 8, LO | |
+| 7 | `object-detail-level` (behaviour) | `r__geometry_lod` and the size thresholds for objects (MS 3; ODL 3, 4) | LV 9.4, OGF 8, MS | |
 | 8 | `display-mode` (behaviour) | `rs_fullscreen` (window style), `rs_refresh_60hz`, `rs_v_sync` (no effect), 32-bit colour, `vid_mode` at creation and restart | OS 7.2, OS 9 | changes no pixel of a frame |
 | 9 | `statistics-overlay` (behaviour) | `rs_stats` | | developer overlay, off by default |
 

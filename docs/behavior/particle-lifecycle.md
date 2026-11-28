@@ -12,9 +12,9 @@ the program or the data is marked **believed**.
 
 Builds on (not repeated): `docs/formats/particles-xr.md` (P1: the effect record, flag word, action list, action
 flag word, field layouts of section 4.3, regions of section 5; "field" and "region" below are P1's),
-`docs/behavior/level-objects.md` (matrix convention).
+`docs/behavior/object-visual-and-transform.md` (matrix convention).
 
-Conventions: matrices in the row-vector convention of level-objects.md: a point **p** is placed as [**p** 1] · *M*
+Conventions: matrices in the row-vector convention of object-visual-and-transform.md: a point **p** is placed as [**p** 1] · *M*
 (rows 0 – 2 of *M* are the transformed axes, row 3 the translation), a direction **d** as [**d** 0] · *M*. ·
 between vectors is the dot product, × the cross product, |**a**| the length. Arithmetic is IEEE single precision
 (`f32`) unless stated. floor(*x*) is the largest integer ≤ *x*; trunc(*x*) drops the fraction toward zero. Times

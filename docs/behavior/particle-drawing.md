@@ -19,7 +19,7 @@ Builds on (not repeated):
 - `docs/behavior/static-shading.md`: shader resolution (its sections 1, 3.4, 4), samplers (4.4), the script
   vocabulary (3.4), fog (9.3), fixed states (10.1), the frame order (10.3), the settings (11).
 - `docs/formats/level.md` section 9: sectors, portals and the screen threshold *T*\_min (its section 9.4).
-- `docs/behavior/level-objects.md`: the row-vector matrix convention.
+- `docs/behavior/object-visual-and-transform.md`: the row-vector matrix convention.
 
 Conventions: vectors are rows; a point **p** is mapped by a matrix *M* as [**p** 1] · *M*, a direction **d** as
 [**d** 0] · *M* (rows 0 – 2 of *M* are the mapped axes, row 3 the translation). · is the dot product, × the cross

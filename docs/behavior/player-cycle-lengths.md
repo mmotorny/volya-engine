@@ -15,7 +15,7 @@ Builds on (not repeated here):
   (section 3), motion names (4.2) and partitions (4.3), and the evaluation at a time *t*, which repeats
   beyond the motion's length (5.1).
 - `docs/behavior/player-state.md` section 2: the player's model `actors\hero\stalker_novice`.
-- `docs/behavior/level-objects.md` 3.1: model-file lookup. `docs/formats/chunks.md`: chunks.
+- `docs/behavior/object-visual-and-transform.md` 1: model-file lookup. `docs/formats/chunks.md`: chunks.
 
 Conventions as in skeletal-motions: little-endian; f32(*x*) is *x* rounded to single precision;
 floor(*x*); min(*a*, *b*). Times in seconds unless given in milliseconds (ms).

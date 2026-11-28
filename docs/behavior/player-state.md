@@ -15,8 +15,9 @@ It builds on:
 - `docs/behavior/player-movement.md` (cited as `movement`): the movement request and state flags
   (section 3), the "runs" test (4.1), sprint (4.3), jump (4.4), the unable-to-move check (5, item 4), and
   its out-of-scope list (10);
-- `docs/behavior/level-objects.md`: the player's record is object index 63 of `spawns\all.spawn`, the only
-  record of class id `O_ACTOR`;
+- `sav` section 10.1: the player's record is object index 63 of `spawns\all.spawn`; it is the only record of
+  class id `O_ACTOR` (home unestablished: `sav` 10.1 states it is the only record with section `actor`, and
+  `docs/behavior/offline-simulation.md` 9.1 that it is the only `O_ACTOR` record of `l01_escape`);
 - `docs/formats/ltx-config.md`: configuration files, sections, inheritance and value syntax.
 
 Conventions:
@@ -95,7 +96,7 @@ player's record (object index 63, section `actor`) supplies, unchanged:
 | money | Trader-like block | 40 |
 | character profile | Trader-like block | `actor` |
 | model | Visual block | `actors\hero\stalker_novice` |
-| position, angles, game vertex, level node | spawn packet, Object block | start-position specification |
+| position, angles, game vertex, level node | spawn packet, Object block | `sav` 10.2 |
 
 The record's custom data is the LTX text (CR LF line ends, 99 bytes without the terminating zero):
 
@@ -610,3 +611,8 @@ scripted invulnerability, and the interface showing these values.
   copies with an independent LTX reader, which also recomputed the derived numbers of section 7 and checked
   every fact of section 7. The program was not executed.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
+
+## Gaps found in review
+
+- The uniqueness of the `O_ACTOR` record over all of `spawns\all.spawn` (builds-on list) has no home in an approved
+  specification; its citation is marked home unestablished.

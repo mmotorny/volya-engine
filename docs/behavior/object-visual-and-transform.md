@@ -14,8 +14,9 @@ Builds on (not repeated here):
 - `docs/formats/sav.md`: the object records of `spawns\all.spawn` (section 7: spawn packet, object state
   blocks, layouts per class id). Field and block names below ("Visual block", "Trader-like", "health", …) are
   that specification's.
-- `docs/behavior/start-position.md`: locating the records, the world coordinate system (section 1), the
-  spawn packet's position and angles (section 3.1).
+- `docs/formats/sav.md`: locating the records (section 10.1), the spawn packet's position and angles
+  (section 7.2).
+- `docs/behavior/world-coordinates.md`: the world coordinate system (section 1).
 - `docs/formats/ltx-config.md` (section 10: the path aliases `$level$` and `$game_meshes$`).
 - `docs/behavior/model-shading.md` section 2: the pose at rest (every vertex drawn at its stored position
   transformed by *X*), used for the world boxes of section 5.
@@ -84,7 +85,7 @@ The actor's own body is not drawn in the first-person view (believed).
 ## 4. Transform
 
 The object's transform *X* (model space to world) is built from the spawn packet's position **p** and angles
-(*a*₀, *a*₁, *a*₂) (start-position.md section 3.1). With
+(*a*₀, *a*₁, *a*₂) (sav.md section 7.2). With
 
     sx = sin a0, cx = cos a0,  sy = sin a1, cy = cos a1,  sz = sin a2, cz = cos a2,
 
@@ -95,7 +96,7 @@ the rotation rows are
     R[2] = ( −cx·sy,               sx,     cx·cy            )
 
 and *X* = [[R[0], 0], [R[1], 0], [R[2], 0], [**p**, 1]]: a model-space point **v** goes to world as
-**v** · R + **p**. Model space uses the world's axes and units (start-position.md section 1). This is the
+**v** · R + **p**. Model space uses the world's axes and units (world-coordinates.md section 1). This is the
 transform at spawn for every kind with a model. (An item whose update packet carries a physics state, Item
 update `f` ≠ 0 in sav.md 7.4.1, is believed to take its position and orientation from that state instead;
 none of the online items of `l01_escape` has one.)
@@ -167,7 +168,7 @@ transposed rotation 56 (of 105 with a triangle) [OV-10, OV-11].
 
 ## 7. Provenance
 
-- Date: 2026-11-24 (as sections 3 and 7.1 – 7.2 of `level-objects.md`); moved into this specification
+- Date: 2026-11-24 (as sections 3 and 7.1 – 7.2 of the earlier object specification); moved into this specification
   unchanged on 2026-11-27 when that specification was split by system.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\xrGame.dll`, `bin\xrRender_R1.dll`, `bin\XR_3DA.exe`.

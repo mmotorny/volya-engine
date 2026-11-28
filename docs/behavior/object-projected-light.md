@@ -333,7 +333,7 @@ alpha) replaces it.
   the shadow-receive query; arithmetic of the conversions emulated in the checks. The checks in
   `checks/object-light/` reproduce every fact.
 - Revised 2026-11-27: the sky and sun visibility rays (5.2 step 1) and the smoothing with its initial and
-  converged values (5.3) were moved here unchanged from section 5.4 of `level-objects.md` (dated 2026-11-24,
+  converged values (5.3) were moved here unchanged from section 5.4 of the earlier object specification (dated 2026-11-24,
   revised 2026-11-26; static analysis of the per-object light tracking, constants and direction table read
   from the binary) when that specification was split by system; references to it now name
   `model-shading.md` and `object-visual-and-transform.md`.

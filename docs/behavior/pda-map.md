@@ -9,7 +9,7 @@ is spec PD-4 (`pda-map`) of the approved scoping spec `pda-scope` (section 4).
 
 It builds on the approved specifications `ui-layout`, `text-and-fonts`, `ltx-config`,
 `colour-animations` (`docs/formats/`), `options-screens` (mouse events, the scroll bar of 4.8, the key
-cell of 11.4), `save-load-screens` (wheel direction), `console-key-bindings` (key names), `start-position`
+cell of 11.4), `save-load-screens` (wheel direction), `console-key-bindings` (key names), `world-coordinates`
 and `player-movement` (position, yaw), `hud-scope` (spec 11, the map locations) and `pda-scope`
 (`docs/behavior/`), cited by name. Of the scope's other proposed specs it relies on PD-1 (the PDA
 window: when a tab is shown and which events reach it), PD-2 (the looks of the frames, frame lines,
@@ -20,7 +20,7 @@ Conventions:
 
 - **Units** are those of the 1024 × 768 virtual screen of `ui-layout`. **Global units** are the
   coordinates of the global picture's `bound_rect` (section 1.2). **World** positions are (x, z) of the
-  level, as in `start-position`; *yaw* is as defined there (0 looking along +z, positive turning towards
+  level, as in `world-coordinates`; *yaw* is as defined there (0 looking along +z, positive turning towards
   +x).
 - Mouse events are named as in `options-screens` (*left press*, *move*, *wheel up*, *wheel down*,
   *double click*, …); keys by their DirectInput scan codes and the names of `console-key-bindings`.
@@ -172,7 +172,7 @@ aspect, marks do not lie where the stretched picture shows the place: for 15 of 
 the aspects agree within 0.1 %, `l08u_brainlab`'s `global_rect` is 4.74 times taller relative to its
 `bound_rect` (c2 C7).
 
-Example: the New Game start point (−246.72630, z −134.43387; `start-position`) is at global (376.559,
+Example: the New Game start point (−246.72630, z −134.43387; `world-coordinates` 4) is at global (376.559,
 2300.566) (c2 C8).
 
 ## 3. Showing and hiding

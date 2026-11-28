@@ -11,21 +11,22 @@ Conventions:
 
 - Builds on the scoping specification (`docs/behavior/level-loading.md`, §2.6, §5.8, §5.15), the
   static-shading specification (`docs/behavior/static-shading.md`, here "SS"; its §9 weather inputs,
-  hourly blending and fog are used, not repeated), the start-position specification
-  (`docs/behavior/start-position.md`, here "SP"; eye, camera basis, projection, far plane) and the LTX and
-  archive specifications.
-- Coordinates are world (level) metres, +y up, left-handed (SP §1). Vectors are rows; `·` is the dot
+  hourly blending and fog are used, not repeated), the world-coordinates
+  specification (`docs/behavior/world-coordinates.md`; coordinates, angles, camera basis), the view-projection
+  specification (`docs/behavior/view-projection.md`; view, projection, far plane), the player-movement
+  specification (`docs/behavior/player-movement.md`; eye) and the LTX and archive specifications.
+- Coordinates are world (level) metres, +y up, left-handed (world-coordinates.md §1). Vectors are rows; `·` is the dot
   product, `×` the ordinary cross product of components; `lerp(a,b,t) = a + (b − a)t`;
   `sat(x) = clamp(x, 0, 1)`; `trunc` rounds toward zero.
 - "Byte of x" means `trunc(255·x)` stored in 8 bits. Where this document says "clamped byte" it means
   `clamp(trunc(255·x), 0, 255)`. A Direct3D colour (D3DCOLOR) packs bytes as A (bits 24–31), R (16–23),
   G (8–15), B (0–7); a program receiving it as a colour input sees (R, G, B, A)/255 in (x, y, z, w).
 - Matrices act on row vectors (`p · M`). "WVP" is world × view × projection; view and projection are those
-  of SP §6, §7.
+  of view-projection.md §1.1, §2.
 - Render and sampler states are named by meaning, with the Direct3D 9 public enumeration value in brackets
   where useful.
 - E is the eye position, F the camera viewing direction, r the camera right vector and u' the camera up
-  vector of SP §6 (all unit vectors); T is the global time in seconds (the same clock as SS §6 `time`); dt
+  vector of view-projection.md §1.1 (all unit vectors); T is the global time in seconds (the same clock as SS §6 `time`); dt
   is the frame time in seconds.
 
 ## 1. The start: time, weather, sections, blend weight
@@ -36,9 +37,9 @@ Conventions:
 | Weather | `default` → cycle section `[sect_default_weather]` (24 hourly sections) | scoping §2.6 |
 | Bracketing sections | A = `[default_weather_05]` (05:00:00), B = `[default_weather_06]` (06:00:00) | `config\weathers\weather_default.ltx` |
 | Blend weight | t = 0.5 at 05:30:00 exactly (SS §9.2); t grows by 1/3,600 per game second | |
-| Eye | (−246.72630, −23.263261, −134.43387) | SP §4 |
-| View direction F | (0.984797, −0.0043165, 0.173655) | SP §5 |
-| Environment modifiers in range | records 1 and 6 of `levels\l01_escape\level.env_mod`, weights 1.59990 and 1.57357, Σw = W = 3.17347 | §9; SP §7.1 |
+| Eye | (−246.72630, −23.263261, −134.43387) | player-movement.md §7.1 |
+| View direction F | (0.984797, −0.0043165, 0.173655) | world-coordinates.md §4 |
+| Environment modifiers in range | records 1 and 6 of `levels\l01_escape\level.env_mod`, weights 1.59990 and 1.57357, Σw = W = 3.17347 | §9; view-projection.md §2.3 |
 
 Every frame the environment is blended from A, B, t and the modifiers in range (SS §9.2, extended by §3
 below). All facts below that depend on the start use these inputs.
@@ -127,7 +128,7 @@ Blended at t = 0.5 with the two modifiers of §1:
 | clouds colour, opacity | (0.44667, 0.33150, 0.31535), 0.5 → bytes (113, 84, 80), 127 |
 | L_sun_dir (SS §9.1, §9.2) | (0.91318, −0.20791, 0.35054); sun direction D_s = −L_sun_dir |
 | sun colour | (0.759, 0.380, 0.102) |
-| far plane | 254.478 m (SP §7.1) |
+| far plane | 254.478 m (view-projection.md §2.3) |
 | fog colour | (0.31374, 0.31702, 0.32380) → fog bytes (80, 80, 82) |
 | fog density, near, far | 0.97604; fog_near = 7.1284 m, fog_far = 346.5 m (SS §9.2) |
 | ambient | (0.04814, 0.05170, 0.05525) |
@@ -344,7 +345,7 @@ names written with `.tga` lose the extension (SS §4.1).
 
 ### 7.3 Visibility and placement
 
-Every frame, with D = far plane (§4; SP §7.1), q = 0.75·D and c = F · D_s:
+Every frame, with D = far plane (§4; view-projection.md §2.1), q = 0.75·D and c = F · D_s:
 
 - If c ≤ 0.01, nothing of §7 is drawn this frame.
 - Otherwise the axis point is P_a = E + q·F and the sun point is P_s = E + (q / c)·D_s (the point in
@@ -406,7 +407,7 @@ drawn over everything and fade with v instead.
 
 ### 8.1 Worked values: the outdoor fidelity view
 
-Camera of the fidelity view `outdoor`: eye (−180, 5, −120), yaw 1.2, pitch 0.15 (angles as SP §5: view
+Camera of the fidelity view `outdoor`: eye (−180, 5, −120), yaw 1.2, pitch 0.15 (angles as world-coordinates.md §2, §3: view
 direction (0.922, −0.149, 0.358)), vertical field of view 67.5°, 1024 × 768 (checks `od_outdoor.py`
 OD-3, OD-4 in the dirty workspace's `checks/object-light/`):
 
@@ -451,7 +452,7 @@ file is optional (no file: no modifiers); chunks are read by id 0, 1, 2, … in 
 
 Distances from the start eye: record 1 0.8002 m (weight 1.59990), record 6 0.8529 m (1.57357); every
 other record is out of range. Their effect on the start view (values in §4): the far plane drops from 350
-to 254.478 m (SP §7.1); the sky colour rises from 0.45 to about 0.68–0.71 (record 1's sky colour is 1); fog
+to 254.478 m (view-projection.md §2.3); the sky colour rises from 0.45 to about 0.68–0.71 (record 1's sky colour is 1); fog
 density rises to 0.976 (fog starts at 7.13 m instead of 29.75 m); fog colour, ambient and hemi colour
 change as listed in §4 (these feed SS §7, §9.3). Sun direction and colour, clouds and the sky textures are
 not affected by modifiers.

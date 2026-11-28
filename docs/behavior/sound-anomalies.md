@@ -23,7 +23,7 @@ Builds on (not repeated):
   and its elapsed time, fast mode and the scheduled update (section 6), the switching rule and how a change of
   state travels to the game's server and back (section 7). P9 owns the zones' on/off state; this
   specification only adds what the sounds need.
-- `docs/behavior/level-objects.md` (which objects are present), `docs/formats/sav.md` (the records),
+- `docs/behavior/offline-simulation.md` (which objects are present, section 6.5), `docs/formats/sav.md` (the records),
   `docs/formats/ltx-config.md` (key lookup with inheritance; reading a missing key is fatal).
 - `docs/behavior/particle-lifecycle.md` section 2.1 (the random generator, 15-bit values 0 … 32767).
 

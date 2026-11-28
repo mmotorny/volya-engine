@@ -251,7 +251,7 @@ Synthetic (`vectors.py`): one triangle (−50, 0, −50), (50, 0, 50), (50, 0, �
 | S6 | 0x30000 | (1, 0.5, 0) | particles 0 and 1 of S5 | particle 1 (the last) removed, count 1; slot 1 still holds it, **x** (0, −0.49, 0) |
 | S7 | 0x90000 | (1, 0.5, 0) | an object's shape on the segment from **x**ₚ to **x**; **w** (4, −2, 3) | **n** = (0, 1, 0): **w** (4, 1, 3); with 0x10000 alone the object is not tested and **w** is unchanged |
 
-On `levels\l01_escape\level.cform` (`level_vectors.py`), at the actor's start position (start-position.md;
+On `levels\l01_escape\level.cform` (`level_vectors.py`), at the actor's start position (sav.md 10.2;
 level-cform.md 7.1: on its vertical line the floor triangle 424,895, front normal (−0.00437, 0.99999, −0.00007),
 and the ceiling triangle 424,977, front normal y −0.99341), with **x**ₚ = (−246.72630, −23.793261, −134.43387),
 1 m above the stored position:

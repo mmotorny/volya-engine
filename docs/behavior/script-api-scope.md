@@ -15,8 +15,8 @@ Builds on (not repeated here):
   `config\script.ltx`, startup (engine registration, then `_G`, then the class registrators), the
   comment removal of its section 1.5, and the 250 scripts the game can be led to load (its section 3),
   called **loadable** here.
-- `docs/behavior/level-objects.md` (which objects of `levels\l01_escape\` are online at the start, section 2),
-  `docs/behavior/offline-simulation.md` (creation order at New Game, section 8.1),
+- `docs/behavior/offline-simulation.md` (which objects of `levels\l01_escape\` are online at the start,
+  sections 6.5 and 9.1; creation order at New Game, section 8.1),
   `docs/behavior/player-state.md`, `docs/behavior/save-load-screens.md`.
 
 Conventions:
@@ -438,7 +438,7 @@ attributed by name (section 1), so a closure can name a spec the run does not ne
    `UPDATE_Read`, `on_before_register`, `on_register`, `on_spawn`, …) is **unestablished**; it is the
    subject of spec J.
 6. **Level objects and binders**: of the 671 objects of `l01_escape` online at the start
-   (level-objects.md 2.6), 367 have a section with `script_binding` (measured, [newgame_objects.py]):
+   (offline-simulation.md 9.1), 367 have a section with `script_binding` (measured, [newgame_objects.py]):
    `bind_physic_object.init` 206, `bind_restrictor.bind` 75, `bind_smart_terrain.bind` 41,
    `bind_stalker.init` 32, `bind_respawn.bind` 9, `bind_monster.bind` 2, `bind_stalker.actor_init` 1,
    `bind_heli.bind` 1. When an object's section has the key, the engine looks the function up and calls
@@ -584,8 +584,8 @@ All measured unless marked; `run_all.py` reproduces every number in this documen
 - Date: 2026-11-24 (revised after the second review the same day).
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build); `xrGame.dll` as identified
   above; the archive file tree of `gamedata.db0` … `gamedata.dbd` listed and extracted with the project's
-  archive tool; `spawns\all.spawn` records as decoded for the approved level-objects and
-  offline-simulation specs.
+  archive tool; `spawns\all.spawn` records as decoded for the approved offline-simulation
+  spec and an earlier object spec since split by system.
 - Analysis: a throwaway Lua tokenizer, scope tracker and call-closure builder over the 439 scripts; a
   parser of `scripts\lua_help.script`; scans of the configuration files; string searches of the files
   under `bin\`; static analysis of `xrGame.dll` with Ghidra (collecting the string references and

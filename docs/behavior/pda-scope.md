@@ -13,7 +13,7 @@ It builds on the approved specifications `ui-layout`, `text-and-fonts`, `ltx-con
 `sav`, `db-archive` (`docs/formats/`), `hud-scope`, `inventory-screen`, `options-screens`,
 `save-load-screens`, `console-key-bindings`, `console-window`, `player-state`, `player-movement`,
 `sound-notifications`, `level-loading`,
-`level-objects`, `script-loading`, `script-environment`, `script-api-scope`, `narrowed-specs-scope`
+`offline-simulation`, `script-loading`, `script-environment`, `script-api-scope`, `narrowed-specs-scope`
 (`docs/behavior/`), all cited by name.
 
 Conventions:
@@ -392,7 +392,7 @@ Order 12.
 contact's details (name, picture, community, reputation, relation to the player, rank), the online
 mark, and how the list follows the contact list as contacts come and go. Data: `pda_contacts_new.xml`,
 `pda_character.xml`. Builds on: PD-1, PD-2, `sound-notifications` 3 (the contact list),
-`level-objects`. Waits on: PD-14; characters' profiles (names, pictures; AI scope #279). Order 13.
+`offline-simulation`. Waits on: PD-14; characters' profiles (names, pictures; AI scope #279). Order 13.
 
 **PD-14 Character ratings shown** (`character-ratings`, format and behaviour). How a character's rank,
 reputation, community and the relation to the player are turned into the texts and pictures the PDA

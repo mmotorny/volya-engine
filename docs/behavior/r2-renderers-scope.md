@@ -14,8 +14,8 @@ Builds on (not repeated): `docs/behavior/level-loading.md` (section 6, renderer 
 kinds and the presets), `docs/formats/level.md`, `docs/formats/level-geom.md` (the role of `level.geomx`),
 `docs/formats/ogf.md` (chunk 22), `docs/behavior/static-shading.md` (`shaders.xr`, scripted definitions,
 texture resolution), `docs/behavior/dynamic-lights.md` (the light record, `level` chunk 6),
-`docs/behavior/light-shadows-projection.md`, `docs/behavior/glows.md`, `docs/behavior/level-objects.md`
-(hanging-lamp light flags), `docs/behavior/hanging-lamps.md`, `docs/behavior/torch.md`,
+`docs/behavior/light-shadows-projection.md`, `docs/behavior/glows.md`,
+`docs/behavior/hanging-lamps.md` (hanging-lamp light flags), `docs/behavior/torch.md`,
 `docs/behavior/sky.md`, `docs/behavior/particle-drawing.md`, `docs/formats/ltx-config.md`.
 
 Conventions: "the first renderer" is `bin\xrRender_R1.dll`, "the second renderer" `bin\xrRender_R2.dll`.
@@ -128,7 +128,7 @@ tags (`BmmDold ` 69, `S_SET   ` 51, `MODEL   ` 23, `MODELEbB` 11, `LmEbB   ` 5, 
 | bump maps | `textures\textures.ltx` `[specification]`: 4,519 entries, `bump_mode[none]` 3,516, `bump_mode[use:<name>]` 1,003 (179 of the named textures do not exist); 599 files `textures\…\*_bump.dds`, each with a `*_bump#.dds` companion; of the first level's 307 base textures, 194 have `use:` and 195 have a bump map by either route | `textures.py` |
 | material values | the `material[<value>]` of the 4,519 `[specification]` entries (values 0.0 – 3.8; 1.00 in 3,127 entries); whether the second renderer reads them is R7's to establish | `textures.py` |
 | small sky textures | the executable forms `<sky_texture>#small` for every weather section; each of the 18 distinct `sky_texture` values of `config\weathers\*.ltx` has one (74 `#small` textures in `textures\sky\`); only the second renderer names `env_s0` / `env_s1` | `textures.py`, `binary.py` B12 |
-| hanging lamps | all 745 lamp records (18 levels) have the second-renderer bit 0x08 (level-objects.md section 6); 709 of them lack the first-renderer bit 0x04, so they exist only for the second renderer; first level: 27 records, 22 of them second-renderer only; 627 have the shadow bit 0x02; 36 have a projected texture | `lamps.py` |
+| hanging lamps | all 745 lamp records (18 levels) have the second-renderer bit 0x08 (hanging-lamps.md section 2.2); 709 of them lack the first-renderer bit 0x04, so they exist only for the second renderer; first level: 27 records, 22 of them second-renderer only; 627 have the shadow bit 0x02; 36 have a projected texture | `lamps.py` |
 | torch keys | `range_r2`, `color_r2`, `omni_range_r2`, `omni_color_r2` (only in `config\models\objects\light_night.ltx`; torch.md); `bin\xrGame.dll` also names `indicator_r2`, a multiplayer key set beside `indicator_r1` in 3 `config\mp\*.ltx` files, not a renderer key | `cfgkeys.py` |
 | projected texture | the second renderer names `lights\lights_spot01` itself | `binary.py` B10 |
 

@@ -23,8 +23,9 @@ Builds on (not repeated here):
 - Spec C, `docs/behavior/script-api-class-ids-and-the-object-factory.md` (cited as **C**: class ids, the object factory,
   the **creation entry** of its section 6.1, the **resolution** of a name to a function or class of its section 3.2,
   the `class_registrators` call of its section 4, the script-state **rebuild** of its section 2.3).
-- The specs that own what happens inside the steps ordered here: `docs/behavior/level-objects.md`,
-  `docs/behavior/loading-screen.md`, `docs/behavior/start-position.md`.
+- The specs that own what happens inside the steps ordered here: offline (its sections 5 and 6),
+  `docs/behavior/loading-screen.md`, `docs/formats/sav.md` (section 10), `docs/behavior/world-coordinates.md`,
+  `docs/behavior/view-projection.md`.
 
 Conventions:
 
@@ -326,7 +327,7 @@ itself and puts six client stages in front of the remaining two [EP-30, EP-31]. 
        has `script_binding` gets its binding function resolved and called (section 1.3; its failure goes to a message
        function that does nothing [EP-60]), which attaches a script binder (spec L; the binder overrides and their
        order are spec L's). Which objects come online in this stage, and so which binding functions run before the
-       first frame, is unestablished here (offline 6 and level-objects.md 2 own when objects switch online).
+       first frame, is unestablished here (offline 6, with its switch rule in 6.5, owns when objects switch online).
     5. Textures (`st_loading_textures`). No script.
     6. Synchronising (`st_client_synchronising`): a precache phase of 30 frames is requested and the loading phase
        of the client is closed [EP-33].
@@ -366,7 +367,7 @@ With the shipped data and no `-keep_lua`, the calls this spec defines before the
 order: the startup at program start (`_G`, the two registrators; no `_initialize` function), the main-menu script
 object, the menu handlers; `game_registrator.get_game_clsid("single", true)` returning `SV_SINGL` (old state); the
 rebuild with a second full startup; `_G.start_game_callback()`; the creation of the spawn `all`'s records (the actor's
-record places the game on `l01_escape`, level-objects.md; 436 of the level's 870 records have a script server class,
+record places the game on `l01_escape`, `docs/formats/sav.md` 10.2 and offline 5.1; 436 of the level's 870 records have a script server class,
 scoping spec section 5); `game_registrator.get_game_clsid("single", false)` returning `CL_SINGL` (new state); then the
 client objects of the level and their binding functions (spec L; 367 of the 671 objects online at the start have a
 `script_binding`, scoping spec section 5). No `_G.on_actor_…` and no `ui_wpn_params.…` function is called before
