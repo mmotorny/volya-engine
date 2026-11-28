@@ -690,6 +690,12 @@ impl GameObjects {
         self.objects.get_mut(&id)
     }
 
+    /// Adds `object`, made by the engine outside the spawning (tests):
+    /// without a handle, replacing one of its id.
+    pub fn insert(&mut self, object: GameObject) {
+        self.objects.insert(object.id, object);
+    }
+
     pub fn len(&self) -> usize {
         self.objects.len()
     }

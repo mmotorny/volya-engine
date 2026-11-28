@@ -337,6 +337,11 @@ impl GameScripts {
         &self.startup.story
     }
 
+    /// The dialogs and trade's own state (script API R).
+    pub fn dialogs(&self) -> &Rc<RefCell<DialogsAndTrade>> {
+        &self.startup.dialogs
+    }
+
     /// The engine's calls into scripts so far, oldest first.
     pub fn calls(&self) -> &[EngineCall] {
         &self.calls

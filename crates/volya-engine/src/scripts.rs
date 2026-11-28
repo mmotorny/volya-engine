@@ -9,6 +9,7 @@
 //! See docs/architecture/scripts.md, Entry points.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -17,7 +18,8 @@ use crate::characters::Characters;
 use crate::core::character::hits::{Hit, HitType};
 use crate::core::collision::CollisionWorld;
 use crate::core::collision::geometry::{self, Vec3};
-use crate::core::config::{self, Config};
+use crate::core::config::{self, Config, PathAliases};
+use crate::core::dialogs::Dialogs;
 use crate::core::simulation::ACTOR_ID;
 use crate::core::vfs::Vfs;
 use crate::core::zones;
@@ -27,6 +29,7 @@ use crate::level_physics::{LevelPhysics, ScriptWorld};
 use crate::loading_screen::{GAME_TYPE, Loading, Stage};
 use crate::objects::{LoadedModel, Names};
 use crate::script::classes::OverrideFailure;
+use crate::script::dialogs::{Event as DialogEvent, SharedDialog, offer_talk};
 use crate::script::entry_points::{GameScripts, Startup};
 use crate::script::files::FileSystem;
 use crate::script::game_object::object_binder::update_delta;
@@ -40,6 +43,7 @@ use crate::script::services::EngineServices;
 use crate::script::story::{Icon, SharedInfoPortions, Story};
 use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
+use volya_engine_formats::dialog_files::Dialog;
 use volya_engine_formats::model;
 use volya_engine_formats::object::{Object, ObjectRecord, Shape};
 use volya_engine_formats::patrol_path::PatrolPaths;
@@ -165,7 +169,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// over it): every object the scripts still see is destroyed, its binder
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
 /// reading), the game's story forgotten, then the level's call list
-/// emptied, none of it called (spec O 6.5). A script error is fatal.
+/// emptied, none of it called (spec O 6.5), and the default trade
+/// parameters dropped (script API R 5.2). A script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
@@ -185,7 +190,8 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
         p.take_events();
     }
     scripts.story().borrow_mut().new_game();
-    scripts.scripts().clear_level_calls()
+    scripts.scripts().clear_level_calls()?;
+    scripts.scripts().destroy_default_trade()
 }
 
 /// The New Game's load ended, with its level or not (3.3 step 12): the
@@ -269,7 +275,8 @@ pub fn client_spawning(
 /// object's scheduled update ([`scheduled_updates`]); the objects that
 /// went offline or were removed released and destroyed (L 5.5), those
 /// that came online spawned (M 2.1); the player's use action on the object
-/// it targeted (M 6.3), which raises its `use_object` (spec O 4, id 15);
+/// it targeted (M 6.3), which raises its `use_object` (spec O 4, id 15),
+/// and its talk offer ([`offer_used_talk`]);
 /// the events the level's systems raised on its objects (spec O 4: the
 /// player's death, the items used up on it, taken and dropped); the
 /// level's call list updated, after the physics steps and the objects'
@@ -326,6 +333,10 @@ pub fn level_frame(
         // hold of it, 6.3) is not made here; the door's use is the level's.
         let used = scripts.scripts().player_use(target, ACTOR_ID);
         used.map_err(|f| override_fatal(scripts, f))?;
+        if offer_used_talk(&mut scripts.objects().borrow_mut(), target) {
+            let shown = DialogEvent::TalkWindowShown { partner: target };
+            level.queue_dialog_events([shown]);
+        }
     }
     for (receiver, event) in level.take_object_events() {
         scripts.scripts().raise(receiver, &event)?;
@@ -407,6 +418,76 @@ fn story_frame(scripts: &mut GameScripts, level: &LevelScreen) -> Result<(), Err
     Ok(())
 }
 
+/// The use action's talk with the living on `target` (use-action.md 3
+/// steps 6 and 7, 6.2; script API R 4.2): when its usable flag is set, it
+/// is a character with health above 0 and the player isn't talking, it is
+/// offered the talk ([`offer_talk`]). Whether it accepted: showing the
+/// talk window is then the talk's. The search window of the dead (6.1) is
+/// not made here.
+pub fn offer_used_talk(objects: &mut GameObjects, target: u16) -> bool {
+    let Some(t) = objects.get(target) else {
+        return false;
+    };
+    let alive = t.entity.as_ref().is_some_and(|e| e.health > 0.0);
+    if !t.usable || t.owner.is_none() || !alive {
+        return false;
+    }
+    let player = objects.get(ACTOR_ID).and_then(|o| o.owner.as_ref());
+    if player.is_some_and(|o| o.talk.talking) {
+        return false;
+    }
+    offer_talk(objects, ACTOR_ID, target) == Some(true)
+}
+
+/// The dialogs as the talk takes them (`dialog-files` 3.2; script API R
+/// 2.1, 3.5): each read by id the first time ([`Dialogs`]), then built
+/// once with [`init_dialog`](crate::script::loader::Scripts::init_dialog)
+/// (a dialog without a phrase list gets its phrases from its
+/// `init_func`), then shared. The built dialogs live as long as their
+/// owner keeps them. TODO(#1075): the talk loads its dialogs here.
+/// TODO(#907): DG-9 states when generated dialogs are built.
+#[derive(Default)]
+pub struct ScriptDialogs {
+    built: HashMap<String, SharedDialog>,
+}
+
+impl ScriptDialogs {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The dialog `id`, read from `tree` through `dialogs` and built the
+    /// first time. A read failure or a script error is fatal.
+    pub fn load(
+        &mut self,
+        scripts: &mut GameScripts,
+        dialogs: &mut Dialogs,
+        tree: &dyn Vfs,
+        aliases: &PathAliases,
+        id: &str,
+    ) -> Result<SharedDialog, Error> {
+        self.load_with(
+            id,
+            || dialogs.load(tree, aliases, id).map_err(io_fatal),
+            |d| scripts.scripts().init_dialog(d),
+        )
+    }
+
+    fn load_with(
+        &mut self,
+        id: &str,
+        read: impl FnOnce() -> Result<Arc<Dialog>, Error>,
+        build: impl FnOnce(Dialog) -> Result<SharedDialog, Error>,
+    ) -> Result<SharedDialog, Error> {
+        if let Some(dialog) = self.built.get(id) {
+            return Ok(Rc::clone(dialog));
+        }
+        let dialog = build(Dialog::clone(&*read()?))?;
+        self.built.insert(id.to_owned(), Rc::clone(&dialog));
+        Ok(dialog)
+    }
+}
+
 /// Spawns `object` in the scripts (spec C 6.1, 6.2; spec M 3, 10.2; spec
 /// L 5.1): its client object created through the factory for its
 /// section's class id; a script entry's object spawns through its
@@ -483,8 +564,11 @@ fn binding_runs(system: &Config, object: &ClientObject) -> bool {
 /// player-hits.md) and the visibility switch (6.5). A death event's
 /// handling (5.2) is the death's (#248); a stalker's wounded flag has no
 /// behaviour to update, and an explosion is spec Y's
-/// ([`apply_physics_events`]).
+/// ([`apply_physics_events`]). The dialogs and trade's events (script API
+/// R) are queued for the talk and the trader
+/// ([`LevelScreen::take_dialog_events`]).
 pub fn apply_events(scripts: &mut GameScripts, level: &mut LevelScreen) {
+    level.queue_dialog_events(scripts.dialogs().borrow_mut().take_events());
     let events = scripts.objects().borrow_mut().take_events();
     for event in events {
         match event {
@@ -711,6 +795,7 @@ fn override_fatal(scripts: &GameScripts, failure: OverrideFailure) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::script::game_object::GameObject;
 
     /// Whether the sphere (`p`, `radius`) is inside `r` (M 6.2).
     fn inside(r: &Restrictor, p: [f32; 3], radius: f32) -> bool {
@@ -827,5 +912,98 @@ mod tests {
         assert!(!inside(&r, along(1.2), 0.001));
         assert!(inside(&r, along(1.2), 0.3));
         assert!(!inside(&r, [10.0, 50.0, 0.0], 0.001));
+    }
+
+    fn object(id: u16, class: ObjectClass) -> GameObject {
+        let data = SpawnData {
+            id,
+            name: Vec::new(),
+            section: b"section".to_vec(),
+            class_id: 0,
+            story_id: -1,
+            custom_data: Vec::new(),
+            parent: None,
+            placement: model::transform([0.0; 3], [0.0; 3]),
+            level_vertex: 0,
+            game_vertex: 0,
+            health: None,
+        };
+        GameObject::new(class, &data, 0)
+    }
+
+    const TRADER: u16 = 7;
+
+    fn talkers(enabled: bool) -> GameObjects {
+        let mut objects = GameObjects::new();
+        objects.insert(object(ACTOR_ID, ObjectClass::Player));
+        let mut trader = object(TRADER, ObjectClass::Named("CAI_Trader"));
+        trader.owner.as_mut().unwrap().talk.talk_enabled = enabled;
+        objects.insert(trader);
+        objects.insert(object(8, ObjectClass::Named("CAI_Dog")));
+        objects
+    }
+
+    fn talking(objects: &GameObjects, id: u16) -> (bool, Option<u16>) {
+        let talk = &objects.get(id).unwrap().owner.as_ref().unwrap().talk;
+        (talk.talking, talk.partner)
+    }
+
+    #[test]
+    fn the_use_action_offers_a_talk_to_the_living() {
+        let mut objects = talkers(true);
+        assert!(offer_used_talk(&mut objects, TRADER));
+        assert_eq!(talking(&objects, TRADER), (true, Some(ACTOR_ID)));
+        assert_eq!(talking(&objects, ACTOR_ID), (true, Some(TRADER)));
+        // While the player talks, nothing happens.
+        assert!(!offer_used_talk(&mut objects, TRADER));
+        // A disabled talk, a monster, a missing object.
+        let mut objects = talkers(false);
+        assert!(!offer_used_talk(&mut objects, TRADER));
+        assert!(!offer_used_talk(&mut objects, 8));
+        assert!(!offer_used_talk(&mut objects, 9));
+        assert_eq!(talking(&objects, ACTOR_ID), (false, None));
+    }
+
+    #[test]
+    fn the_use_action_offers_no_talk_to_the_dead_or_unusable() {
+        let mut objects = talkers(true);
+        objects.get_mut(TRADER).unwrap().usable = false;
+        assert!(!offer_used_talk(&mut objects, TRADER));
+        let mut objects = talkers(true);
+        let entity = objects.get_mut(TRADER).and_then(|o| o.entity.as_mut());
+        entity.unwrap().health = 0.0;
+        assert!(!offer_used_talk(&mut objects, TRADER));
+        assert_eq!(talking(&objects, TRADER), (false, None));
+    }
+
+    #[test]
+    fn a_dialog_is_read_and_built_once() {
+        let dialog = Dialog {
+            id: "generated".into(),
+            priority: 0,
+            caption: None,
+            lists: Default::default(),
+            body: volya_engine_formats::dialog_files::Body::InitFunc("m.init".into()),
+        };
+        let mut dialogs = ScriptDialogs::new();
+        let (reads, builds) = (RefCell::new(0), RefCell::new(0));
+        let load = |dialogs: &mut ScriptDialogs| {
+            dialogs.load_with(
+                "generated",
+                || {
+                    *reads.borrow_mut() += 1;
+                    Ok(Arc::new(dialog.clone()))
+                },
+                |d| {
+                    *builds.borrow_mut() += 1;
+                    Ok(Rc::new(RefCell::new(d)))
+                },
+            )
+        };
+        let first = load(&mut dialogs).unwrap();
+        let again = load(&mut dialogs).unwrap();
+        assert!(Rc::ptr_eq(&first, &again));
+        assert_eq!((*reads.borrow(), *builds.borrow()), (1, 1));
+        assert_eq!(first.borrow().id, "generated");
     }
 }

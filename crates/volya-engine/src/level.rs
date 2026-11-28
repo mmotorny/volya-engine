@@ -86,6 +86,7 @@ use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
+use crate::script::dialogs::Event as DialogEvent;
 use crate::script::game_object::callbacks::ObjectEvent;
 use crate::script::story::SharedInfoPortions;
 use crate::scripts::{ClientObject, ClientSpawning};
@@ -380,6 +381,9 @@ pub struct LevelScreen {
     /// The object the player's use action targeted since last taken
     /// ([`LevelScreen::take_used`]).
     used: Option<u16>,
+    /// What the dialogs and trade asked of the talk and the trader since
+    /// last taken ([`LevelScreen::take_dialog_events`]).
+    dialog_events: Vec<DialogEvent>,
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
@@ -2656,6 +2660,7 @@ impl NewGameLoad {
             fatal: None,
             script_changes: Changes::default(),
             used: None,
+            dialog_events: Vec::new(),
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
             player_sphere,
@@ -4229,6 +4234,21 @@ impl LevelScreen {
         self.used.take()
     }
 
+    /// Queues what script API R's members, or the use action's accepted
+    /// talk offer, asked of the talk and the trader
+    /// ([`crate::scripts::apply_events`]).
+    pub fn queue_dialog_events(&mut self, events: impl IntoIterator<Item = DialogEvent>) {
+        self.dialog_events.extend(events);
+    }
+
+    /// What was queued since the last call, oldest first: the talk takes
+    /// it. TODO(#1075): the talk window shown and the switch to trade are
+    /// the talk's; nothing takes them yet. TODO(#1091): a trader's motions
+    /// and sound.
+    pub fn take_dialog_events(&mut self) -> Vec<DialogEvent> {
+        std::mem::take(&mut self.dialog_events)
+    }
+
     /// Object `id` as the scripts' spawning takes it: its record, its
     /// visual loaded with the level and its shell's physics part and
     /// script view.
@@ -4701,6 +4721,7 @@ impl LevelScreen {
             fatal: None,
             script_changes: Changes::default(),
             used: None,
+            dialog_events: Vec::new(),
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
             player_sphere: ([0.0; 3], 0.0),
