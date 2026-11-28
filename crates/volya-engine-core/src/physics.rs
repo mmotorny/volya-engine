@@ -11,6 +11,7 @@
 //! (5). Contacts and solving go through [`Solver`]; what it steps through
 //! [`Object`] and [`Updater`].
 
+pub mod contacts;
 pub mod ode;
 pub mod shell;
 #[cfg(test)]
@@ -166,6 +167,9 @@ pub struct ObjectId(u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Active,
+    /// Added and not stepped: in the collision index, so an active
+    /// object's contact can wake it (physics-contacts.md 1.2).
+    Idle,
     SetAside,
     /// Taken out of the simulation.
     Inactive,
@@ -177,9 +181,11 @@ struct Entry<O> {
     object: O,
 }
 
-/// The world's active objects, as a step sees them.
+/// The world's active objects, as a step sees them, and the objects of
+/// the collision index (physics-contacts.md 1.1) by position.
 pub struct Active<'a, O> {
-    entries: &'a mut [Entry<O>],
+    entries: &'a mut Vec<Entry<O>>,
+    resting: &'a mut Vec<(ObjectId, u32)>,
 }
 
 impl<O> Active<'_, O> {
@@ -195,6 +201,70 @@ impl<O> Active<'_, O> {
             .iter_mut()
             .find(|e| e.id == id && e.state == State::Active)
             .map(|e| &mut e.object)
+    }
+
+    /// The objects' positions run to `len()`, the active ones in their
+    /// order (an object woken is appended at the end).
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Whether the object at `i` is active.
+    pub fn is_active(&self, i: usize) -> bool {
+        self.entries
+            .get(i)
+            .is_some_and(|e| e.state == State::Active)
+    }
+
+    /// Whether the object at `i` is in the collision index: active, or
+    /// added and not stepped (not set aside or taken out).
+    pub fn indexed(&self, i: usize) -> bool {
+        (self.entries.get(i)).is_some_and(|e| matches!(e.state, State::Active | State::Idle))
+    }
+
+    pub fn id(&self, i: usize) -> ObjectId {
+        self.entries[i].id
+    }
+
+    /// The position of the object `id`.
+    pub fn position(&self, id: ObjectId) -> Option<usize> {
+        self.entries.iter().position(|e| e.id == id)
+    }
+
+    pub fn at(&self, i: usize) -> &O {
+        &self.entries[i].object
+    }
+
+    pub fn at_mut(&mut self, i: usize) -> &mut O {
+        &mut self.entries[i].object
+    }
+
+    /// The objects at `i` and `j`, two positions.
+    pub fn pair_mut(&mut self, i: usize, j: usize) -> (&mut O, &mut O) {
+        assert_ne!(i, j);
+        if i < j {
+            let (a, b) = self.entries.split_at_mut(j);
+            (&mut a[i].object, &mut b[0].object)
+        } else {
+            let (a, b) = self.entries.split_at_mut(i);
+            (&mut b[0].object, &mut a[j].object)
+        }
+    }
+
+    /// Makes the object at `i` active (physics-contacts.md 1.2;
+    /// physics-shell-shapeless-root.md 4.2): off the resting list (4.4) and
+    /// appended to the end of the active objects. Returns its position.
+    pub fn wake(&mut self, i: usize) -> usize {
+        let id = self.entries[i].id;
+        self.resting.retain(|&(r, _)| r != id);
+        let mut e = self.entries.remove(i);
+        e.state = State::Active;
+        self.entries.push(e);
+        self.entries.len() - 1
     }
 }
 
@@ -369,13 +439,14 @@ impl<O: Object, S: Solver<O>> World<O, S> {
         std::mem::take(&mut self.timers)
     }
 
-    /// Adds an object, set aside until [`World::activate`].
+    /// Adds an object, not stepped until [`World::activate`]; it is in the
+    /// collision index (physics-shell-shapeless-root.md 3.1).
     pub fn add(&mut self, object: O) -> ObjectId {
         let id = ObjectId(self.next_id);
         self.next_id += 1;
         self.objects.push(Entry {
             id,
-            state: State::Inactive,
+            state: State::Idle,
             object,
         });
         id
@@ -422,15 +493,22 @@ impl<O: Object, S: Solver<O>> World<O, S> {
     }
 
     /// Makes an object active, also one set aside while frozen (5); it
-    /// leaves the resting list (4.4).
+    /// leaves the resting list (4.4). One not active is appended to the end
+    /// of the active objects, as a contact's wake is
+    /// (physics-shell-shapeless-root.md 4.2; our reading for every
+    /// activation).
     pub fn activate(&mut self, id: ObjectId) -> Result<(), Fatal> {
-        let Some(e) = self.objects.iter_mut().find(|e| e.id == id) else {
+        let Some(i) = self.objects.iter().position(|e| e.id == id) else {
             return Ok(());
         };
-        if !e.object.has_geometry() {
+        if !self.objects[i].object.has_geometry() {
             return Err(Fatal("trying to activate destroyed or not created object!"));
         }
-        e.state = State::Active;
+        if self.objects[i].state != State::Active {
+            let mut e = self.objects.remove(i);
+            e.state = State::Active;
+            self.objects.push(e);
+        }
         self.resting.retain(|&(r, _)| r != id);
         Ok(())
     }
@@ -531,13 +609,17 @@ impl<O: Object, S: Solver<O>> World<O, S> {
     /// 2.2: the frame's steps, `dt_f` the display frame time and `now_ms` the
     /// millisecond clock at the frame's start. Returns the steps run.
     pub fn frame(&mut self, dt_f: f32, now_ms: u64) -> u32 {
-        let start = (self.perf)();
-        let n = self.frame_steps(dt_f, now_ms);
-        self.timers.physics += (self.perf)() - start;
+        let n = self.frame_count(dt_f);
+        for i in 0..n {
+            self.frame_step(now_ms, i);
+        }
         n
     }
 
-    fn frame_steps(&mut self, dt_f: f32, now_ms: u64) -> u32 {
+    /// 2.2: the number of steps a frame of display frame time `dt_f` runs,
+    /// taken from the accumulator; [`World::frame_step`] runs each (the
+    /// level runs them with the player's movement steps).
+    pub fn frame_count(&mut self, dt_f: f32) -> u32 {
         if self.frozen {
             return 0;
         }
@@ -547,13 +629,17 @@ impl<O: Object, S: Solver<O>> World<O, S> {
         }
         let n = (self.accumulator / self.params.step).floor();
         self.accumulator -= n * self.params.step;
-        let n = n as u32;
+        n as u32
+    }
+
+    /// The step `i` (from 0) of a frame starting at `now_ms`, timed by the
+    /// `Physics` timer.
+    pub fn frame_step(&mut self, now_ms: u64, i: u32) {
+        let start = (self.perf)();
         let ms = (1000.0 * self.params.step).round() as u64;
-        for i in 0..u64::from(n) {
-            let start = now_ms + i * ms;
-            self.step(start, start + ms);
-        }
-        n
+        let at = now_ms + u64::from(i) * ms;
+        self.step(at, at + ms);
+        self.timers.physics += (self.perf)() - start;
     }
 
     /// 3: one step, from `start_ms` to `end_ms`; a procedure runs it on a
@@ -585,6 +671,7 @@ impl<O: Object, S: Solver<O>> World<O, S> {
             &params,
             &mut Active {
                 entries: &mut self.objects,
+                resting: &mut self.resting,
             },
         );
         self.timers.collider += (self.perf)() - collider;
@@ -598,17 +685,24 @@ impl<O: Object, S: Solver<O>> World<O, S> {
         // 6.
         let solver = (self.perf)();
         let counter = self.counter;
-        let objects = &mut self.objects;
+        let (objects, resting) = (&mut self.objects, &mut self.resting);
         self.actions.retain_mut(|a| match a.condition(counter) {
             Condition::Done => false,
             Condition::Waits => true,
-            Condition::Holds => !a.act(counter, &mut Active { entries: objects }),
+            Condition::Holds => !a.act(
+                counter,
+                &mut Active {
+                    entries: objects,
+                    resting,
+                },
+            ),
         });
         // 7.
         self.solver.solve(
             &params,
             &mut Active {
                 entries: &mut self.objects,
+                resting: &mut self.resting,
             },
         );
         self.timers.solver += (self.perf)() - solver;

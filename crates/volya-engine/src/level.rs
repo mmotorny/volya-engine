@@ -1459,6 +1459,8 @@ pub struct NewGameLoad {
     draw_windows: Vec<[u32; 2]>,
     modifiers: Vec<EnvModifier>,
     movement: Option<MovementConfig>,
+    /// The actor section's `material` (physics-contacts.md 5).
+    player_material: Option<String>,
     controls: Option<Controls>,
     weather: Option<Weather>,
     clock: Option<GameClock>,
@@ -1993,6 +1995,13 @@ impl NewGameLoad {
                 // player-movement.md section 1: the actor's section is the
                 // one its spawn record names.
                 self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
+                // physics-contacts.md 5: the actor's spawn gives its body's
+                // shapes the section's material; without the key, fatal.
+                self.player_material = Some(
+                    (data.system.read(spawn::ACTOR_SECTION, "material")?)
+                        .trim()
+                        .to_owned(),
+                );
                 self.controls = Some(data.controls.clone());
                 let weather_name = start_weather(tree, data, name)?;
                 let weather = Weather::load(&data.system, &weather_name)?;
@@ -2499,10 +2508,18 @@ impl NewGameLoad {
             Angles::from_spawn(actor.angles),
             now,
         );
-        // trader-door.md 3: the doors' leaves stop the player, from their
-        // shells.
+        // physics-contacts.md 5: the actor's spawn gives the body's shapes
+        // its section's material, by name without regard to case; the
+        // body enters the physics world, which meets the doors' leaves
+        // (7) and the level's mesh.
+        let material_name = earlier(self.player_material, "actor")?;
+        let material = (collision.materials().iter())
+            .position(|m| m.name.eq_ignore_ascii_case(&material_name))
+            .ok_or_else(|| invalid(format!("no game material {material_name}")))?;
+        player.body_mut().set_material(material as u32);
+        physics.set_level(collision.clone());
+        physics.add_player(player.config.body.mass)?;
         doors.sync(&mut physics)?;
-        player.body_mut().set_bodies(doors.boxes());
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
@@ -2749,12 +2766,13 @@ impl LevelScreen {
             view: self.player.view(),
         };
         let body = crate::core::navigation::Body::of(&self.player.config);
+        let walls = self.doors.boxes();
         let (request, back) = self.controls.request(
             input,
             &player,
             now,
             &view,
-            Some((&self.collision, &body, self.player.body().bodies())),
+            Some((&self.collision, &body, &walls)),
         );
         // player-state.md 4.3: the condition's limits for this frame's
         // movement; 4.4: a jump's cost; 4.1, 4.2: the conditions over the
@@ -2770,7 +2788,13 @@ impl LevelScreen {
         // steps (the order within the frame is our choice); 5.1: the
         // player's update picks the object under the crosshair.
         self.doors.update();
-        self.player.frame(&self.collision, now, &request);
+        // physics-world.md 2.1, 2.2: the physics world's steps on the
+        // movement's display frame time, each with the movement step it
+        // meets (the player's body is one of its objects,
+        // physics-contacts.md 5; our order, docs/architecture/simulation.md).
+        self.player
+            .frame_with(&self.collision, now, &request, &mut self.physics.steps(now));
+        self.physics.end_frame();
         self.doors.physics_steps(self.player.steps(), &self.physics);
         // 2.3: the motors set reach the hinges (physics-shells.md 10).
         if let Err(e) = self.doors.sync(&mut self.physics) {
@@ -2890,15 +2914,11 @@ impl LevelScreen {
         );
         self.update_view();
         self.lights_frame(elapsed as f32 / 1000.0, true);
-        // physics-world.md 2.1: the physics world after the frame's object
-        // updates, on the movement's display frame time (2.2).
-        self.physics.frame(self.player.frame_time(), now);
-        // trader-door.md 3: the leaves where their shells now hold them,
-        // for the player's next steps.
+        // trader-door.md 5.1: the leaves where their shells now hold them,
+        // for the next frame's pick.
         if let Err(e) = self.doors.sync(&mut self.physics) {
             self.record_fatal(e.to_string());
         }
-        self.player.body_mut().set_bodies(self.doors.boxes());
     }
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,

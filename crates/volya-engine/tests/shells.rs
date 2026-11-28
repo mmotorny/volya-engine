@@ -182,7 +182,7 @@ fn the_bunkers_shells_and_the_trader_door() {
     // 10, item 4: the exact solver requested.
     assert!(solver.marked_exact(shell.group()));
     // The player meets the leaf's box (trader-door.md 1, 3).
-    let boxes = level.player().body().bodies().to_vec();
+    let boxes = level.doors().boxes();
     assert_eq!(boxes.len(), 1);
     for (got, want) in boxes[0].half_size.into_iter().zip([0.6902, 1.3225, 0.1254]) {
         assert!((got - want).abs() < 1e-3, "{:?}", boxes[0].half_size);
@@ -236,6 +236,8 @@ fn the_bunkers_shells_and_the_trader_door() {
     // step's cost (meaningful in an optimised build).
     let (rust, ode) = (RUST.load(Relaxed), ODE.load(Relaxed));
     let mut own = LevelPhysics::new(PhysicsSettings::default(), level.collision().bbox_min[1]);
+    // Their contacts with the level's mesh (physics-contacts.md 3).
+    own.set_level(level.shared_collision());
     let materials = level.collision().materials();
     let dir = data.aliases.path("$game_levels$", "l01_escape").unwrap();
     own.load_shells(&tree, &data, &dir, &objects, materials)
@@ -266,11 +268,26 @@ fn the_bunkers_shells_and_the_trader_door() {
         "a step: {first:.4} ms over the first 100 ({active_after} active after), {later:.4} ms over the next 1000 ({} active)",
         own.report().active
     );
+    // The two awake at the start are buckets whose bodies are cylinders,
+    // which get no contacts yet (TODO(#1010)): `vedro_0001` falls out of
+    // the world; `vedro_0007`'s handle, a box on a body of its own, meets
+    // the floor while the bucket falls on, which tears their joint apart
+    // and throws the shell far off, where it meets nothing and stays
+    // active.
+    let name = |id| {
+        let o = objects.iter().find(|o| o.id == id).unwrap();
+        o.record.header.name.as_str().to_owned()
+    };
+    let active: Vec<String> = (objects.iter())
+        .filter(|o| own.shell_of(o.id).is_some_and(|(_, a)| a))
+        .map(|o| name(o.id))
+        .collect();
+    assert_eq!(active, ["vedro_0007"]);
 }
 
 /// How far the leaf's box the player meets moved from `start`, m.
 fn boxes_moved(level: &LevelScreen, start: [f32; 3]) -> f32 {
-    let c = level.player().body().bodies()[0].centre;
+    let c = level.doors().boxes()[0].centre;
     (0..3)
         .map(|k| (c[k] - start[k]).powi(2))
         .sum::<f32>()

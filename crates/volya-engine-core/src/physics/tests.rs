@@ -420,16 +420,16 @@ fn the_timers_measure_the_frame_and_its_steps() {
     let mut w = world(&log);
     w.set_perf_counter(tick);
     // Three steps: the collider and solver timers read twice per step,
-    // the physics timer around them.
+    // the physics timer around each step.
     assert_eq!(w.frame(0.035, 0), 3);
     let t = w.take_timers();
     assert_eq!((t.collider, t.solver, t.steps), (3.0, 3.0, 3));
-    assert_eq!(t.physics, 13.0);
-    // Taken: they restart; a frame without steps measures only itself.
+    assert_eq!(t.physics, 15.0);
+    // Taken: they restart; a frame without steps measures nothing.
     assert_eq!(w.frame(0.001, 0), 0);
     let t = w.take_timers();
     assert_eq!(
         (t.physics, t.collider, t.solver, t.steps),
-        (1.0, 0.0, 0.0, 0)
+        (0.0, 0.0, 0.0, 0)
     );
 }

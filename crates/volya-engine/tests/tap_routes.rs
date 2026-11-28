@@ -76,7 +76,7 @@ fn routes_on_the_start_level() {
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
     // The trader's door is locked at the start (trader-door.md, #874): the
     // routes start 1 m past its leaf, on the side away from the start.
-    let leaf = level.player().body().bodies()[0];
+    let leaf = level.doors().boxes()[0];
     let start = level.player().state().position;
     let k = (0..3)
         .min_by(|&a, &b| leaf.half_size[a].total_cmp(&leaf.half_size[b]))
@@ -103,7 +103,7 @@ fn routes_on_the_start_level() {
     let player = level.player().clone();
     let body = Body::of(&player.config);
     // The door is in the way.
-    let walls = player.body().bodies();
+    let walls = &level.doors().boxes();
     let from = player.state().position;
     eprintln!("start {from:?}");
 

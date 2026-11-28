@@ -388,6 +388,16 @@ pub struct FallDamage {
 /// The least `|f|` that makes a fall hit (environment-hits.md 3.2).
 pub const LEAST_DAMAGE: f32 = 1e-7;
 
+/// What runs with the movement's physics steps (6.1).
+pub trait StepHook {
+    /// Before the frame's steps, with its display frame time `dt_f`.
+    fn frame(&mut self, _dt_f: f32) {}
+    /// After each step, with the body it moved.
+    fn step(&mut self, _body: &mut PlayerBody) {}
+}
+
+impl StepHook for () {}
+
 /// The player in a level.
 #[derive(Clone, Debug)]
 pub struct Player {
@@ -704,6 +714,19 @@ impl Player {
 
     /// One rendered frame at engine clock `now` (ms) with `request`.
     pub fn frame(&mut self, world: &CollisionWorld, now: u64, request: &Request) -> View {
+        self.frame_with(world, now, request, &mut ())
+    }
+
+    /// [`Player::frame`], `hook` told of the frame's display frame time
+    /// and called after each of its physics steps (the level's physics
+    /// world steps with them, docs/architecture/simulation.md).
+    pub fn frame_with(
+        &mut self,
+        world: &CollisionWorld,
+        now: u64,
+        request: &Request,
+        hook: &mut dyn StepHook,
+    ) -> View {
         // 3.2: the two frame times.
         let ms = now.saturating_sub(self.last_ms);
         self.last_ms = now;
@@ -734,7 +757,8 @@ impl Player {
         if take_off {
             self.evaluate_take_off(world);
         }
-        self.physics(world, dt_f);
+        hook.frame(dt_f);
+        self.physics(world, dt_f, hook);
         self.climbing_flag(world);
         // 9.1: blocked, the state stops "moving".
         let v = self.body.velocity();
@@ -1088,13 +1112,14 @@ impl Player {
     }
 
     /// 6.1: the frame's physics steps.
-    fn physics(&mut self, world: &CollisionWorld, dt_f: f32) {
+    fn physics(&mut self, world: &CollisionWorld, dt_f: f32, hook: &mut dyn StepHook) {
         self.accumulator += dt_f;
         let mut steps = 0;
         while self.accumulator >= STEP && steps < MAX_STEPS {
             self.accumulator -= STEP;
             steps += 1;
             self.step(world);
+            hook.step(&mut self.body);
         }
         self.steps = steps;
         // Whole steps only; what did not fit carries over (at most a step's

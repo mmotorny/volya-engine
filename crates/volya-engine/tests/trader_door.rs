@@ -89,7 +89,7 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
     );
     // Its leaf: one box, half sizes as the model's bone `door`, of
     // `objects\large_metal_trash`; 1.7 m from the start (level-objects.md).
-    let boxes = level.player().body().bodies().to_vec();
+    let boxes = level.doors().boxes();
     assert_eq!(boxes.len(), 1);
     let leaf = boxes[0];
     for (got, want) in leaf.half_size.into_iter().zip([0.690, 1.322, 0.125]) {

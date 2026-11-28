@@ -24,6 +24,8 @@
 
 #![allow(unsafe_code)]
 
+pub mod character;
+pub mod collide;
 pub mod harness;
 #[cfg(test)]
 mod harness_rules;
@@ -42,11 +44,16 @@ use std::sync::Mutex;
 /// Held by each world's parameters and step (above).
 static STEPPING: Mutex<()> = Mutex::new(());
 
+use super::contacts::level::LevelState;
+use super::contacts::{Bounds, Class};
 use super::{
-    Active, EXACT_SOLVER_JOINTS, MAX_GROUP_BODIES, MAX_GROUP_JOINTS, MAX_PAIR_CONTACTS, Params,
-    Solver,
+    Active, EXACT_SOLVER_JOINTS, MAX_GROUP_BODIES, MAX_GROUP_JOINTS, MAX_PAIR_CONTACTS, Object,
+    Params, Solver,
 };
+use crate::collision::CollisionWorld;
 use crate::collision::geometry::Vec3;
+use collide::{Draft, Geom, Liquid, Probes};
+use volya_engine_formats::gamemtl::GameMaterial;
 
 /// ODE's `dReal`: single precision (`dSINGLE`, csrc/ode/include/ode/config.h).
 pub type Real = f32;
@@ -237,8 +244,9 @@ pub struct GroupId(u32);
 pub struct JointId(*mut DxJoint);
 
 /// What an object of a world over an [`OdeSolver`] has besides
-/// [`super::Object`]: its group, and its work on its bodies around the
-/// solving of a step (item 7), when it is active.
+/// [`super::Object`]: its group, its work on its bodies around the solving
+/// of a step (item 7), when it is active, and what its contacts need
+/// (docs/behavior/physics-contacts.md; none without geometry).
 pub trait Grouped {
     fn group(&self) -> GroupId;
     /// Before the groups are solved.
@@ -246,6 +254,28 @@ pub trait Grouped {
     /// After they are solved and every group lists its own bodies again,
     /// before the object's post-step work (item 8).
     fn after_solve(&mut self, _: &OdeSolver) {}
+    /// Its collision class (1.3).
+    fn class(&self) -> Class {
+        Class::default()
+    }
+    /// Its box as last updated (1.1): its geometries' bounds.
+    fn bounds(&self) -> Option<Bounds> {
+        None
+    }
+    /// Its geometries where its bodies hold them, in a fixed order.
+    fn geometries(&self, _: &OdeSolver, _: &mut Vec<Geom>) {}
+    /// Geometry `geom`'s state between level collisions (3.2, 3.3); none
+    /// for one that keeps none.
+    fn level_state(&mut self, _geom: usize) -> Option<&mut LevelState> {
+        None
+    }
+    /// 2.3, item 3: geometry `geom`'s own contact callback, `first` when it
+    /// is the contact's first geometry.
+    fn geometry_contact(&mut self, _geom: usize, _first: bool, _: &mut Draft) {}
+    /// 2.3, item 5: the object's contact callback (a shell's does nothing).
+    fn object_contact(&mut self, _geom: usize, _first: bool, _: &mut Draft) {}
+    /// A contact woke it (1.2): its bodies switched on.
+    fn wake(&mut self, _: &OdeSolver) {}
 }
 
 /// A group: its list, its own bodies (in the order made) and, while the
@@ -282,6 +312,15 @@ pub struct OdeSolver {
     made: Vec<*mut DxJoint>,
     bodies: HashMap<BodyId, GroupId>,
     joints: HashMap<JointId, GroupId>,
+    /// The game materials and the level's mesh contacts are made with.
+    materials: Vec<GameMaterial>,
+    level: Option<std::sync::Arc<CollisionWorld>>,
+    /// The step's liquid damping by body (2.4).
+    liquid: HashMap<BodyId, Liquid>,
+    probes: Probes,
+    scratch_a: Vec<Geom>,
+    scratch_b: Vec<Geom>,
+    scratch_raw: Vec<super::contacts::RawContact>,
 }
 
 impl OdeSolver {
@@ -297,6 +336,13 @@ impl OdeSolver {
             made: Vec::new(),
             bodies: HashMap::new(),
             joints: HashMap::new(),
+            materials: Vec::new(),
+            level: None,
+            liquid: HashMap::new(),
+            probes: Probes::new(),
+            scratch_a: Vec::new(),
+            scratch_b: Vec::new(),
+            scratch_raw: Vec::new(),
         }
     }
 
@@ -678,12 +724,15 @@ impl OdeSolver {
     }
 }
 
-impl<O: Grouped> Solver<O> for OdeSolver {
-    // TODO(#956): the contacts are gathered as physics-contacts.md specifies, through
-    // `OdeSolver::add_contacts`.
-    fn collide(&mut self, _: &Params, _: &mut Active<'_, O>) {}
+impl<O: Grouped + Object> Solver<O> for OdeSolver {
+    fn collide(&mut self, params: &Params, objects: &mut Active<'_, O>) {
+        self.contact_phase(params, objects);
+    }
 
     fn solve(&mut self, params: &Params, objects: &mut Active<'_, O>) {
+        // physics-contacts.md 2.4: the liquid's force, as the objects'
+        // pre-step pushes their bodies (our place: before their solving).
+        self.liquid_forces(params.step);
         for (_, o) in objects.iter_mut() {
             o.before_solve(self, params);
         }
@@ -869,6 +918,23 @@ mod tests {
     impl Grouped for Ball {
         fn group(&self) -> GroupId {
             GroupId(0)
+        }
+    }
+    impl Object for Ball {
+        fn kind(&self) -> super::super::Kind {
+            super::super::Kind::Shell
+        }
+        fn has_geometry(&self) -> bool {
+            true
+        }
+        fn height(&self) -> f32 {
+            0.0
+        }
+        fn set_gravity(&mut self, _: bool) {}
+        fn add_force(&mut self, _: Vec3) {}
+        fn pre_step(&mut self, _: &Params) {}
+        fn post_step(&mut self, _: &Params) -> bool {
+            false
         }
     }
 

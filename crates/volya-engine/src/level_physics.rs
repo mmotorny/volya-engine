@@ -3,8 +3,12 @@
 
 //! The level's physics world (docs/behavior/physics-world.md, cited by
 //! section): made under `st_client_spawning` (1.1) over the ODE solver,
-//! run after the frame's object updates (2.1), following `ph_frequency`
-//! and `ph_iterations` (2.3, 2.4), removed with the level; and its shells
+//! its steps run with the player's movement steps (our order: the
+//! player's body is one of its objects, docs/behavior/physics-contacts.md
+//! 5, and the movement steps it in the player's update), following
+//! `ph_frequency` and `ph_iterations` (2.3, 2.4), removed with the level;
+//! the contacts of its objects with each other and the level's mesh
+//! (physics-contacts.md); and its shells
 //! (docs/behavior/physics-shells.md, cited as `shells`): those of the
 //! physics objects, hanging lamps and skeleton objects online at the start
 //! (TODO(#949): those coming online later), built as the client creates
@@ -13,10 +17,18 @@
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
+use std::sync::Arc;
 
+use crate::core::collision::CollisionWorld;
 use crate::core::collision::body::BodyBox;
+use crate::core::collision::body::PlayerBody;
 use crate::core::collision::geometry::{Vec3, normalize};
 use crate::core::console::{Console, Value};
+use crate::core::movement::StepHook;
+use crate::core::physics::contacts::level::LevelState;
+use crate::core::physics::contacts::{Bounds, Class};
+use crate::core::physics::ode::character::OdeCharacter;
+use crate::core::physics::ode::collide::{Draft, Geom};
 use crate::core::physics::ode::shell::OdeShell;
 use crate::core::physics::ode::{GroupId, Grouped, JointId, OdeSolver};
 use crate::core::physics::shell::{
@@ -33,65 +45,80 @@ use volya_engine_formats::ltx;
 use volya_engine_formats::model::{transform, transform_point};
 use volya_engine_formats::object::{Object as Record, Skeleton};
 
-/// What the level's world steps: shells; the characters' bodies come with
-/// their specs (PH-8, PH-22).
+/// What the level's world steps: shells and the player's body
+/// (docs/behavior/physics-contacts.md 5); the other characters' bodies
+/// come with their specs (PH-8, PH-22).
 pub enum LevelBody {
     Shell(OdeShell),
+    Character(OdeCharacter),
+}
+
+macro_rules! each {
+    ($self:expr, $b:ident => $e:expr) => {
+        match $self {
+            LevelBody::Shell($b) => $e,
+            LevelBody::Character($b) => $e,
+        }
+    };
 }
 
 impl Object for LevelBody {
     fn kind(&self) -> Kind {
-        match self {
-            Self::Shell(s) => s.kind(),
-        }
+        each!(self, b => b.kind())
     }
     fn has_geometry(&self) -> bool {
-        match self {
-            Self::Shell(s) => s.has_geometry(),
-        }
+        each!(self, b => b.has_geometry())
     }
     fn height(&self) -> f32 {
-        match self {
-            Self::Shell(s) => s.height(),
-        }
+        each!(self, b => b.height())
     }
     fn set_gravity(&mut self, on: bool) {
-        match self {
-            Self::Shell(s) => s.set_gravity(on),
-        }
+        each!(self, b => b.set_gravity(on))
     }
     fn add_force(&mut self, force: Vec3) {
-        match self {
-            Self::Shell(s) => s.add_force(force),
-        }
+        each!(self, b => b.add_force(force))
     }
     fn pre_step(&mut self, params: &Params) {
-        match self {
-            Self::Shell(s) => s.pre_step(params),
-        }
+        each!(self, b => b.pre_step(params))
     }
     fn post_step(&mut self, params: &Params) -> bool {
-        match self {
-            Self::Shell(s) => s.post_step(params),
-        }
+        each!(self, b => b.post_step(params))
+    }
+    fn clear_level_contacts(&mut self) {
+        each!(self, b => b.clear_level_contacts())
     }
 }
 
 impl Grouped for LevelBody {
     fn group(&self) -> GroupId {
-        match self {
-            Self::Shell(s) => Grouped::group(s),
-        }
+        each!(self, b => Grouped::group(b))
     }
     fn before_solve(&mut self, solver: &mut OdeSolver, params: &Params) {
-        match self {
-            Self::Shell(s) => s.before_solve(solver, params),
-        }
+        each!(self, b => b.before_solve(solver, params))
     }
     fn after_solve(&mut self, solver: &OdeSolver) {
-        match self {
-            Self::Shell(s) => s.after_solve(solver),
-        }
+        each!(self, b => b.after_solve(solver))
+    }
+    fn class(&self) -> Class {
+        each!(self, b => Grouped::class(b))
+    }
+    fn bounds(&self) -> Option<Bounds> {
+        each!(self, b => b.bounds())
+    }
+    fn geometries(&self, solver: &OdeSolver, out: &mut Vec<Geom>) {
+        each!(self, b => b.geometries(solver, out))
+    }
+    fn level_state(&mut self, geom: usize) -> Option<&mut LevelState> {
+        each!(self, b => b.level_state(geom))
+    }
+    fn geometry_contact(&mut self, geom: usize, first: bool, d: &mut Draft) {
+        each!(self, b => b.geometry_contact(geom, first, d))
+    }
+    fn object_contact(&mut self, geom: usize, first: bool, d: &mut Draft) {
+        each!(self, b => b.object_contact(geom, first, d))
+    }
+    fn wake(&mut self, solver: &OdeSolver) {
+        each!(self, b => Grouped::wake(b, solver))
     }
 }
 
@@ -177,6 +204,13 @@ pub struct LevelPhysics {
     shells: Vec<LevelShell>,
     /// The next collision-group number (`shells` 5.2, `not_collide_parts`).
     collision_groups: u32,
+    /// The player's body in the world (physics-contacts.md 5).
+    player: Option<ObjectId>,
+    /// The frame's steps still to run, the next one's index, and the
+    /// frame's start (2.2).
+    pending: u32,
+    next: u32,
+    frame_ms: u64,
 }
 
 impl LevelPhysics {
@@ -194,6 +228,89 @@ impl LevelPhysics {
             iterations_runs: settings.iterations_runs,
             shells: Vec::new(),
             collision_groups: 0,
+            player: None,
+            pending: 0,
+            next: 0,
+            frame_ms: 0,
+        }
+    }
+
+    /// The level's mesh and materials the contacts are made with
+    /// (physics-contacts.md 2.1, 3).
+    pub fn set_level(&mut self, level: Arc<CollisionWorld>) {
+        self.world.solver_mut().set_level(level);
+    }
+
+    /// The player's body of mass `mass` enters the world, active
+    /// (physics-contacts.md 5).
+    pub fn add_player(&mut self, mass: f32) -> io::Result<()> {
+        let c = self.world.solver_mut().add_character(mass);
+        let id = self.world.add(LevelBody::Character(c));
+        self.world.activate(id).map_err(|e| invalid(e.0))?;
+        self.player = Some(id);
+        Ok(())
+    }
+
+    /// 2.2: a frame of display frame time `dt_f` starting at `now_ms`
+    /// begins: its steps run with the movement's ([`Self::steps`]), any
+    /// left at [`Self::end_frame`].
+    pub fn begin_frame(&mut self, dt_f: f32, now_ms: u64) {
+        self.pending = self.world.frame_count(dt_f);
+        self.next = 0;
+        self.frame_ms = now_ms;
+    }
+
+    /// The frame's next step, if one is left, meeting the movement step
+    /// `body` just ran: the player's body placed where that step began, and
+    /// the reaction of its contacts with movable bodies handed back
+    /// (physics-contacts.md 5, 7).
+    pub fn player_step(&mut self, body: &mut PlayerBody) {
+        if self.pending == 0 {
+            return;
+        }
+        if let Some(id) = self.player {
+            let (o, solver) = self.world.with_solver(id);
+            if let Some(LevelBody::Character(c)) = o {
+                c.set_step(solver, body.world_step());
+            }
+        }
+        self.run_step();
+        if let Some(id) = self.player
+            && let Some(LevelBody::Character(c)) = self.world.get_mut(id)
+        {
+            let (dv, blocked) = c.take_reaction();
+            body.react(dv, blocked);
+        }
+    }
+
+    fn run_step(&mut self) {
+        self.world.frame_step(self.frame_ms, self.next);
+        self.next += 1;
+        self.pending -= 1;
+    }
+
+    /// The contacts of the player's body with movable bodies its rules
+    /// kept since it entered the world (physics-contacts.md 5).
+    pub fn player_contacts(&self) -> u64 {
+        match self.player.and_then(|id| self.world.get(id)) {
+            Some(LevelBody::Character(c)) => c.kept(),
+            _ => 0,
+        }
+    }
+
+    /// The frame's steps the movement's did not run (2.2).
+    pub fn end_frame(&mut self) {
+        while self.pending > 0 {
+            self.run_step();
+        }
+    }
+
+    /// The movement's step hook running the frame's steps (2.2) from
+    /// `now_ms`.
+    pub fn steps(&mut self, now_ms: u64) -> PhysicsSteps<'_> {
+        PhysicsSteps {
+            physics: self,
+            now_ms,
         }
     }
 
@@ -406,7 +523,7 @@ impl LevelPhysics {
     }
 
     /// The boxes of object `object`'s shell where its bodies hold them
-    /// (`shells` 2.1, 2.2), as the player's body meets them.
+    /// (`shells` 2.1, 2.2).
     pub fn boxes(&self, object: u16) -> Vec<BodyBox> {
         let Some(s) = self.shell(object) else {
             return Vec::new();
@@ -437,6 +554,23 @@ impl LevelPhysics {
                 })
             })
             .collect()
+    }
+}
+
+/// The level's physics steps run with the movement's
+/// ([`LevelPhysics::steps`]).
+pub struct PhysicsSteps<'a> {
+    physics: &'a mut LevelPhysics,
+    now_ms: u64,
+}
+
+impl StepHook for PhysicsSteps<'_> {
+    fn frame(&mut self, dt_f: f32) {
+        self.physics.begin_frame(dt_f, self.now_ms);
+    }
+
+    fn step(&mut self, body: &mut PlayerBody) {
+        self.physics.player_step(body);
     }
 }
 

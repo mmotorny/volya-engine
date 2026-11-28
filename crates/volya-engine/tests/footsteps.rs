@@ -713,7 +713,7 @@ fn footsteps_leaving_the_bunker() {
     let mut path = way_out(&world, start, |_| true);
     // The trader's door is locked at the start (trader-door.md, #874): the
     // way out starts past its leaf, 1 m beyond it, the player placed there.
-    let leaf = level.player().body().bodies()[0].centre;
+    let leaf = level.doors().boxes()[0].centre;
     let flat = |p: Vec3| (p[0] - leaf[0]).hypot(p[2] - leaf[2]);
     let at_door = path
         .iter()

@@ -77,15 +77,13 @@ pub const POSTURE_RETRY_DISTANCE: f32 = 0.05;
 pub const POSTURE_GROWTH_STEPS: u32 = 5;
 pub const POSTURE_SETTLE_STEPS: u32 = 4;
 pub const POSTURE_PENETRATION: f32 = 0.01;
-/// The material assigned to the player's shapes: index 0, `default`
-/// (section 5.1).
-pub const PLAYER_MATERIAL: usize = 0;
+/// The material the player's shapes get when the body is made: index 0,
+/// `default` (section 5.1); the actor's spawn gives them its section's
+/// (docs/behavior/physics-contacts.md 5, [`PlayerBody::set_material`]).
+pub const PLAYER_MATERIAL: u32 = 0;
 /// A contact with ladder `i`'s triangle `k` records triangle
 /// `LADDER_TRIANGLES + 12·i + k` (our numbering, apart from the level's).
 pub const LADDER_TRIANGLES: u32 = 0x8000_0000;
-/// A contact with movable body box `i`'s triangle `k` records triangle
-/// `BODY_TRIANGLES + 12·i + k` (our numbering, below the ladders').
-pub const BODY_TRIANGLES: u32 = 0x4000_0000;
 /// The outer sphere's radius and its centre's height above the body
 /// centre, in `r` (section 5.1).
 pub const OUTER_RADIUS: f32 = 2.0;
@@ -143,9 +141,10 @@ impl Shapes {
     }
 }
 
-/// A box of a movable body the player's body meets
-/// (docs/behavior/trader-door.md 3.1), in world space. It stays where it
-/// is given: the body's own motion is its owner's.
+/// A box of a movable body (docs/behavior/trader-door.md 3.1) in world
+/// space, as its shell holds it: what the crosshair picks and the route
+/// planner walls off (the player's body meets the shell itself, through the
+/// physics world's contacts).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyBox {
     pub centre: Vec3,
@@ -370,8 +369,8 @@ pub struct PlayerBody {
     /// The player is climbing (docs/behavior/climbing.md 3.1, 3.4): not
     /// airborne, and its contacts while moving take the world's softness.
     climbing: bool,
-    /// The movable bodies' boxes it meets (docs/behavior/trader-door.md 3).
-    bodies: Vec<BodyBox>,
+    /// Its shapes' material index (physics-contacts.md 5).
+    material: u32,
     contacts: Vec<Contact>,
     step: StepContacts,
     scratch: Vec<u32>,
@@ -409,7 +408,7 @@ impl PlayerBody {
             ground_material: None,
             refused: None,
             climbing: false,
-            bodies: Vec::new(),
+            material: PLAYER_MATERIAL,
             contacts: Vec::new(),
             step: StepContacts::default(),
             scratch: Vec::new(),
@@ -473,14 +472,43 @@ impl PlayerBody {
         self.ground_material
     }
 
-    /// Sets the movable bodies' boxes the body meets from the next step
-    /// (docs/behavior/trader-door.md 3).
-    pub fn set_bodies(&mut self, bodies: Vec<BodyBox>) {
-        self.bodies = bodies;
+    /// Its shapes' material index: the actor's spawn gives them its
+    /// section's `material` (physics-contacts.md 5).
+    pub fn set_material(&mut self, material: u32) {
+        self.material = material;
     }
 
-    pub fn bodies(&self) -> &[BodyBox] {
-        &self.bodies
+    pub fn material(&self) -> u32 {
+        self.material
+    }
+
+    /// What the physics world's step takes of the movement step just run
+    /// (docs/behavior/physics-contacts.md 5): the body's centre at the
+    /// step's start, its velocity after it, its shapes and the step's
+    /// rules.
+    pub fn world_step(&self) -> WorldStep {
+        WorldStep {
+            centre: self.previous,
+            velocity: self.velocity,
+            shapes: self.shapes,
+            mass: self.config.mass,
+            material: self.material,
+            moving: self.step.moving,
+            step_assist: self.step.step_assist,
+            traction: self.step.traction,
+            climbing: self.climbing,
+        }
+    }
+
+    /// The world step's reaction on the body (physics-contacts.md 5, 7):
+    /// the change `dv` its contacts with movable bodies made to the
+    /// velocity, which moves the body for the step too, and whether they set
+    /// the "blocked" flag (trader-door.md 3.1, 3.3), which the next step's
+    /// replacement reads (6.3).
+    pub fn react(&mut self, dv: Vec3, blocked: bool) {
+        self.velocity = add(self.velocity, dv);
+        self.centre = add(self.centre, scale(dv, STEP));
+        self.blocked_previous |= blocked;
     }
 
     /// The contacts of the current step, after the player's rules.
@@ -824,7 +852,7 @@ impl PlayerBody {
             material: None,
         };
         // A world with triangles has materials (its mapping found them).
-        let Some(player) = world.materials().get(PLAYER_MATERIAL) else {
+        let Some(player) = world.materials().get(self.material as usize) else {
             return result;
         };
         let small = shapes.small_radius();
@@ -834,34 +862,11 @@ impl PlayerBody {
         let (mut solid, mut passing) = (None, None);
         let mut head_seen = false;
         let (world_erp, world_cfm) = world_erp_cfm();
-        // trader-door.md 3.1, 3.2: a movable body's box is collided while
-        // its bounds overlap the body's; the outer sphere's overlap with it
-        // only sets the step's "blocked" flag, before the other contacts
-        // (our choice of order: the spec gives none).
-        let outer = (
-            add(c, [0.0, OUTER_HEIGHT * shapes.r, 0.0]),
-            OUTER_RADIUS * shapes.r,
-        );
-        if self.bodies.iter().any(|b| b.distance(outer.0) < outer.1) {
-            rules.blocked = true;
-        }
-        let body_triangles = (self.bodies.iter().enumerate())
-            .filter(|(_, b)| {
-                let (lo, hi) = b.bounds();
-                (0..3).all(|k| lo[k] <= max[k] && hi[k] >= min[k])
-            })
-            .flat_map(|(i, b)| {
-                let base = BODY_TRIANGLES + 12 * i as u32;
-                (b.triangles().into_iter().enumerate()).map(move |(k, t)| (base + k as u32, t))
-            });
         for shape in [Shape::Head, Shape::Bottom, Shape::Torso] {
             let level = found.iter().map(|&t| (t, world.corners(t)));
-            let all = level
-                .chain(ladder_triangles.clone())
-                .chain(body_triangles.clone());
+            let all = level.chain(ladder_triangles.clone());
             for (t, corners) in all {
                 let ladder = t >= LADDER_TRIANGLES;
-                let movable = !ladder && t >= BODY_TRIANGLES;
                 let raw = match shape {
                     Shape::Head => geometry::sphere(add(c, head), small, add(p, head), &corners),
                     Shape::Bottom => geometry::sphere(c, shapes.r, p, &corners),
@@ -884,8 +889,6 @@ impl PlayerBody {
                 let generated_normal = normal;
                 let material = if ladder {
                     world.ladder_material()
-                } else if movable {
-                    self.bodies[((t - BODY_TRIANGLES) / 12) as usize].material
                 } else {
                     world.material_index(t)
                 };
@@ -897,10 +900,7 @@ impl PlayerBody {
                     // TODO(#391): whether a ladder's contacts give the impact
                     // speed or set the ground material is unestablished
                     // (climbing.md 3.7, 4); here they do neither.
-                    // trader-door.md 3.3: a movable body's contacts record
-                    // an impact for collision damage instead (PH-12, not
-                    // implemented here).
-                    if ladder || movable {
+                    if ladder {
                         return;
                     }
                     let v = self.velocity;
@@ -964,19 +964,9 @@ impl PlayerBody {
                 if shape == Shape::Head {
                     soften(&mut erp, &mut cfm, 20.1, LEVEL_SOFTENING);
                 }
-                // trader-door.md 3.3: a movable body's contacts take 5 where
-                // the level's take 0.5. The sign of the library's normal for
-                // such a pair is unestablished (3.2); it is taken as for the
-                // level (our choice: a door's sides, with horizontal
-                // normals, do not depend on it).
-                let k = if movable {
-                    BODY_SOFTENING
-                } else {
-                    LEVEL_SOFTENING
-                };
-                soften(&mut erp, &mut cfm, 20.1 + 19.1 * normal[1], k);
-                // 5.4: traction and friction; a movable body's value is 1.
-                let value = if shape == Shape::Head || rules.blocked || movable {
+                soften(&mut erp, &mut cfm, 20.1 + 19.1 * normal[1], LEVEL_SOFTENING);
+                // 5.4: traction and friction.
+                let value = if shape == Shape::Head || rules.blocked {
                     1.0
                 } else {
                     mu
@@ -1018,6 +1008,86 @@ impl PlayerBody {
         result.material = passing.or(solid);
         result
     }
+}
+
+/// What the physics world's step takes of a movement step
+/// ([`PlayerBody::world_step`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WorldStep {
+    /// The body centre at the step's start.
+    pub centre: Vec3,
+    /// The velocity the step left.
+    pub velocity: Vec3,
+    pub shapes: Shapes,
+    pub mass: f32,
+    pub material: u32,
+    /// The step's rules (6.2, 5.4): movement requested, step assistance,
+    /// the traction `T`, climbing (climbing.md 3.4).
+    pub moving: bool,
+    pub step_assist: bool,
+    pub traction: f32,
+    pub climbing: bool,
+}
+
+/// A contact of the player's shape with a movable body after the
+/// player's rules ([`movable_contact`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovableContact {
+    pub erp: f32,
+    pub cfm: f32,
+    pub friction: f32,
+    /// A head contact sets the step's "blocked" flag (5.4, 6.3).
+    pub blocked: bool,
+}
+
+/// The player's contact rules for a contact of its `shape` with a movable
+/// body (level-cform.md 5.4 with docs/behavior/trader-door.md 3.3's
+/// differences): `normal` points towards the player's shape, `library_y`
+/// is the y of the library's normal as generated for the pair, and `erp`,
+/// `cfm` and `mu` are the pair's (physics-contacts.md 2.2). `None` when the
+/// rules drop it. The step replacement does not act on these contacts:
+/// step assistance against movable bodies is its own spec (TODO(#898)).
+pub fn movable_contact(
+    shape: Shape,
+    normal: Vec3,
+    library_y: f32,
+    (mut erp, mut cfm, mu): (f32, f32, f32),
+    step: &WorldStep,
+) -> Option<MovableContact> {
+    if shape == Shape::Bottom && normal[1] < 0.0 {
+        return None;
+    }
+    if step.climbing && step.moving {
+        let (world_erp, world_cfm) = world_erp_cfm();
+        (erp, cfm) = (world_erp, 2.0 * world_cfm);
+    }
+    let soften = |erp: &mut f32, cfm: &mut f32, q: f32, k: f32| {
+        let f = 1.0 / ((1.0 - *erp) * q + *erp * k);
+        *cfm *= f;
+        *erp *= f * k;
+    };
+    if shape == Shape::Head {
+        soften(&mut erp, &mut cfm, 20.1, LEVEL_SOFTENING);
+    }
+    soften(&mut erp, &mut cfm, 20.1 - 19.1 * library_y, BODY_SOFTENING);
+    // 5.4: a movable body's traction value is 1.
+    let traction = step.traction.max(1.0);
+    let friction = if shape == Shape::Head || step.moving {
+        0.0
+    } else {
+        let assist = if step.step_assist {
+            STEP_ASSIST_FACTOR
+        } else {
+            1.0
+        };
+        mu * traction * assist
+    };
+    Some(MovableContact {
+        erp,
+        cfm,
+        friction,
+        blocked: shape == Shape::Head,
+    })
 }
 
 struct Collided {
@@ -1519,62 +1589,5 @@ mod tests {
         assert_eq!(b.ray([1.1, 1.0, 0.0], [1.0, 0.0, 0.0]), Some(0.0));
         assert!((b.distance([0.5, 1.0, 0.0]) - 0.5).abs() < 1e-6);
         assert_eq!(b.distance([1.1, 1.0, 0.0]), 0.0);
-    }
-
-    /// trader-door.md 3.3: the contact with a movable body's side, all
-    /// factors 1: error reduction 0.12987 and constraint-force mixing
-    /// 1.082e-7, traction 1; the outer sphere's overlap sets "blocked".
-    #[test]
-    fn a_movable_body_contact_is_stiffer_than_the_level() {
-        let mut b = Builder::default();
-        b.floor([-5.0, 5.0], [-5.0, 5.0], 0.0, true);
-        let world = b.world();
-        let mut body = PlayerBody::new(config(), [0.0, 0.0, 0.0]);
-        body.set_bodies(vec![leaf(0.34, 0.0)]);
-        let c = body.begin_step(
-            &world,
-            &StepInput {
-                acceleration: [1.0, 0.0, 0.0],
-                jump_requested: false,
-            },
-        );
-        assert!(c.blocked && c.traction == 1.0, "{c:?}");
-        let side: Vec<&Contact> = (body.contacts().iter())
-            .filter(|c| c.triangle >= BODY_TRIANGLES && c.normal[1] == 0.0)
-            .collect();
-        assert!(!side.is_empty(), "{:?}", body.contacts());
-        for c in side {
-            assert_eq!(
-                (c.material, c.friction, c.normal),
-                (4, 0.0, [-1.0, 0.0, 0.0])
-            );
-            assert!((c.erp - 0.129_87).abs() < 1e-5, "{}", c.erp);
-            assert!((c.cfm - 1.082e-7).abs() < 1e-10, "{}", c.cfm);
-        }
-        // Far from it, nothing.
-        body.set_position([-3.0, 0.0, 0.0]);
-        let c = body.begin_step(&world, &StepInput::default());
-        assert!(!c.blocked);
-        assert!(body.contacts().iter().all(|c| c.triangle < BODY_TRIANGLES));
-    }
-
-    #[test]
-    fn a_movable_body_box_stops_the_walk() {
-        let mut b = Builder::default();
-        b.floor([-10.0, 10.0], [-10.0, 10.0], 0.0, true);
-        let world = b.world();
-        let mut body = PlayerBody::new(config(), [0.0, 0.0, 0.0]);
-        body.set_bodies(vec![leaf(1.0, 0.0)]);
-        let r = walk(&mut body, &world, [1.0, 0.0, 0.0], 200);
-        assert!(
-            r.position[0] < 1.0 - 0.3 && r.position[0] > 0.5,
-            "{:?}",
-            r.position
-        );
-        assert!(r.position[1].abs() < 0.02, "{:?}", r.position);
-        // Without it, through.
-        body.set_bodies(Vec::new());
-        let r = walk(&mut body, &world, [1.0, 0.0, 0.0], 100);
-        assert!(r.position[0] > 2.0, "{:?}", r.position);
     }
 }

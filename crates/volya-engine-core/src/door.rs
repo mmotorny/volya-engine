@@ -5,18 +5,15 @@
 //! (docs/behavior/trader-door.md, cited by section): the scheme's section
 //! (2.1), its start (2.2) and per-step call (2.2, 2.3), the hint it sets
 //! (5.1), the use action's sound (2.5), the motor it sets on the leaf's
-//! hinge (2.2, 2.3), and the leaf's boxes the player's body meets (1, 3).
+//! hinge (2.2, 2.3), and the leaf's boxes the crosshair picks (1, 5.1).
 //!
 //! The shipped scripts do not run yet: the scheme here is the spec's
 //! statement of what the scripts do, standing in for them (TODO(#875)). The
 //! leaf is its shell's (docs/behavior/physics-shells.md 10): the level
 //! hands the scheme's motor to the hinge and the shell's boxes, where its
-//! bodies hold them, to the door. The player's body meets those boxes under
-//! its own contact rules (3.3) and does not push the leaf or wake its
-//! shell: the contacts of docs/behavior/physics-contacts.md 7 are not
-//! gathered yet (TODO(#956)). The resting closed leaf still blocks the
-//! player: whether its shell ignores characters once at rest is open, and
-//! the simplest reading is that it does not (TODO(#954)).
+//! bodies hold them, to the door. The player's body meets the shell itself
+//! through the physics world's contacts (docs/behavior/physics-contacts.md
+//! 7), at rest from the start as when active (7.1).
 
 use volya_engine_formats::ltx::{Section, value};
 
@@ -260,7 +257,7 @@ impl Door {
         self.tip.as_deref()
     }
 
-    /// The leaf's boxes the player's body meets (3.1).
+    /// The leaf's boxes where its shell holds them (1).
     pub fn boxes(&self) -> &[BodyBox] {
         &self.boxes
     }

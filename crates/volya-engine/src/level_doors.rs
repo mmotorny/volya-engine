@@ -5,7 +5,8 @@
 //! cited by section; [`crate::core::door`]): found among the objects online
 //! at the start, their scheme updated with the level (2.1, 2.2), its motor
 //! handed to the leaf's hinge in the level's physics (2.3), the leaves'
-//! boxes from their shells handed to the player's body (3), and the
+//! boxes from their shells for the pick and the route planner (the player's
+//! body meets the shells in the physics world, physics-contacts.md 7), and the
 //! player's hint from the one the crosshair picks (5.1), with when it came
 //! under it (5.3).
 

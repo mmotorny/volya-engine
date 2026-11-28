@@ -11,6 +11,7 @@
 
 use std::ffi::c_int;
 
+use super::collide::{Geom, bounds_of};
 use super::{
     DMass, DxBody, DxJoint, DxWorld, GroupId, Grouped, JointId, OdeSolver, Real, STEPPING,
     dBodyCreate, dBodyGetPosition, dBodySetGravityMode, dBodySetMass, dBodySetPosition,
@@ -18,6 +19,8 @@ use super::{
 };
 use crate::collision::body::{WORLD_DAMPING, WORLD_SPRING};
 use crate::collision::geometry::Vec3;
+use crate::physics::contacts::level::LevelState;
+use crate::physics::contacts::{Bounds, Class};
 use crate::physics::shell::{IDENTITY, JointKind, MassPiece, Motion, Shape, Shell, turn};
 use crate::physics::{Kind, Object, Params};
 use volya_engine_formats::model::{Mat4, multiply, transform_point};
@@ -123,6 +126,14 @@ pub struct OdeShell {
     resting: bool,
     /// A gravity switch for its next solving (`world` 1.4).
     gravity: Option<bool>,
+    /// Its geometries (2.2): the element, the shape in the element's frame
+    /// and the element's material; their level states (physics-contacts.md
+    /// 3.2, 3.3), its collision class (1.3) and its box as last updated
+    /// (1.1).
+    geoms: Vec<(usize, Shape, u32)>,
+    level: Vec<LevelState>,
+    class: Class,
+    bounds: Option<Bounds>,
 }
 
 impl OdeSolver {
@@ -237,6 +248,9 @@ impl OdeSolver {
         for e in &elements {
             self.bodies.insert(super::BodyId(e.body), group);
         }
+        let geoms: Vec<(usize, Shape, u32)> = (shell.elements.iter().enumerate())
+            .flat_map(|(i, e)| e.geometries.iter().map(move |g| (i, g.shape, e.material)))
+            .collect();
         let mut s = OdeShell {
             serial: self.serial,
             group,
@@ -246,6 +260,10 @@ impl OdeSolver {
             height: 0.0,
             resting: shell.switched_off,
             gravity: None,
+            level: vec![LevelState::default(); geoms.len()],
+            geoms,
+            class: Class::shell(shell),
+            bounds: None,
         };
         s.read(self);
         s
@@ -416,6 +434,29 @@ impl OdeShell {
                 .map_or(0.0, |e| vec(dBodyGetPosition(e.body))[1]);
             self.resting = self.elements.iter().all(|e| dBodyIsEnabled(e.body) == 0);
         }
+        let mut geoms = Vec::new();
+        self.place(solver, &mut geoms);
+        self.bounds = bounds_of(&geoms);
+    }
+
+    /// Its geometries where its bodies hold them.
+    fn place(&self, solver: &OdeSolver, out: &mut Vec<Geom>) {
+        for &(e, shape, material) in &self.geoms {
+            let Some(frame) = self.frame(solver, e) else {
+                continue;
+            };
+            out.push(Geom {
+                shape: shape.moved(&frame),
+                body: Some(super::BodyId(self.elements[e].body)),
+                material,
+                meets_level: true,
+            });
+        }
+    }
+
+    /// Its collision class (physics-contacts.md 1.3).
+    pub fn class(&self) -> Class {
+        self.class
     }
 
     /// An element's body: its position (the mass centre), rotation (rows
@@ -540,6 +581,26 @@ impl Grouped for OdeShell {
     fn after_solve(&mut self, solver: &OdeSolver) {
         self.read(solver);
     }
+
+    fn class(&self) -> Class {
+        self.class
+    }
+
+    fn bounds(&self) -> Option<Bounds> {
+        self.bounds
+    }
+
+    fn geometries(&self, solver: &OdeSolver, out: &mut Vec<Geom>) {
+        self.place(solver, out);
+    }
+
+    fn level_state(&mut self, geom: usize) -> Option<&mut LevelState> {
+        self.level.get_mut(geom)
+    }
+
+    fn wake(&mut self, solver: &OdeSolver) {
+        OdeShell::wake(self, solver);
+    }
 }
 
 impl Object for OdeShell {
@@ -573,6 +634,10 @@ impl Object for OdeShell {
     /// the steppers switch every stepped body on (`library` 4.1).
     fn post_step(&mut self, _: &Params) -> bool {
         self.resting
+    }
+
+    fn clear_level_contacts(&mut self) {
+        self.level.iter_mut().for_each(LevelState::clear);
     }
 }
 
