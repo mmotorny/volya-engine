@@ -55,7 +55,7 @@ Conventions:
 **Checks.** Every claim carries a tag [K-*n*]. The checks are one script in the dirty workspace,
 `checks/script-api-simulation-registry/run_all.py` (`python3 -I run_all.py`): it reads the game library's bytes,
 the evidence of read-only headless static analysis (produced by `gh.py` beside it), the listing, the scoping spec's
-scan and the shipped scripts and data. All checks pass (`ALL PASS 31`).
+scan and the shipped scripts and data. All checks pass (`ALL PASS 36`).
 
 ## 1. What this spec owns
 
@@ -108,11 +108,12 @@ The scoping spec assigns this spec three candidate strings [K-2]:
 
 ## 2. The simulation: `alife()` (static)
 
-`alife()` returns the simulation, an `alife_simulator`, or nil when there is none [K-3]. The simulation is made when a
-single-player game server starts (New Game or load) and the game keeps it as its one simulation until it is
-destroyed; making it requires the server options `alife` and `single` ("Invalid server options!" otherwise, fatal)
-[K-3]. So `alife()` is nil in the main menu before a game and **believed** nil after a game ends (the scoping spec's
-section 5 step 2: the main menu tests `alife()` before disconnecting). Everything below is a member of that object.
+`alife()` returns the simulation, an `alife_simulator`, or nil when there is none [K-3]. The simulation is made when
+a single-player game server starts (New Game or load) and the game keeps it as its one simulation until it is
+destroyed; making it requires a non-empty game or spawn name in the server options and the server options `alife`
+and `single`, all in one check ("Invalid server options!" otherwise, fatal) [K-3, K-32]. So `alife()` is nil in the
+main menu before a game and **believed** nil after a game ends (the scoping spec's section 5 step 2: the main menu
+tests `alife()` before disconnecting). Everything below is a member of that object.
 
 ## 3. Finding objects (static)
 
@@ -260,9 +261,14 @@ With a `parent_id` other than −1 [K-13]:
 - if the parent is offline, as above with that parent id: the object is created offline in the parent;
 - if the parent is **online**, the object is made as in steps 1–3 but not registered by this call; instead its
   spawn data is written into a spawn message of the game's server (the kind of message a networked spawn arrives
-  in) and handed to the server, and the call returns the server's result. **Believed**: the server registers the
-  object and brings it online in the parent at once, as for any spawn message (the server's handling is not part
-  of this spec).
+  in) and handed to the server, and the call returns the server's result. Before it is handed over, the new
+  object's id is put back as free into the id pool of step 2, which is the game server's id pool [K-34]. The
+  server's handling of a spawn message with respawn time 0 (sav.md 7.2) and flags bit 0x10 clear takes the
+  message's id from that pool (fatal "Requesting ID has already been used!" if it is not free) [K-34]; the object
+  made here has respawn time 0 and flags 0 when it is constructed, and this call changes neither (**believed** for
+  every kind: only the common part of the constructors was examined), so the server's object gets the id step 2
+  gave [K-34]. **Believed**: the server registers the object and brings it online in the parent at once, as for
+  any spawn message (the rest of the server's handling is not part of this spec).
 
 ### 7.2 `create(spawn_id)` and `create_ammo(section, position, level_vertex, game_vertex, parent_id, count)`
 
@@ -354,27 +360,35 @@ simulation object, `killer` a schedulable simulation object (spec J's `cse_alife
 
 1. The objects the monster carries that are items are collected in a list of the simulation's [K-18] (their use is
    **unestablished** here).
-2. The monster's **death place** is set: without a killer, or with one that is not a group, its game vertex becomes
+2. The monster's health (Creature block: the value `alive()` and `health()` of spec J read) is set to 0 [K-33].
+   Then its **death place** is set. A killer is asked whether it is an anomalous zone; only objects of
+   `cse_anomalous_zone` and `cse_zone_visual` (and the classes deriving from them) answer yes, none of these is a
+   schedulable object, and every schedulable class of the game library answers no [K-33].
+   Without a killer, or with one that answers no, its game vertex becomes
    `game_vertex`, and its position, level vertex and distance those of one of that vertex's level points (`OS` 1.5),
-   chosen with the simulation's own random generator, a linear congruential generator (below) [K-18]. If the vertex
+   chosen with the simulation's own random generator, a linear congruential generator (below) [K-18]. A vertex with
+   no level points takes index 0 without a draw, that is the 20 bytes at its level points offset (`OS` 1.3), which
+   belong to a later vertex's level points or lie past the table (what is then read is **unestablished**); every
+   vertex of this edition has at least one level point (measured) [K-33]. **Disputed in review:** that those 20
+   bytes belong to a later vertex's level points or lie past the table is unbacked: where the level points offset
+   of a vertex without level points refers is not established. If the vertex
    is on the current level and that level vertex is not a valid vertex of the level, the game stops ("Invalid vertex",
    fatal) [K-18]. Two 16-bit game-vertex fields of a monster-like object are set to the new game vertex (**believed**:
-   the location fields of sav.md 7.4.1's Monster-like update) [K-18]. With a killer for which a test of the killer's
-   own succeeds, another rule applies (**unestablished**). **Disputed in review:** that the first rule applies to a
-   killer "that is not a group" is unbacked; what is established is only that a killer for which that test fails, or
-   no killer, gets this rule; what the test asks is **unestablished**.
+   the location fields of sav.md 7.4.1's Monster-like update) [K-18]. A killer that answers yes would get another
+   rule, which no killer reaches (its details **unestablished**) [K-33].
 
    The generator: *s* ← *s* · 0x8088405 + 1 modulo 2³², the point index being the high 32 bits of *n* · *s*, *n* the vertex's number of level points [K-18]. <!-- spec-lint: constant -->
-3. A step of the monster's own runs (for the objects of the six scripted monster and stalker classes examined it
-   does nothing) [K-18]. **Disputed in review:** the check establishes only that one implementation of this step
-   does nothing; which classes use it (the "six classes examined") is not backed, so for any given class what the
-   step does is **unestablished**.
+3. A step of the monster's own runs; every class of the game library that has the monster part (stalkers,
+   monsters, monster groups and the script classes deriving from them) has the same one, which does nothing
+   [K-18, K-33].
 4. If the monster still carries any object, the game stops (fatal) [K-18].
 5. If it is a member of a group it is taken out of the group; if its game vertex changed, its location is updated
    as for a relocation (`OS` 5.2); a schedulable monster is entered in a list of the simulation's [K-18]. These
    steps' details are **unestablished**.
 
-Whether the call changes the monster's health, and what makes it dead, are **unestablished**. No loadable script calls it (one non-loadable script does) [K-30].
+After the call the monster's health is 0, so its `alive()` (spec J: health > 0) is false [K-33]; whether anything
+else follows from the health of 0 is **unestablished**. No loadable script calls it (one non-loadable script
+does) [K-30].
 
 ## 10. The game graph (static)
 
@@ -452,10 +466,9 @@ brain has a movement manager, which has a detail path manager and a patrol path 
      game time has reached the time of the last look plus `smart_terrain_choose_interval`; it records the time,
      asks every smart terrain in the simulation's order whether it accepts the object (its `enabled`) and how
      suitable it is (its `suitable`), takes the one with the greatest suitability (starting from −3.4028235 × 10³⁸;
-     of equals the first), lets it take the object (its `register_npc`) and resets the time of the last look to 0
-     [K-23]; **Disputed in review:** the last two steps happen only when a smart terrain was chosen; when none
-     accepts the object (or none is more suitable than the starting value), nothing follows the recording of the
-     time, which then stays the time of this look;
+     of equals the first) and, only if one was chosen, lets it take the object (its `register_npc`) and resets the
+     time of the last look to 0 [K-23, K-35]; when none accepts the object (or none is more suitable than the
+     starting value), nothing follows the recording of the time, which then stays the time of this look [K-35];
   2. if the object still has no smart terrain: the movement manager's path type becomes 3 and its update runs, which
      does nothing for that type (12.2) [K-23];
   3. otherwise: the smart terrain's `task(object)` gives the task (section 11); the movement manager's path type
@@ -566,6 +579,7 @@ By the scan of `kuses.py` (calls on `alife()` and on names assigned from it, `ga
 | `set_interactive`, `kill_entity` | 0 (1) each | |
 | `game_graph()` | 4 (4) | |
 | `vertex` | 3 (3) | |
+| `level_id` (on a vertex) | 2 (2) | 3 |
 | `accessible` | 1 (1) | |
 | `CALifeSmartTerrainTask` | 1 (1) | 2 |
 | `brain():update()` | 2 (2) | 2 |
@@ -601,8 +615,9 @@ negation [K-19].
 - Whether the simulation's registration flag is clear while a New Game or a load creates its objects (7.4, believed).
 - When an online object sent the destroy event by `release` leaves the simulation (7.3).
 - How an online creature learns of changed restrictions (section 8).
-- `kill_entity`: the use of the collected items, the rule with a group killer, the details of step 5, and what
-  makes the monster dead (section 9).
+- `kill_entity`: the use of the collected items, the rule for a killer that answers yes (reached by no killer), what
+  is read for a vertex with no level points, the details of step 5, and what else follows from the health of 0
+  (section 9).
 - What `create_ammo`'s count does for a section that is not ammunition (7.2).
 - Patrol path manager: start types other than 0–3; the next point when there are no candidates (12.4).
 - `set_interactive`'s bit beyond `OS` 7.1 (6.2).
@@ -617,14 +632,7 @@ negation [K-19].
   `spawns\all.spawn`).
 - Analysis: static analysis of `xrGame.dll` with Ghidra in headless, read-only mode (decompiling and disassembling
   the registration code of this spec's classes and the code it registers, the simulation's creation, registration
-  and release code, and reading constants and strings from the file); a reader of `spawns\all.spawn` (records and
-  patrol paths, as approved specs describe them); a reader of the two story-id configuration files; a token scan of
+  and release code, the game server's handling of spawn messages and its id pool, and reading constants and strings from the file); a reader of `spawns\all.spawn` (records and
+  patrol paths, as approved specs describe them); a reader of `game.graph` (its vertex records); a reader of the two story-id configuration files; a token scan of
   the 439 scripts. No binary was executed.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
-
-## Gaps found in review
-
-- Making the simulation (section 2) also requires a non-empty game or spawn name in the server options, in the same fatal check as `alife` and `single`.
-- `kill_entity` (section 9): before the death place is chosen, a further field of the monster is set to 0 (which field is not identified); and for a game vertex with no level points, the point taken is index 0 of an empty list (what is then read is unestablished).
-- `create` with an online parent (7.1): before the spawn message is handed to the server, the new object's id is also entered in a table of the game's server; what that table does is unestablished.
-- Section 14 omits the calls of `level_id()` on game-graph vertices: 2 loadable scripts (2 in all), 3 calls.
