@@ -212,9 +212,12 @@ impl Document {
 ///
 /// Choices where the spec is silent: an end tag closes the innermost open
 /// element whatever its name (the shipped `ingame_msglog_*.xml` open
-/// `<_window>` and close `</window>`); an end tag with no open element, an
-/// element still open at the end, an unterminated markup construct or a
-/// numeric reference to a character Windows-1251 lacks is an error; an
+/// `<_window>` and close `</window>`); elements still open at the end are
+/// closed there (the shipped `config\gameplay\info_l03agroprom.xml` has no
+/// end tag for its root, and its portions are declared: info-portions.md
+/// 1.1, 1.2); an end tag with no open element, an unterminated markup
+/// construct or a numeric reference to a character Windows-1251 lacks is
+/// an error; an
 /// unknown entity is kept literally; an attribute without `=` has an empty
 /// value.
 pub fn parse(text: &[u8]) -> io::Result<Document> {
@@ -310,9 +313,9 @@ impl Parser<'_> {
             }
         }
         self.flush_text(&mut stack, &mut text)?;
-        if stack.len() > 1 {
-            let open = stack.last().expect("open element").name.clone();
-            return Err(self.error(&format!("element <{open}> not closed")));
+        while stack.len() > 1 {
+            let element = stack.pop().expect("open element");
+            push(&mut stack, Node::Element(element));
         }
         let top = stack.pop().expect("top level");
         Ok(Document {
@@ -550,7 +553,18 @@ mod tests {
         assert_eq!(root.name, "_window");
         assert_eq!(root.elements().count(), 1);
         assert!(parse(b"<a></a></b>").is_err());
-        assert!(parse(b"<a><b></a>").is_err());
+        // Elements still open at the end are closed there.
+        // `</a>` closes `b`, so `c` is `a`'s second child.
+        let d = doc("<a><b></a><c>");
+        assert_eq!(d.nodes.len(), 1);
+        let names: Vec<_> = d
+            .root()
+            .unwrap()
+            .elements()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(names, ["b", "c"]);
+        assert_eq!(doc("<r><x/>").root().unwrap().elements().count(), 1);
         assert!(parse(b"<a><!-- x").is_err());
     }
 
