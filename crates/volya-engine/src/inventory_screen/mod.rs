@@ -44,7 +44,7 @@ use crate::core::input::{
 use crate::core::vfs::Vfs;
 use crate::data::{GameData, encode};
 use crate::dialog::{self, PushButton, Pushed};
-use crate::draw::{Ctx, picture_desc};
+use crate::draw::{Ctx, picture_desc, pixels};
 use crate::save_load::FieldFont;
 use crate::scene::{Scene, Sprite};
 use layout::{
@@ -1286,20 +1286,7 @@ impl InventoryScreen {
                 crate::options::widgets::ScrollBar::new(list.block_height(), rect.height, p.width);
             bar.set(list.scroll as i32);
             let br = Rect::new(rect.x + rect.width - p.width, rect.y, p.width, rect.height);
-            let layer = format!("{name} bar");
-            ctx.part_stretched(s, &layer, &p.track, br)?;
-            let b = Rect::new(br.x, br.y + bar.box_top(), br.width, bar.box_length());
-            ctx.part_stretched(s, &layer, &p.thumb, b)?;
-            ctx.part(s, &layer, &p.up, (br.x, br.y), None, Color::WHITE)?;
-            let arrow = crate::options::widgets::ARROW;
-            ctx.part(
-                s,
-                &layer,
-                &p.down,
-                (br.x, br.y + br.height - arrow),
-                None,
-                Color::WHITE,
-            )?;
+            ctx.scroll_bar(s, &format!("{name} bar"), p, &bar, br)?;
         }
         Ok(())
     }
@@ -1410,16 +1397,6 @@ impl InventoryScreen {
 
 fn rect4(r: Rect) -> [f32; 4] {
     [r.x, r.y, r.width, r.height]
-}
-
-/// A UI rectangle in output pixels, in the scene's convention.
-fn pixels(r: Rect, (sx, sy): (f32, f32)) -> [f32; 4] {
-    [
-        (r.x * sx).floor() - 0.5,
-        (r.y * sy).floor() - 0.5,
-        ((r.x + r.width) * sx).floor() - 0.5,
-        ((r.y + r.height) * sy).floor() - 0.5,
-    ]
 }
 
 /// A static's picture and its text: `text` (raw, complex codes allowed)

@@ -9,11 +9,13 @@ use std::io;
 
 use crate::core::vfs::Vfs;
 use crate::data::{Assets, GameData};
+use crate::options::widgets::ScrollBar;
 use crate::scene::{Scene, Sprite, TextureId};
 use volya_engine_formats::text::font::UiFont;
 pub use volya_engine_formats::text::layout::Surface;
 use volya_engine_formats::text::layout::{TextBox, draw_line, layout_text_on_surface};
 use volya_engine_formats::ui::layout::{HAlign, Rect, StaticDesc, TextureRef, WindowDesc};
+use volya_engine_formats::ui::options::ScrollBarProfile;
 use volya_engine_formats::ui::picture::{Picture, PicturePlacement};
 use volya_engine_formats::ui::{Color, Resolution};
 
@@ -377,6 +379,60 @@ impl Ctx<'_> {
         self.part(scene, layer, &e, (x + width - ew, y), None, c)
     }
 
+    /// A vertical frame line with texture base `base` from (`x`, `y`),
+    /// `length` long (talk-window.md 4): `_b` at the top, `_e` with its
+    /// bottom at the line's bottom, `_back` repeated in one column between
+    /// them, the last copy cut to the remainder; all in colour `c`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn frame_line_vertical(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        base: &str,
+        (x, y): (f32, f32),
+        length: f32,
+        c: Color,
+    ) -> io::Result<()> {
+        let (b, e) = (format!("{base}_b"), format!("{base}_e"));
+        let bh = self.part_size(&b).map_or(0.0, |s| s.1);
+        let eh = self.part_size(&e).map_or(0.0, |s| s.1);
+        self.repeat(
+            scene,
+            layer,
+            &format!("{base}_back"),
+            y + bh,
+            y + length - eh,
+            x,
+            None,
+            true,
+            c,
+        )?;
+        self.part(scene, layer, &b, (x, y), None, c)?;
+        self.part(scene, layer, &e, (x, y + length - eh), None, c)
+    }
+
+    /// A vertical scroll bar (options-screens.md 4.8) over `rect`, the
+    /// bar's rectangle, in profile `p` at the value model `bar`: the track
+    /// stretched over it, the box, the arrows at pixel size.
+    pub fn scroll_bar(
+        &mut self,
+        scene: &mut Scene,
+        layer: &str,
+        p: &ScrollBarProfile,
+        bar: &ScrollBar,
+        rect: Rect,
+    ) -> io::Result<()> {
+        self.part_stretched(scene, layer, &p.track, rect)?;
+        let b = Rect::new(rect.x, rect.y + bar.box_top(), rect.width, bar.box_length());
+        self.part_stretched(scene, layer, &p.thumb, b)?;
+        self.part(scene, layer, &p.up, (rect.x, rect.y), None, Color::WHITE)?;
+        let down = (
+            rect.x,
+            rect.y + rect.height - crate::options::widgets::ARROW,
+        );
+        self.part(scene, layer, &p.down, down, None, Color::WHITE)
+    }
+
     /// Adds the glyphs of one string `text` (Windows-1251 bytes) drawn at
     /// pen `pen` in output pixels with font `font` (text-and-fonts.md
     /// section 3) as layer `layer`.
@@ -405,6 +461,17 @@ impl Ctx<'_> {
         );
         Ok(())
     }
+}
+
+/// A UI rectangle in output pixels, in the scene's convention (for
+/// [`Scene::clip_from`]).
+pub fn pixels(r: Rect, (sx, sy): (f32, f32)) -> [f32; 4] {
+    [
+        (r.x * sx).floor() - 0.5,
+        (r.y * sy).floor() - 0.5,
+        ((r.x + r.width) * sx).floor() - 0.5,
+        ((r.y + r.height) * sy).floor() - 0.5,
+    ]
 }
 
 /// A static showing texture `name` (a texture id or path) with texture

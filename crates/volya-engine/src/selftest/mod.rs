@@ -41,6 +41,7 @@ mod pda_window;
 mod presentation;
 mod save_load;
 mod statistics;
+mod talk_window;
 mod texture_settings;
 mod textures;
 mod title_menu;
@@ -245,6 +246,7 @@ const SUITES: &[(&str, &[Checks])] = &[
             save_load::CHECKS,
             inventory_screen::CHECKS,
             pda_window::CHECKS,
+            talk_window::CHECKS,
             options::CHECKS,
         ],
     ),

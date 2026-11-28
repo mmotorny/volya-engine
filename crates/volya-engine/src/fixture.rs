@@ -343,9 +343,10 @@ pub fn tree() -> MemVfs {
         &format!("{c}system.ltx"),
         // The inventory screen's item sections (it reads their panel keys).
         format!(
-            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory, ui_pda, ui_old_textures\n\
-             [evaluation]\nline1 = \"\"\nline2 = \"\"\nline3 = \"\"\n{}",
-            crate::inventory_screen::tests::ITEMS
+            "[texture_desc]\nfiles = ui_mainmenu, ui_asus_intro, ui_common, ui_inventory, ui_pda, ui_old_textures, ui_numpad, ui_inventory2\n\
+             [evaluation]\nline1 = \"\"\nline2 = \"\"\nline3 = \"\"\n{}{}",
+            crate::inventory_screen::tests::ITEMS,
+            crate::talk_window::tests::SECTIONS
         )
         .into(),
     );
@@ -455,6 +456,35 @@ pub fn tree() -> MemVfs {
         </ui_texture>"#
             .into(),
     );
+    // The talk window (talk-window.md 1, 4).
+    add(
+        &format!("{c}ui/talk.xml"),
+        crate::talk_window::tests::TALK.into(),
+    );
+    add(
+        &format!("{c}ui/trade_character.xml"),
+        crate::talk_window::tests::TRADE_CHARACTER.into(),
+    );
+    add(
+        &format!("{c}ui/ui_numpad.xml"),
+        br#"<ui_texture><file_name>ui\ui_numpad</file_name>
+        <texture id="ui_talk_dialogue_b" x="2" y="369" width="600" height="75"/>
+        <texture id="ui_talk_dialogue_back" x="2" y="444" width="600" height="96"/>
+        <texture id="ui_talk_dialogue_e" x="2" y="540" width="600" height="40"/>
+        <texture id="ui_talk_dialogue2_b" x="0" y="580" width="600" height="98"/>
+        <texture id="ui_talk_dialogue2_back" x="0" y="444" width="600" height="96"/>
+        <texture id="ui_talk_dialogue2_e" x="0" y="540" width="600" height="40"/>
+        </ui_texture>"#
+            .into(),
+    );
+    add(
+        &format!("{c}ui/ui_inventory2.xml"),
+        br#"<ui_texture><file_name>ui\ui_inventory2</file_name>
+        <texture id="ui_charinfo_left" x="0" y="0" width="210" height="218"/>
+        <texture id="ui_charinfo_right" x="813" y="0" width="211" height="218"/>
+        </ui_texture>"#
+            .into(),
+    );
     add(
         &format!("{c}ui/hint_item.xml"),
         crate::pda_window::map_tests::HINTS.into(),
@@ -513,6 +543,11 @@ pub fn tree() -> MemVfs {
     add(&format!("{t}ui/ui_global_map.dds"), dds(1024, 2048));
     add(&format!("{t}map/map_escape.dds"), dds(512, 1024));
     add(&format!("{t}ui/ui_old_textures.dds"), dds(1024, 1024));
+    // The talk window (talk-window.md 1).
+    add(&format!("{t}ui/ui_top_background.dds"), dds(1024, 32));
+    add(&format!("{t}ui/ui_bottom_background.dds"), dds(1024, 32));
+    add(&format!("{t}ui/ui_numpad.dds"), dds(1024, 1024));
+    add(&format!("{t}ui/ui_inventory2.dds"), dds(1024, 1024));
     add(&format!("{t}ui/ui_magnifier.dds"), dds(256, 32));
     add(&format!("{t}ui/ui_static_mm_back_04.dds"), dds(1024, 1024));
     add(
