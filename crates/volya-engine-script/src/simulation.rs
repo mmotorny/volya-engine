@@ -571,8 +571,7 @@ fn create(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
         a.rounds_left = count;
     }
     // Step 4 (spec J's script calls, 7.4: TODO(#950)); the supplies of
-    // step 5 are not created (`OS` 8.1 step 3.4's rules are outside the
-    // simulation's spec).
+    // step 5 are not created (TODO(#1221)).
     sim.register_created(record, None, &system)
         .map_err(|e| ctx.failed_check(name, &e.to_string(), &[]))?;
     if parent_online {

@@ -21,6 +21,7 @@ use std::collections::hash_map::Entry;
 use std::io;
 
 use crate::core::character;
+use crate::core::character::inventory::Supplies;
 use crate::core::character_identity::{Descriptions, trader_like};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::vfs::{self, Vfs};
@@ -121,6 +122,8 @@ pub struct Characters<'a> {
     communities: Option<Vec<String>>,
     profiles: HashMap<usize, Profile>,
     specific_characters: HashMap<usize, SpecificCharacter>,
+    /// The descriptions' supplies read, by id.
+    supplies: HashMap<String, Supplies>,
 }
 
 impl<'a> Characters<'a> {
@@ -132,6 +135,7 @@ impl<'a> Characters<'a> {
             communities: None,
             profiles: HashMap::new(),
             specific_characters: HashMap::new(),
+            supplies: HashMap::new(),
         }
     }
 
@@ -277,6 +281,19 @@ impl Descriptions for Characters<'_> {
 
     fn find(&mut self, id: &str) -> io::Result<&SpecificCharacter> {
         self.specific_character(id)
+    }
+
+    /// Read once per description, includes under `$game_config$`
+    /// (new-game-supplies.md 1.1: believed the folder itself).
+    fn supplies(&mut self, id: &str) -> io::Result<Supplies> {
+        if let Some(s) = self.supplies.get(id) {
+            return Ok(s.clone());
+        }
+        let text = Supplies::bytes(&self.specific_character(id)?.supplies);
+        let base = self.data.aliases.path("$game_config$", "")?;
+        let read = Supplies::of(&config::parse_in(self.tree, &text, &base)?);
+        self.supplies.insert(id.to_owned(), read.clone());
+        Ok(read)
     }
 }
 

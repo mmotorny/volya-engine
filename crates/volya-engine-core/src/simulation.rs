@@ -19,6 +19,7 @@
 
 pub mod graph;
 pub mod navigation;
+pub mod supplies;
 mod travel;
 
 use std::cell::RefCell;
@@ -467,13 +468,15 @@ impl Simulation {
     /// actor with id 0, the others with the next id upwards from 1. The
     /// actor's supplies are created by its character state: `supplies` is
     /// called with the actor's record and the first id they take, and says
-    /// how many ids they took. Other objects' supplies are not created
-    /// (their rules are outside the spec). With `identities`, the
+    /// how many ids they took. Every other object's supplies are created
+    /// and registered right after it, each item with the next id
+    /// (new-game-supplies.md 1, 3.2; [`supplies`]). With `identities`, the
     /// characters' identities are chosen (character-identity.md 4.2): every
     /// character record's and the player's (7) spawn-file choice while the
     /// spawn file is read, so the actor's record has its identity when
     /// `supplies` is called, then each created stalker's and trader's
-    /// supplies choice. Then the
+    /// supplies choice, whose description's supplies it receives; without,
+    /// a character receives its PDA and its custom data's items only. Then the
     /// post-registration step runs in increasing id (it changes no
     /// identity, 4.1).
     pub fn new_game(
@@ -523,6 +526,7 @@ impl Simulation {
         let mut next = self.next_id;
         // The records' texts, each distinct one held once (#787).
         let strings = RefCell::new(Strings::new());
+        let mut supplier = supplies::Supplier::new(system);
         spawn::for_each_record_in(spawn_file, |r| {
             let section = volya_engine_formats::object::section(r.spawn)?;
             let class = class_of(system, &section)?;
@@ -540,13 +544,21 @@ impl Simulation {
                 let n = supplies(record, next)?;
                 let first = take(&mut next, n)?;
                 self.actor_items = first..first + n;
-            }
-            if let Some(identities) = identities.as_deref_mut()
-                && let Some(o) = self.objects.get_mut(&id)
-            {
-                // The supplies step's choice (4.1).
+            } else if let Some(o) = self.objects.get_mut(&id) {
+                // new-game-supplies.md 1: the supplies step, with a
+                // stalker's or trader's choice (4.1); each item takes the
+                // next id as it is created (3.2) and is registered.
                 let masks = o.travel.as_mut().map(|t| &mut t.config.masks);
-                identities.supplies(&mut o.record, masks, &mut self.in_use)?;
+                let items = supplier.supply(
+                    &mut o.record,
+                    masks,
+                    identities.as_deref_mut(),
+                    &mut self.in_use,
+                    &mut || take(&mut next, 1),
+                )?;
+                for item in items {
+                    self.register(item, None, system)?;
+                }
             }
             Ok(ControlFlow::Continue(()))
         })?;

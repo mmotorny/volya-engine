@@ -956,33 +956,68 @@ fn new_game_registry_and_walking_across_the_switch_distance() {
     with_tree(|vfs| {
         let mut sim = new_game(vfs);
         // 8.1: ids in creation order, the actor 0, its supplies after it.
-        assert_eq!(sim.len(), 8_641);
+        // Without identities every character receives its PDA and its
+        // custom data's items (new-game-supplies.md 1): 1,722 supplies.
+        assert_eq!(sim.len(), 8_641 + 1_722);
         assert_eq!(sim.current_level(), Some(1));
         let actor = sim.object(ACTOR_ID).unwrap();
         assert_eq!(actor.record.header.name, "level_prefix_actor_0001");
-        assert_eq!(sim.by_name("escape_trader").unwrap().id, 84 + 5);
         assert_eq!(sim.actor_items(), 64..69);
-        assert_eq!(sim.by_name("esc_wolf").unwrap().id, 100 + 5);
+        // 3.2: the trader (record 84) after the player's five items, then
+        // his custom-data items in sorted key order, then his PDA.
+        let trader = sim.by_name("escape_trader").unwrap().id;
+        assert_eq!(trader, 84 + 5);
+        for (k, section) in ["ammo_9x18_fmj", "wpn_pm", "device_pda"].iter().enumerate() {
+            let item = sim.object(trader + 1 + k as u16).unwrap();
+            assert_eq!(item.record.header.section, *section);
+            assert_eq!(item.record.header.parent_id, trader);
+        }
+        // Section 4: records 93 … 99, the novices, each with its PDA and
+        // the custom-data items of four of them.
+        let custom = [Some("conserva"), Some("bandage"), Some("bread"), None];
+        let custom = custom.iter().chain(&[Some("kolbasa"), None, None]);
+        let mut next = sim.by_name("esc_lager1").unwrap().id;
+        for (i, item) in custom.enumerate() {
+            let novice = sim.object(next).unwrap();
+            assert_eq!(novice.record.header.name, format!("esc_lager{}", i + 1));
+            assert_eq!(novice.spawn_index, Some(93 + i as u32));
+            let mut sections = vec!["device_pda"];
+            sections.extend(item);
+            for section in sections {
+                next += 1;
+                let o = sim.object(next).unwrap();
+                assert_eq!(o.record.header.section, section);
+                assert_eq!(o.record.header.parent_id, novice.id);
+            }
+            next += 1;
+        }
+        assert_eq!(sim.by_name("esc_wolf").unwrap().id, next);
         // The next id, the bolt's once the player is online: after every
         // record and the supplies.
-        assert_eq!(sim.take_id().unwrap(), 8_641 + 5);
+        assert_eq!(sim.take_id().unwrap(), 8_641 + 1_722 + 5);
         assert_eq!(sim.level_list().count(), 870);
         assert!(sim.objects().all(|o| !o.online));
         // Every stalker and monster alive with direct control is scheduled.
         let scheduled = sim.schedule().count();
         assert!(scheduled > 1_000 && scheduled <= 1_349, "{scheduled}");
 
-        // The first pass (6.5.3, 9.1): 671 online.
+        // The first pass (6.5.3, 9.1): 671 online, and the 42 items the
+        // online characters carry with them.
         let changes = sim.update(START, 10.0, 5).unwrap();
-        assert_eq!(changes.online.len(), 671);
+        assert_eq!(changes.online.len(), 671 + 42);
         assert!(changes.offline.is_empty() && changes.removed.is_empty());
         assert!(sim.object(ACTOR_ID).unwrap().online);
-        // The objects of other levels stay offline (6.1).
-        assert!(
-            sim.objects()
-                .filter(|o| o.online)
-                .all(|o| sim.level_list().any(|id| id == o.id))
-        );
+        // The objects of other levels stay offline (6.1); a carried item
+        // is online with its carrier.
+        let listed = |id: u16| sim.level_list().any(|l| l == id);
+        assert!(sim.objects().filter(|o| o.online).all(|o| {
+            let parent = o.record.header.parent_id;
+            if parent == NO_ID {
+                listed(o.id)
+            } else {
+                listed(parent) && sim.object(parent).unwrap().online
+            }
+        }));
         // Nothing switches again in place.
         assert!(sim.update(START + 100, 10.0, 5).unwrap().is_empty());
         // Without smart terrains nothing travels.

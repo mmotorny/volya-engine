@@ -1368,6 +1368,17 @@ impl Scripts {
         r.map_err(|m| self.stop_with(m))
     }
 
+    /// Item `item`, made, takes the state its spawn data holds (`state`:
+    /// a PDA's original owner, a weapon's magazine), in place of its
+    /// section's; an ammunition item's rounds are [`Self::spawn_ammunition`]'s.
+    pub fn set_item_state(&mut self, item: u16, state: ItemState) -> Result<(), Error> {
+        let ctx = self.inventory_context()?;
+        if let Some(i) = ctx.state.borrow_mut().item_mut(item) {
+            i.state = state;
+        }
+        Ok(())
+    }
+
     /// Sets owner `owner`'s money (6) to `money`, its inventory made on
     /// first need: the engine's setting as the owner comes online, which
     /// sends no event.

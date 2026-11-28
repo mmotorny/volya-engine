@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use crate::characters::Characters;
 use crate::core::character::hits::{Hit, HitType};
+use crate::core::character::inventory::ItemState;
 use crate::core::collision::CollisionWorld;
 use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config, PathAliases};
@@ -890,6 +891,11 @@ pub fn spawn_client_object(
         });
         if let Some(owner) = owner {
             scripts.scripts().take_item(owner, id)?;
+            // Its state as its record holds it (a supplied PDA's original
+            // owner, new-game-supplies.md 1), which `buy_supplies` keeps.
+            if let Some(state) = ItemState::of_record(&object.record.object) {
+                scripts.scripts().set_item_state(id, state)?;
+            }
         }
         scripts.scripts().client_spawned(id)
     } else {

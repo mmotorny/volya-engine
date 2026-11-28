@@ -14,9 +14,9 @@ use std::io;
 use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx;
 use volya_engine_formats::object::{
-    self, ClassId, Item, ItemUpdate, Kind, Knife, MagazineWeapon, Object, ObjectBlock,
-    ObjectRecord, Outfit, Pda, PlainItem, Q8, SpawnHeader, Torch, Visual, WeaponState,
-    WeaponUpdate,
+    self, Ammunition, ClassId, Item, ItemUpdate, Kind, Knife, MagazineWeapon, Object, ObjectBlock,
+    ObjectRecord, Outfit, Pda, PlainItem, Q8, Shotgun, SpawnHeader, Torch, Visual, WeaponState,
+    WeaponUpdate, WeaponWithGrenadeLauncher,
 };
 
 use super::condition::{DRINK_CLASS, Eatable};
@@ -128,6 +128,9 @@ pub struct ItemConfig {
     pub condition: Option<f32>,
     /// `ammo_mag_size`, 0 when absent (3.1).
     pub ammo_mag_size: u16,
+    /// An ammunition item's `box_size` (script-api-inventory.md 7.5), kept
+    /// as 16 bits; 0 when absent.
+    pub box_size: u16,
     /// `scope_status`, `grenade_launcher_status`, `silencer_status`: read
     /// for a weapon (3.1; screen 4.2 reads all three for each weapon cell
     /// item), missing it is fatal; 0 for other items, which do not read
@@ -215,6 +218,7 @@ impl ItemConfig {
             visual: get("visual").map(value::unquote).unwrap_or("").to_owned(),
             condition: get("condition").map(value::float),
             ammo_mag_size: int("ammo_mag_size").clamp(0, i64::from(u16::MAX)) as u16,
+            box_size: int("box_size") as u16,
             scope_status: int_of(weapon, "scope_status")?,
             grenade_launcher_status: int_of(weapon, "grenade_launcher_status")?,
             silencer_status: int_of(weapon, "silencer_status")?,
@@ -366,12 +370,53 @@ pub enum ItemState {
         info_portion: String,
     },
     Outfit,
-    /// Knives and magazine weapons.
+    /// Knives, magazine weapons, weapons with a grenade launcher and
+    /// shotguns.
     Weapon(WeaponItem),
-    /// A kind whose created state the spec does not give (ammunition,
-    /// documents, weapons with a grenade launcher, shotguns): held, but no
-    /// record is made for it.
+    /// Ammunition and its rounds left.
+    Ammunition {
+        rounds_left: u16,
+    },
+    /// A kind whose created state the spec does not give (documents): held,
+    /// but no record is made for it.
     Undescribed,
+}
+
+impl ItemState {
+    /// The state an item's record `object` holds (what
+    /// [`InventoryItem::record`] writes); `None` for a kind without one.
+    pub fn of_record(object: &Object) -> Option<Self> {
+        let weapon = |w: &WeaponState, fire_mode: u8| {
+            ItemState::Weapon(WeaponItem {
+                ammo_in_reserve: w.ammo_in_reserve,
+                ammo_in_magazine: w.ammo_in_magazine,
+                weapon_state: w.weapon_state,
+                installed_addons: w.installed_addons,
+                ammo_type: w.ammo_type,
+                fire_mode,
+            })
+        };
+        Some(match object {
+            Object::Item(_) => ItemState::Plain,
+            Object::Torch(t) => ItemState::Torch {
+                torch_flags: t.torch_flags,
+            },
+            Object::Pda(p) => ItemState::Pda {
+                original_owner_id: p.original_owner_id,
+                specific_character: p.specific_character.to_string(),
+                info_portion: p.info_portion.to_string(),
+            },
+            Object::Outfit(_) => ItemState::Outfit,
+            Object::Ammunition(a) => ItemState::Ammunition {
+                rounds_left: a.rounds_left,
+            },
+            Object::Knife(k) => weapon(&k.weapon, 0),
+            Object::MagazineWeapon(w) => weapon(&w.weapon, w.fire_mode),
+            Object::WeaponWithGrenadeLauncher(w) => weapon(&w.weapon, w.fire_mode),
+            Object::Shotgun(w) => weapon(&w.weapon, w.fire_mode),
+            _ => return None,
+        })
+    }
 }
 
 /// One item in the inventory.
@@ -401,6 +446,12 @@ pub struct SupplyEntry {
 }
 
 impl SupplyEntry {
+    /// One item of `section` with probability 1 (the supplies step's PDA,
+    /// character-identity.md 4.1 step 2).
+    pub fn one(section: &str) -> Self {
+        Self::parse(section, None)
+    }
+
     /// Entry `key` with `value` (3.1 item 1).
     fn parse(key: &str, value: Option<&str>) -> Self {
         let v = value.unwrap_or("");
@@ -433,11 +484,22 @@ pub struct Supplies {
 }
 
 impl Supplies {
-    /// Reads LTX text `text` (a custom data or a `<supplies>` text).
+    /// Reads LTX text `text` (a custom data or a `<supplies>` text); an
+    /// include line is an error ([`Supplies::of`] reads one with its
+    /// includes).
     pub fn parse(text: &str) -> io::Result<Self> {
-        let bytes = cp1251::encode(text).unwrap_or_else(|| text.as_bytes().to_vec());
-        let config = ltx::parse(&bytes)?;
-        Ok(Self {
+        Ok(Self::of(&ltx::parse(&Self::bytes(text))?))
+    }
+
+    /// The text's bytes as a configuration reads them.
+    pub fn bytes(text: &str) -> Vec<u8> {
+        cp1251::encode(text).unwrap_or_else(|| text.as_bytes().to_vec())
+    }
+
+    /// The supplies of a text read as configuration `config`
+    /// (new-game-supplies.md 1.1).
+    pub fn of(config: &Config) -> Self {
+        Self {
             entries: config.section("spawn").map_or_else(Vec::new, |s| {
                 s.entries()
                     .map(|e| SupplyEntry::parse(e.key(), e.value()))
@@ -446,7 +508,7 @@ impl Supplies {
             dont_spawn_character_supplies: config
                 .section("dont_spawn_character_supplies")
                 .is_some(),
-        })
+        }
     }
 }
 
@@ -460,13 +522,38 @@ impl Rand15 {
         ((self.0 >> 16) & 0x7FFF) as u16
     }
 
-    /// Whether an item of probability `p` is created: `p` greater than a
-    /// draw `r = rand15 × (1/32767)` in single precision. Probability 1 or
-    /// more is certain without a draw (the reimplementation the spec
-    /// allows).
+    /// Whether an item of probability `p` is created: one draw, also for
+    /// probability 1, and `p` greater than `r = rand15 × (1/32767)` in
+    /// single precision (new-game-supplies.md 2).
     pub fn chance(&mut self, p: f32) -> bool {
-        p >= 1.0 || p > f32::from(self.rand15()) * (1.0 / 32767.0)
+        creates(p, self.rand15())
     }
+}
+
+/// Whether draw `r` creates an item of probability `p`
+/// (new-game-supplies.md 2): `p` greater than `r × (1/32767)`, both in
+/// single precision.
+pub fn creates(p: f32, r: u16) -> bool {
+    p > f32::from(r) * (1.0f32 / 32767.0)
+}
+
+/// Reads supply `entries` (new-game-supplies.md 1.1, 2) with the supplied
+/// object's generator `rng`: each count unit of each entry one draw, in
+/// order, and `create` called for each item the draw creates before the
+/// next draw.
+pub fn read_supplies(
+    entries: &[SupplyEntry],
+    rng: &mut Rand15,
+    mut create: impl FnMut(&SupplyEntry) -> io::Result<()>,
+) -> io::Result<()> {
+    for e in entries {
+        for _ in 0..e.count {
+            if rng.chance(e.probability) {
+                create(e)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The ids of the simulation's id pool (3.1). Which ids the game hands out
@@ -539,7 +626,18 @@ impl InventoryItem {
                 info_portion: String::new(),
             },
             Kind::Outfit => ItemState::Outfit,
-            Kind::Knife | Kind::MagazineWeapon => ItemState::Weapon(WeaponItem {
+            // A created ammunition item holds a full box (script-api-inventory.md
+            // 7.5, believed for supplies).
+            Kind::Ammunition => ItemState::Ammunition {
+                rounds_left: config.box_size,
+            },
+            // A weapon with a grenade launcher and a shotgun as a magazine
+            // weapon (our choice: 3.1 gives the knife's and the magazine
+            // weapon's state only).
+            Kind::Knife
+            | Kind::MagazineWeapon
+            | Kind::WeaponWithGrenadeLauncher
+            | Kind::Shotgun => ItemState::Weapon(WeaponItem {
                 ammo_in_reserve: AMMO_IN_RESERVE,
                 ammo_in_magazine: config.ammo_mag_size,
                 weapon_state: 0,
@@ -655,6 +753,34 @@ impl InventoryItem {
                     weapon,
                     update,
                     fire_mode: w.fire_mode,
+                })
+            }
+            // Our choice: the grenade mode off and no loaded rounds listed
+            // (the update's values are unestablished, as 3.1's).
+            (ItemState::Weapon(w), Kind::WeaponWithGrenadeLauncher) => {
+                let (weapon, update) = weapon(w);
+                Object::WeaponWithGrenadeLauncher(WeaponWithGrenadeLauncher {
+                    weapon,
+                    grenade_mode: false,
+                    update,
+                    fire_mode: w.fire_mode,
+                })
+            }
+            (ItemState::Weapon(w), Kind::Shotgun) => {
+                let (weapon, update) = weapon(w);
+                Object::Shotgun(Box::new(Shotgun {
+                    weapon,
+                    update,
+                    fire_mode: w.fire_mode,
+                    loaded_ammo_types: Vec::new(),
+                }))
+            }
+            (ItemState::Ammunition { rounds_left }, Kind::Ammunition) => {
+                Object::Ammunition(Ammunition {
+                    item: item.clone(),
+                    rounds_left: *rounds_left,
+                    update,
+                    update_rounds_left: *rounds_left,
                 })
             }
             _ => {

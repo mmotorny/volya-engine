@@ -25,6 +25,7 @@ use volya_engine_formats::failed_check::failed;
 use volya_engine_formats::game_graph::TerrainMask;
 use volya_engine_formats::object::{Object, ObjectRecord, Text, TraderLike};
 
+use crate::character::inventory::Supplies;
 use crate::config::{Config, value};
 use crate::particles::random::Shared;
 use crate::simulation::graph::{ANY_TERRAIN, mask_key};
@@ -92,6 +93,12 @@ pub trait Descriptions {
     /// The description `id`; an id no description has is CH-1 3.2's fatal
     /// error.
     fn find(&mut self, id: &str) -> io::Result<&SpecificCharacter>;
+    /// The `supplies` of description `id` read as a `[spawn]` text
+    /// (new-game-supplies.md 1.1), its include lines naming files under
+    /// the configuration folder; here without includes.
+    fn supplies(&mut self, id: &str) -> io::Result<Supplies> {
+        Supplies::parse(&self.find(id)?.supplies)
+    }
 }
 
 /// The visual name a description's `visual` gives (3 step 2): its
@@ -413,8 +420,8 @@ impl Identities<'_> {
     /// choice, then the specific character emptied, the community unset
     /// and the choice made again. Gives the result, the PDA's specific
     /// character.
-    // TODO(#1034): the PDA (section `device_pda`, the object its original
-    // owner) and the description's `supplies` (CH-6) are not created.
+    // The PDA and the description's `supplies` are the simulation's
+    // supplies step (`simulation::supplies`).
     pub fn supplies(
         &mut self,
         record: &mut ObjectRecord,

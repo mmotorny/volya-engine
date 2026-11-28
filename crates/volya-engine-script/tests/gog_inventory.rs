@@ -424,6 +424,12 @@ fn a_campfire_novices_best_weapon() {
     s.take_item(NOVICE, 23).unwrap();
     s.spawn_ammunition(24, 10).unwrap();
     s.take_item(NOVICE, 24).unwrap();
-    assert_eq!(total(s, 23), [Value::Number(10.0)], "the buckshot box");
+    // A shotgun made from its section holds a full magazine, as a
+    // magazine weapon does (our choice, player-state.md 3.1).
+    assert_eq!(
+        total(s, 23),
+        [Value::Number(12.0)],
+        "2 in the magazine, 10 in the buckshot box"
+    );
     assert_eq!(best(s), [Value::Number(21.0)], "kept while usable");
 }

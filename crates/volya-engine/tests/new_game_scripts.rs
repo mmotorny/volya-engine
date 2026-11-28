@@ -310,6 +310,23 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         "carried items: {} online, {held} in a scripts owner's inventory",
         carried.len()
     );
+    // The trader's supplies (new-game-supplies.md 3.2) came into his
+    // inventory; his `buy_supplies` at the start destroyed all but his PDA
+    // (script API S 5.6), which `npc:object` finds.
+    let supplies = scripts.scripts().exec(
+        "=supplies",
+        b"local t = db.trader local p = t:object('device_pda') \
+          return t:object_count(), p ~= nil and p:section(), t:object('wpn_pm') ~= nil",
+    );
+    assert_eq!(
+        supplies.unwrap(),
+        [
+            Value::Number(1.0),
+            Value::String(b"device_pda".to_vec()),
+            Value::Boolean(false)
+        ],
+        "the trader's supplies in the scripts"
+    );
     assert!(
         scripts.scripts().attached_binder(door).is_some(),
         "the door's binder"

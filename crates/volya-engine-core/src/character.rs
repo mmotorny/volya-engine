@@ -29,7 +29,7 @@ use condition::{Activity, ConditionConfig, Conditions, Load};
 use hits::{Hit, HitConfig, HitType};
 use inventory::{
     BOLT_SECTION, IdPool, Inventory, InventoryConfig, InventoryItem, ItemConfig, Owner,
-    PDA_SECTION, Rand15, Supplies, SupplyEntry,
+    PDA_SECTION, Rand15, Supplies, SupplyEntry, read_supplies,
 };
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -181,39 +181,28 @@ impl CharacterState {
         let mut ids = IdPool::starting_at(n.first_id);
         let mut rng = Rand15(n.seed);
         let mut children = Vec::new();
-        let mut supply = |entries: &[SupplyEntry], children: &mut Vec<InventoryItem>| {
-            for e in entries {
-                for _ in 0..e.count {
-                    if rng.chance(e.probability) {
-                        children.push(InventoryItem::create(
-                            ItemConfig::read(n.system, &e.section)?,
-                            ids.take()?,
-                            Some(e),
-                            owner.id,
-                            &n.character.id,
-                        ));
-                    }
-                }
-            }
-            io::Result::Ok(())
+        let make = |e: &SupplyEntry, ids: &mut IdPool| -> io::Result<InventoryItem> {
+            Ok(InventoryItem::create(
+                ItemConfig::read(n.system, &e.section)?,
+                ids.take()?,
+                Some(e),
+                owner.id,
+                &n.character.id,
+            ))
         };
         let custom = Supplies::parse(&block.custom_data)?;
-        supply(&custom.entries, &mut children)?;
-        let pda = SupplyEntry {
-            section: PDA_SECTION.to_owned(),
-            count: 1,
-            probability: 1.0,
-            condition: None,
-            scope: false,
-            silencer: false,
-            launcher: false,
-        };
-        supply(std::slice::from_ref(&pda), &mut children)?;
+        read_supplies(&custom.entries, &mut rng, |e| {
+            children.push(make(e, &mut ids)?);
+            Ok(())
+        })?;
+        // The PDA, always: no draw (new-game-supplies.md 2).
+        children.push(make(&SupplyEntry::one(PDA_SECTION), &mut ids)?);
         if !custom.dont_spawn_character_supplies {
-            supply(
-                &Supplies::parse(&n.character.supplies)?.entries,
-                &mut children,
-            )?;
+            let entries = Supplies::parse(&n.character.supplies)?.entries;
+            read_supplies(&entries, &mut rng, |e| {
+                children.push(make(e, &mut ids)?);
+                Ok(())
+            })?;
         }
         // The online character takes them in their order (3.3: believed).
         let mut inventory = Inventory::new(InventoryConfig::read(n.system)?);

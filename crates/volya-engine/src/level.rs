@@ -979,11 +979,6 @@ pub(crate) fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io:
         .to_owned())
 }
 
-/// The supply's generator seed (player-state.md 3.1: the game seeds it
-/// from a timer and any 15-bit generator serves; a fixed seed is our
-/// choice).
-const SUPPLY_SEED: u32 = 0;
-
 /// The player's record in `spawn_file`: object `index`, whose class must be
 /// the player's (sav.md 10.1: index 63; offline-simulation.md 9.1: the only `O_ACTOR`
 /// record).
@@ -1051,7 +1046,9 @@ pub fn new_game_character(
         record: player,
         system: &data.system,
         character: &specific,
-        seed: SUPPLY_SEED,
+        // new-game-supplies.md 2: the player's own generator, seeded as
+        // every other object's (our choice).
+        seed: crate::core::simulation::supplies::seed(character::PLAYER_ID),
         first_id,
     })
 }
