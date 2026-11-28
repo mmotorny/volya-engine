@@ -2705,6 +2705,7 @@ impl NewGameLoad {
         // level drawn under the loading image), so the first read sees the
         // first update's target rather than the initial 0.5.
         screen.objects_gathered();
+        screen.attach_head_callbacks();
         Ok(screen)
     }
 }
@@ -2949,7 +2950,10 @@ impl LevelScreen {
         self.lights
             .lamps_frame(self.global_ms as f32 / 1000.0, elapsed as f32 / 1000.0);
         // motion-playback.md 4.1: the objects' tracks updates on
-        // `time_global()`, the global clock, then their poses.
+        // `time_global()`, the global clock, then their poses, the
+        // traders' heads turned toward the player (head-bone-turning.md
+        // 3.1: the controlled object).
+        self.motions.controlled = Some(self.player.state().position);
         self.motions.update(crate::core::motion_playback::Clock {
             time_global: self.global_ms as u32,
             frame: self.frame as u32,
@@ -3668,6 +3672,31 @@ impl LevelScreen {
         (animated.play_cycle(motion, Start::mixing(None), clock))
             .map_err(|e| invalid(e.to_string()))?;
         Ok(true)
+    }
+
+    /// head-bone-turning.md 2: every object of the trader class attaches
+    /// the head callback to its model's bone `bip01_head`, in follow mode,
+    /// itself the subject. Attached for offline ones too (our choice: the
+    /// callback only runs while the object plays motions, so it is as if
+    /// attached when it comes online).
+    fn attach_head_callbacks(&mut self) {
+        use crate::core::head_bone_turning::HEAD_BONE;
+        let objects = &self.world.objects;
+        for (k, i) in objects.instances.iter().enumerate() {
+            if i.class_id != "AI_TRD_S" {
+                continue;
+            }
+            let model = &objects.models[i.model];
+            let head = (0..model.bone_count())
+                .find(|&b| objects.names.get(model.bone_name(b)) == HEAD_BONE);
+            if let Some(bone) = head {
+                let callback = crate::level_motions::HeadCallback {
+                    bone,
+                    transform: i.transform,
+                };
+                self.motions.attach_head_callback(k, callback);
+            }
+        }
     }
 
     /// The motions the object instances play.

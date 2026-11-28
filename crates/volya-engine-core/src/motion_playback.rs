@@ -817,6 +817,14 @@ impl AnimatedModel {
     /// Every bone's current model-space matrix *T* = *L* · *T*(parent)
     /// (7.3; skeletal-motions 5.4), into `out`.
     pub fn pose(&self, out: &mut Vec<Mat4>) {
+        self.pose_following(out, |_, _| {});
+    }
+
+    /// [`Self::pose`] with a bone callback in follow mode
+    /// (head-bone-turning.md 1, 4): `follow(bone, T)` changes each bone's
+    /// *T* once it is computed from the motions, before its children are
+    /// computed from it.
+    pub fn pose_following(&self, out: &mut Vec<Mat4>, mut follow: impl FnMut(usize, &mut Mat4)) {
         let m = &self.motions;
         out.clear();
         out.resize(m.bone_count(), IDENTITY);
@@ -827,6 +835,7 @@ impl AnimatedModel {
                 Some(parent) => mat_multiply(&l, &out[parent]),
                 None => l,
             };
+            follow(b, &mut out[b]);
         }
     }
 

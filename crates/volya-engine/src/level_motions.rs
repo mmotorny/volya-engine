@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
+use crate::core::head_bone_turning::{turn, turning_angle};
 use crate::core::motion_playback::{AnimatedModel, Clock, Motions};
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
@@ -118,11 +119,24 @@ pub struct BonePoses {
     pub first: Vec<Option<u32>>,
 }
 
+/// A trader's head callback (head-bone-turning.md 2): its model's head
+/// bone and the trader's transform *X*.
+#[derive(Clone, Copy, Debug)]
+pub struct HeadCallback {
+    pub bone: usize,
+    pub transform: Mat4,
+}
+
 /// The playbacks of the level's object instances.
 #[derive(Debug, Default)]
 pub struct LevelMotions {
     /// By instance: its playbacks, once it has played a motion.
     animated: Vec<Option<AnimatedModel>>,
+    /// By instance: the head callback attached to its head bone.
+    head_callbacks: HashMap<usize, HeadCallback>,
+    /// The level's controlled object's position (head-bone-turning.md
+    /// 3.1), set before each update.
+    pub controlled: Option<[f32; 3]>,
     /// The motions of each model (by its index) read so far.
     loaded: HashMap<usize, Arc<Motions>>,
     pose: Vec<Mat4>,
@@ -165,6 +179,17 @@ impl LevelMotions {
         Ok(self.animated[instance].as_mut().expect("just made"))
     }
 
+    /// Attaches the head callback to instance `instance`'s head bone
+    /// (head-bone-turning.md 2), replacing any it had.
+    pub fn attach_head_callback(&mut self, instance: usize, callback: HeadCallback) {
+        self.head_callbacks.insert(instance, callback);
+    }
+
+    /// Instance `instance`'s head callback, if one is attached.
+    pub fn head_callback(&self, instance: usize) -> Option<&HeadCallback> {
+        self.head_callbacks.get(&instance)
+    }
+
     /// Instance `instance`'s playbacks, if it has played a motion.
     pub fn model(&self, instance: usize) -> Option<&AnimatedModel> {
         self.animated.get(instance)?.as_ref()
@@ -185,7 +210,20 @@ impl LevelMotions {
             a.update_tracks(clock);
             // No object acts on its notifications yet (TC2, TC5, TC7).
             a.take_notifications();
-            a.pose(&mut self.pose);
+            // head-bone-turning.md 4, 5: the head bone turned by A each
+            // time its matrix is computed, under script control too. The
+            // level's player is its controlled object from its spawn on
+            // (3.1), so `controlled` is always set on a level.
+            let head = (self.head_callbacks.get(&i))
+                .zip(self.controlled)
+                .map(|(h, target)| (h.bone, turning_angle(target, &h.transform)));
+            a.pose_following(&mut self.pose, |bone, t| {
+                if let Some((head, angle)) = head
+                    && bone == head
+                {
+                    turn(t, angle);
+                }
+            });
             a.render_matrices(&self.pose, &mut self.render);
             poses.first[i] = Some(poses.matrices.len() as u32);
             poses.matrices.extend(self.render.iter().map(bone_matrix));

@@ -26,6 +26,7 @@ pub mod door;
 pub mod file_cache;
 pub mod footsteps;
 pub mod glows;
+pub mod head_bone_turning;
 pub mod info_portions;
 pub mod input;
 pub mod level;
