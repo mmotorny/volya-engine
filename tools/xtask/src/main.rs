@@ -12,6 +12,7 @@ mod deploy;
 mod e2e;
 mod frames;
 mod machine;
+mod measure;
 mod parity;
 mod spec_lint;
 #[allow(dead_code)] // Its build and plan are wincapture-action's.
@@ -34,6 +35,10 @@ Tasks:
               One browser suite on one target, on the site VOLYA_SITE (and
               VOLYA_SITE_NEXT) with the suites in VOLYA_TESTS: what Bazel's
               //tests/browser:<suite>_<target> runs.
+  measure MEASUREMENT --target TARGET
+              A measurement on demand (its figures a report, never a pass or
+              fail): audio-load (12 minutes of a level's sounds) on chrome or
+              iphone, on the test site built in the workspace.
   sim STEP...  Real touches in the iOS Simulator (tools/simdriver): runs the
               steps, e.g. 'open URL' 'tap-text Play' 'screenshot out.png'.
   simshot [PATH]
@@ -87,6 +92,7 @@ fn main() -> ExitCode {
     let result = match args.as_slice() {
         ["suite", target, suite] => e2e::suite(target, suite),
         ["wait-memory"] => machine::wait_memory(),
+        ["measure", rest @ ..] => measure::run(rest),
         ["sim", steps @ ..] if !steps.is_empty() => e2e::sim(steps),
         [e2e::REAPER, holder, udid] => e2e::reap(holder, udid),
         ["simshot"] => e2e::screenshot(None).map(drop),

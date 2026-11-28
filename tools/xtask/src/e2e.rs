@@ -25,6 +25,7 @@ const SUITES: &[&str] = &[
     "platform",
     "import",
     "audio",
+    // A measurement (`measure.rs`), not a test target.
     "audio-load",
     "render",
     "render-screens",
@@ -110,11 +111,19 @@ pub fn suite(target: &str, suite: &str) -> Result {
             .map(PathBuf::from)
             .ok_or_else(|| format!("{var} is unset"))
     };
-    let (site, next, tests) = (
-        dir("VOLYA_SITE")?,
-        dir("VOLYA_SITE_NEXT")?,
-        dir("VOLYA_TESTS")?,
-    );
+    run_on(
+        target,
+        suite,
+        &dir("VOLYA_SITE")?,
+        &dir("VOLYA_SITE_NEXT")?,
+        &dir("VOLYA_TESTS")?,
+    )
+}
+
+/// Runs `suite` on `target` on the sites `site` and `next` with the
+/// suites in `tests` (a test's runfiles, or the workspace's for a
+/// measurement, `measure.rs`).
+pub fn run_on(target: &str, suite: &str, site: &Path, next: &Path, tests: &Path) -> Result {
     // The suites' own directory, as the server serves nothing reached through
     // a link out of its mount and runfiles are links to the sources.
     let tests = fs::canonicalize(tests.join("harness.js"))
@@ -134,7 +143,7 @@ pub fn suite(target: &str, suite: &str) -> Result {
     } else {
         None
     };
-    let (server, port, reports) = serve(&site, &next, &tests, kept)?;
+    let (server, port, reports) = serve(site, next, &tests, kept)?;
     step(&format!("Browser suite {suite} on {target}"));
     let outcome = run_suite(&server, port, &reports, simulator.as_ref(), target, suite);
     let size = match (profile, &simulator) {
