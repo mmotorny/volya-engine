@@ -184,9 +184,10 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         .map(|o| {
             let binding = system.get(o.record.header.section.as_str(), "script_binding");
             let binding = binding.flatten().map(|b| b.trim().to_owned());
-            // The doors, and the player under the fake of its binding
-            // (#1120).
-            let runs = level.doors().holds(o.id) || o.id == 0;
+            // The doors, the player under the fake of its binding (#1120),
+            // and the trader spawned without his (#1121).
+            let trader = o.record.kind() == volya_engine_formats::object::Kind::Trader;
+            let runs = level.doors().holds(o.id) || o.id == 0 || trader;
             (o.id, binding.filter(|b| !b.is_empty() && !runs))
         })
         .collect();
