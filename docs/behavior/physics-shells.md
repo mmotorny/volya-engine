@@ -2,8 +2,9 @@
 
 Behaviour specification, for S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition), of how the game builds the
 **shells** of the objects it simulates: which objects get one and when, the parts of a shell (elements, their
-bodies, geometries, masses and frames), the build from a model's bone physics data in the general case, the
-physics types 0 – 3 of physics objects, the simple shells (the box shells of type 0 and of items, the
+bodies, geometries, masses and frames), the build from a model's bone physics data (including a root bone
+without a used shape, which bodies a joint joins and the exact-solver request of fixed bones), the
+physics types 0 – 3 of physics objects and the record's mass, the simple shells (the box shells of type 0 and of items, the
 box-and-sphere shell), the shells of hanging lamps and breakables, fixed bones and the physics keys of a record's
 custom data and of a model's user data, the shells built at spawn and the startup animation's part, the bones'
 transforms and the object's transform taken from the bodies (what is drawn), and the fatal cases. It is PH-3 of
@@ -21,9 +22,10 @@ Builds on (not repeated):
 - `docs/behavior/physics-world.md` (cited as `world`): the world, *object*, *group*, *active* objects, the step
   and its order, the exact and iterative solvers, the floor;
 - `docs/behavior/physics-library.md` (cited as `library`): the shipped library and *public 0.5.0*;
-- `docs/behavior/physics-shell-shapeless-root.md` (cited as `root`): the case of a model whose root bone has no
-  used shape, the fixing of an element, the request for the exact solver, the hinge with a fixed first element,
-  the record's mass for type 3, resting and waking of the trader's door; that case is not repeated here;
+- PH-7, joints (`physics-joints.md`, cited as `joints`): what a hinge with a fixed first element means for its
+  angle, stops and motor; PH-5, resting and waking (`physics-resting.md`, cited as `resting`): a shell activated
+  switched off and its waking; PH-4, `docs/behavior/physics-contacts.md` (cited as `contacts`): resting shells
+  in the collision passes;
 - `docs/behavior/level-objects.md` (cited as `objects`): the object's transform *X* (3.4), model files, bones,
   the bind pose and the model-space bind matrix *B* (4.4);
 - `docs/behavior/hanging-lamps.md` (cited as `lamps`) 3.4; `docs/behavior/trader-door.md` (cited as `door`);
@@ -31,20 +33,22 @@ Builds on (not repeated):
 
 Conventions:
 
-- An **element** is one body of a shell together with the collision geometries on it (`root`). Its **frame** is
+- An **element** is one body of a shell together with the collision geometries on it (a shell has one element
+  per body). Its **frame** is
   a transform: in model space while the shell is being built, in world space once it is activated. Its **mass
   centre** is a point in its frame. A shell's **transform** is the transform of the object it simulates as the
   shell holds it.
 - **Activating** a shell puts it into the world: its bodies and joints are made. An element **switched off** has
-  its body's disabled flag set (`root`).
-- The **plain build** and the **checking build** are the two ways into the build from the bone data (`root`
-  1.1): the same build, the second followed by a fatal test of the root.
+  its body's disabled flag set (`library` 3.3).
+- The **plain build** and the **checking build** are the two ways into the build from the bone data: the same
+  build, the second followed by a fatal test of the root (section 1) [SR-B1, SR-B1b].
 - Transforms compose in the row-vector convention of `objects` 4.4: "A then B" is A · B.
 - "Fatal" is a failed check with a message (`world` 5); the game stops.
 - Statements are static (read from the shipped binaries and data; the game was not run). Inferred statements
   are marked **believed**; what could not be established is marked **unestablished**.
 - Bracketed ids are the checks reproducing a statement: functions of `checks.py` in the dirty workspace's
-  `checks/physics-shells/` (`python3 checks.py` runs them all).
+  `checks/physics-shells/` (`python3 checks.py` runs them all); ids `SR-…` are run by `shapeless_root.py` in
+  the same folder (`python3 shapeless_root.py`).
 
 ## 1. Who builds a shell, and when
 
@@ -63,8 +67,16 @@ Thirteen places in the game make a shell; besides those of the table, two are **
 
 The checking build is reached only from the death shell of characters and from a breaking breakable; the
 builds of physics objects, skeleton objects, artefacts, the helicopter and hanging lamps use the plain build, so
-the root test (and its fatal message, section 9) never applies to them [S2d]. (This settles the open item of
-`root` 1.1 for the builds found; no other caller of the checking build was found, **believed** none.)
+the root test (and its fatal message, section 9) never applies to them [S2d]. No other caller of the checking
+build was found (**believed** none).
+
+So a physics object of type 3 builds through a build that tests nothing about the root bone; the fatal test
+"No physics shapes was assigned for model or no shapes in main root bone!!!" (the shell's first element has no
+geometry) belongs to the checking entry, which the physics object's build does not use [SR-B1, SR-B1b, SR-B1c]:
+a type-3 physics object whose model's root has no used shape is built normally (3.5). In the data, 63 of the 475
+`physic_object` records of type 3 have such a model (7 models: `physics\door\door_traders_box` 39,
+`codedoor_left` 8, `door_trader` 6, `door_prison_01` 4, `codedoor_right` 4, `physics\decor\rupor` 1,
+`krisagenerator` 1), and every one of the 63 names that root among its fixed bones [SR-D1].
 
 ## 2. The parts of a shell
 
@@ -77,9 +89,13 @@ and axes.
 
 Activating an element [E1b]: its world frame becomes its frame (model space) followed by the shell's transform;
 its body is made, given the element's mass, placed as above, given zero linear and angular velocity, switched off
-when the activation asks for it; an element with no geometry is fixed instead of given a mass (`root` 1.3); and
+when the activation asks for it; an element with no geometry is fixed instead of given a mass (5.1)
+[SR-B3, SR-B3c]; and
 the bone that made the element is given the shell's bone callback (section 8.1). Activating a shell activates
-every element with the shell's transform first, then makes the joints [B3b] (`root` 2.1).
+every element with the shell's transform first, then makes the joints [B3b, SR-B7b] (3.3).
+
+An element with no geometry puts nothing into the shell's collision space, but its body is in the shell's body
+list and is stepped with it [SR-B3b].
 
 ### 2.2 Geometries
 
@@ -131,19 +147,20 @@ below it is the bone's model-space bind matrix *B* [B1]. For each bone:
 
 1. A bone that is not visible adds nothing; its children are walked with its transform and the same element
    above [B1b].
-2. A bone that gets an element of its own (`bone` 3.1, `root` 1.2) [B1d, E2c]: the element's frame is the
+2. A bone that gets an element of its own (`bone` 3.1; the root always does, 3.5) [B1d, E2c]: the element's frame is the
    bone's transform (model space, the bind pose); the element records the bone; its material is the bone's
    material (`bone` 6); its element above is recorded; if the bone has a used shape, its shape (box, sphere or
    cylinder of the bone data, in the bone's own space = the element's frame) is added and its mass set from
-   the bone's mass and centre of mass (2.3). The element is added to the shell, and the bone's joint is made
-   (`bone` 3.1 – 3.3; built at activation, `root` 2.1).
+   the bone's mass and centre of mass (2.3). The element is appended to the shell's elements before the bone's
+   children are walked [SR-B2b], and the bone's joint is made, only when there is an element above
+   (`bone` 3.1 – 3.3; built at activation, 3.3) [SR-B2b].
 3. A rigid bone with a used shape and a body above: its transform is taken into the frame of the element above
    (followed by the inverse of that frame), its shape is added to that element there and its mass added to that
    element's mass (`bone` 5) [B1c]. A rigid breakable bone becomes a part that can split off (`bone` 3.4,
    PH-13).
 4. A bone without a used shape and a body above adds nothing (`bone` 3.1).
 5. The record's fixed bones (section 5) note, for each named bone, the element the bone ended in: its own or
-   the one it joined (`root` 1.4).
+   the one it joined [SR-B4b] (3.5).
 
 ### 3.3 Joints
 
@@ -152,12 +169,37 @@ from the bone data has its **anchor at the origin of its second element's frame*
 its centre of mass (2.1) [B2]. (This settles the first gap of `bone`.) Kinds, axes, limits and stiffness are
 `bone`'s; their simulation is PH-7.
 
+**Which bodies a joint joins.** The joints are made at activation after every element's body (2.1), so an
+element that is fixed at activation (5.1) is already fixed when a joint naming it is made [SR-B7b]. For a hinge
+whose first element is fixed, or has no body, the game passes **no first body** to the library (and the negated
+axis, `joints`) [SR-B7]: the hinge then joins its second element's body to the **static environment**, and the
+fixed element's body is joined by nothing.
+
 ### 3.4 After the build
 
 Objects that build from the bone data (physics objects of type 3, skeleton objects, artefacts, the helicopter)
 then [B3]: tie the shell to the object, set the shell's transform to the object's transform *X*, activate the
 shell (switched off when asked: section 4.3, table of section 1) and set the drags of every element to linear
 0.0002, angular 0.05. Hanging lamps do the same in their own order (section 5.3).
+
+### 3.5 A root bone without a used shape
+
+A bone joins the body above it (no element of its own) when it has no used shape or is rigid (joint type 0)
+**and** there is a body above it. The root has no body above it, so it always gets an element of its own,
+whatever its shape and joint type; the element gets a geometry only when the bone has a used shape [SR-B2]. As
+each new element is appended before its children are walked (3.2), the root's element is the shell's **first
+element** [SR-B2b].
+
+A root without a used shape therefore gives a shapeless first element, which is fixed when the shell is
+activated (2.1, 5.1) [SR-B3, SR-B3c]. It carries no geometry and takes part in no contact; it is stepped with the
+shell [SR-B3b]; nothing pushes or turns it (**believed**: no joint acts on it, 3.3, and it has no gravity or
+velocity, so it stays where it was made). The floor test of `world` 4.5 reads the first element's body [SR-B5],
+so for such a shell it tests the fixed body, which never falls.
+
+**The exact-solver request.** When the record names at least one fixed bone, the shell also sets, once, its
+request for the **exact solver** (`world` 4.2) [SR-B4, SR-B4d]. Each step a group's own requests become its marks
+for that step, and a group marked for the exact solver with fewer than 30 joints (contacts included) is solved
+by the exact stepper [SR-B4c]. (How a merge of groups carries the request: `contacts`.)
 
 ## 4. Physics objects
 
@@ -169,7 +211,7 @@ The record's physics type selects the build [T1] (`scope` 1.2):
 |---|---|---|
 | 0 | one element with one box (4.2) | the record's mass |
 | 1, 2 | one element per bone with that bone's box (4.3) | the record's mass, shared equally |
-| 3 | the bone data (section 3) with the record's fixed bones (4.4) | the bone data's; the record's is not read (`root` 6) |
+| 3 | the bone data (section 3) with the record's fixed bones (4.4) | the bone data's; the record's is not read (4.5) |
 
 Then, whatever the type [T1]: the shell's transform is set to *X*, the drags of every element to linear 0.001,
 angular 0.02 (replacing those of 3.4), and, if the model is a skeleton model, every element gets the rest
@@ -204,20 +246,30 @@ the record's mass / element count [T1]. No activation is part of this build; whe
 ### 4.4 Type 3
 
 The record's fixed-bone text is split at commas and each name looked up in the model; a name the model lacks is
-fatal ("wrong fixed bone") [T3]. The shell is built from the bone data with them (section 3; `root` for the
-shapeless root), activated switched off when skeleton flag 0x01 is clear [T3] (`root` 3.1). If any fixed bone
-is named, the shell requests the exact solver and each named bone's element is fixed (`root` 1.3, 1.4).
+fatal ("wrong fixed bone") [T3]. The shell is built from the bone data with them (section 3; 3.5 for a
+shapeless root), activated switched off when skeleton flag 0x01 is clear [T3] (`resting`). If any fixed bone
+is named, the shell requests the exact solver and each named bone's element is fixed (3.5, 5.1) [SR-B4]; an
+element already fixed at activation (a shapeless root's) is fixed again, with the same values.
 
 Then the physics keys of section 5.2 are applied twice: first from the record's **custom data** (read as LTX
 text; the same text other features read sections such as `[alife]` from), then from the **model's user data**;
 for both, "the shell has fixed bones" means the record's fixed-bone text is not empty [T3b].
 
+### 4.5 The record's mass
+
+The record's physics type and mass are copied to the object at spawn [SR-B17]. Types 0, 1 and 2 pass the mass to
+the shell's build (4.2, 4.3); type 3 does not read it [SR-B17b], and no other reader was found in the physics
+object's code [SR-B17c] (**believed**: none). So for type 3 the record's mass has **no effect**: the bodies have
+the bone data's masses (2.3), a fixed element's body 10⁸ (5.1).
+
 ## 5. Fixed bones and the collide keys
 
 ### 5.1 Fixing
 
-A fixed element is held in place: `root` 1.3 (fixed flag, a sphere mass adjusted to 10⁸, gravity off, zero
-velocities, force and torque).
+A fixed element is held in place: its fixed flag is set and its body gets a sphere mass adjusted to a total of
+10⁸, gravity off, zero linear and angular velocity, force and torque [SR-B3c]. An element without geometry is
+fixed this way when activated, instead of being given a mass (2.1) [SR-B3]; the elements of a physics object
+record's fixed bones are fixed after activation (4.4) [SR-B4].
 
 ### 5.2 The physics keys
 
@@ -341,17 +393,20 @@ skeleton flags 0, empty startup animation; custom data `[logic]` (its scheme, PH
 
 What building it takes, in order:
 
-1. At spawn: root bone 0 (`link`), all bones visible (3.1); the record's mass 10 ignored (4.1).
+1. At spawn: root bone 0 (`link`), all bones visible (3.1); the record's mass 10 [SR-D2] ignored (4.5).
 2. The bone-data build (plain): `link` (no used shape, root) → its own shapeless element, frame at (0, 1.9743, 0)
-   in model space, fixed (`root` 1.2, 1.3); `door` (box, joint type 2) → an element with frame at
+   in model space, fixed (3.5, 5.1) [SR-D2b]; `door` (box, joint type 2) → an element with frame at
    (0, 1.3675, 0), unrotated, with one box centred at (0.7029, 0, −0.0134) of that frame, half sizes (0.6902,
    1.3225, 0.1254), unrotated, mass 100 about the centre of mass (0.6601, 0, −0.0380) (2.3); `lock` (no physics)
-   → nothing (`bone` 2.2).
+   → nothing (`bone` 2.2). So the shell has two elements, the frame's (`link`, first) and the door's, and one
+   joint.
 3. Tie, place at *X*, activate **switched off** (flags 0): the door's body starts with its origin at its centre
    of mass, world (−248.3419, −23.3206, −134.3756); the hinge (`bone` 3.2: about the door bone's y axis,
    −1.9199 … 0) is made with the fixed frame element first, so it joins the door's body to the static
-   environment (`root` 2.1), anchored at the door bone's origin, world (−248.3039, −23.3206, −133.7155) (3.3).
-4. Fixed bone named: exact-solver request; `link`'s element fixed again (`root` 1.4).
+   environment (3.3), anchored at the door bone's origin, world (−248.3039, −23.3206, −133.7155) (3.3); what
+   this means for its angle, stops and motor is `joints`'.
+4. Fixed bone named: exact-solver request; `link`'s element (its own) fixed again (3.5, 4.4). Alone in its
+   group, with one joint plus its contacts, the door's shell is solved by the exact stepper (3.5).
 5. Drags 0.001 / 0.02; rest parameters the defaults (no `[disable]`) (4.1).
 6. Custom data: `[collide]` `ignore_static` with fixed bones named → the door's shell never collides with the
    level's mesh, only with other objects (the player's body included, `door` 3) (5.2).
@@ -359,9 +414,20 @@ What building it takes, in order:
    re-placed at the bind pose, which is where they already are (7, 8.1).
 8. Drawing: the `door` bone follows the door's body (8.1); `link`'s callback keeps it at the fixed body;
    `lock` has no callback and follows `door` (**believed**, 8.1); the object's transform stays *X* while `link`'s
-   body does not move (**believed**, `root` 1.3).
+   body does not move (**believed**, 3.5).
 
-## 11. Unestablished and believed
+## 11. Corrections to approved specifications
+
+- `scope` 1.2 and `bone` 8 ("a model whose root bone has no shape is fatal", for physics type 3): the type-3
+  build of physics objects has no such test; the root gets its own shapeless, fixed element (section 1, 3.5).
+  The fatal test belongs to the checking build.
+- `world` 4.2 ("no code sets the exact-solver mark"): naming fixed bones in a physics object's record sets it
+  (3.5); a merge carries it into the colliding object's requests (`contacts`).
+- `door` 2.3: the hinge's first element is the frame's own element, fixed at activation (3.3, 3.5).
+- `door` 2.4: the frame (`link`) is its own shapeless element (3.5); the hinge joins the door's body to the
+  static environment, not to the frame's body (3.3).
+
+## 12. Unestablished and believed
 
 - Two of the thirteen shell makers (section 1), and which object other than physics objects of type 0 uses the
   simple box shell (one other user was found); that no build other than the death shell and the breaking
@@ -374,9 +440,10 @@ What building it takes, in order:
   shell is not activated for an object with a parent (4.2); the bone callback runs during the startup
   computation, so the bodies take the startup pose at spawn (7); bones without a callback keep their animation or
   bind pose relative to their parent (7, 8.1); the drawing blend uses the accumulator's remainder (8.2); for the
-  trader's door, `lock` follows `door` and the object's transform stays *X* (10).
+  trader's door, `lock` follows `door` and the object's transform stays *X* (10); a fixed shapeless root
+  element's body never moves (3.5); no other reader of a type-3 record's mass (4.5).
 
-## 12. Provenance
+## 13. Provenance
 
 - Date: 2026-11-27.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
@@ -389,9 +456,13 @@ What building it takes, in order:
   from the bone data and its two entries, the element's body placement, geometries, masses and defaults, the
   drag and speed-limit code, shell activation, joint anchors, fixed bones, the custom-data and user-data physics
   keys and the collision pass's level test, the hanging lamp's and breakable's builds, the skeleton spawn and
-  its saved-state defaults, the startup animation, the bone callback, the per-frame transform update; constants
+  its saved-state defaults, the startup animation, the bone callback, the per-frame transform update, element
+  and joint activation, fixing, the hinge's creation, the group requests and the solver choice, the floor test's
+  body, the spawn reading of the physics-object fields and the readers of the record's mass; constants
   read from the binary. No execution or debugging; the game was not run. The checks in
-  `checks/physics-shells/` reproduce every fact.
+  `checks/physics-shells/` reproduce every fact (the `SR-…` checks, moved here with sections 1, 2.1, 3.2, 3.3,
+  3.5, 4.4, 4.5 and 5.1's facts from an earlier specification of the trader's door's shell, through
+  `shapeless_root.py`).
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
 ## Gaps found in review

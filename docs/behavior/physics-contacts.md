@@ -19,8 +19,7 @@ Builds on (not repeated):
   and their changes (6), the contact rows (5.2);
 - `docs/behavior/physics-shells.md` (cited as `shells`): elements, their geometries and materials (2.2), the
   collide keys and the collision group number (5.2);
-- `docs/behavior/physics-shell-shapeless-root.md` (cited as `root`): the "to be collided" mark, the collision
-  pass, waking by a kept contact, the merge of solver requests (4.1 – 4.3);
+- PH-5, resting and waking (`physics-resting.md`, cited as `resting`): a shell activated at rest;
 - `docs/behavior/step-assistance-movable-bodies.md` (cited as `step`): the player's body's touch flag and its
   rules for contacts with movable bodies;
 - `docs/formats/level-cform.md` (cited as `cform`): the static mesh, its triangles' front side (2.3), the game
@@ -41,15 +40,16 @@ Conventions:
 - Statements are static (read from the shipped binaries and data; the game was not run). Inferred statements are
   marked **believed**; what could not be established is marked **unestablished**.
 - Bracketed ids are the checks reproducing a statement: functions of `checks.py` in the dirty workspace's
-  `checks/physics-contacts/` (`python3 checks.py` runs them all).
+  `checks/physics-contacts/` (`python3 checks.py` runs them all); ids `SR-…` are run by `shapeless_root.py` in
+  the same folder (`python3 shapeless_root.py`).
 
 ## 1. Which pairs are collided
 
 ### 1.1 An object's collision pass
 
 At the contact phase of each step (`world` 3, item 3) every active object, in the order of the active objects,
-runs its collision pass; the player's body and shells run the same pass (`root` 4.1). It does, in this order
-[P1]:
+runs its collision pass; the player's body and shells run the same pass [SR-B11b]; only the active objects run
+passes [SR-B11d]. It does, in this order [P1]:
 
 1. **Motion rays**, only for an object carrying the ray mark (1.4).
 2. **Other objects**: a box query of the physics objects' spatial index with the object's box; every object
@@ -58,8 +58,8 @@ runs its collision pass; the player's body and shells run the same pass (`root` 
 3. **The level**, unless the object's class carries *ignore static* (1.3): its collision space is collided with
    the level geometry (section 3) [P1, P7].
 4. Its own "to be collided" mark is cleared, so objects whose passes come later in the step skip it: each pair
-   is collided once per step, in the pass of whichever of the two comes first among the active objects (`root`
-   4.1, 4.2: an object woken by a contact is appended at the end).
+   is collided once per step, in the pass of whichever of the two comes first among the active objects (1.5:
+   an object woken by a contact is appended at the end) [SR-B11b].
 
 **The object's box** is the bounding box of its collision space (for a shell and for a character body alike):
 its centre and its half extents per axis are what the query uses; the largest half extent is kept as its
@@ -80,7 +80,7 @@ For a pair met in the pass of object A, B being the other [P6]:
   geometry of one with every geometry of the other whose bounds overlap; `door` 3.1).
 - Each contact is then handled as section 2 states; a contact still "made" at the end becomes a contact joint.
 - If at least one contact joint was made, B's group is merged into A's for the rest of the step (`world` 4.2;
-  `root` 4.3 for the solver requests), and B, if not active, is made active (woken; `root` 4.2) [P6, T2].
+  1.6 for the solver requests), and B, if not active, is made active (woken; 1.5) [P6, T2, SR-B12].
 
 ### 1.3 The collision filter
 
@@ -115,7 +115,7 @@ R2]. A shell carrying the mark gets bit 0x20 each time, after a step in which it
 left switched on (`world` 4.4), so also when it comes to rest again after being woken; it gets it too when it is
 switched off as a whole (as below the floor, `world` 4.5), when it is taken out of the world (deactivated), and
 when one of its elements is given a state with its body switched off while that body is on [R4]. Being activated
-switched off (`root` 3.1) does not give it: such a shell gets bit 0x20 only once it has been woken and then comes
+switched off (`resting` 1) does not give it: such a shell gets bit 0x20 only once it has been woken and then comes
 to rest or is switched off [R4]. Whether code outside the physics part of the game library runs that routine too
 is **unestablished**. Besides, a death shell gets bit 0x20 at once in one state of the dying character (meaning
 **unestablished**) (PH-15) [P10]. Bit 0x20 is set in no other way, and nothing clears it [R3, R6].
@@ -146,6 +146,32 @@ geometry with a previous centre whose distance `L` from the current centre is at
 
 So a fast object meets objects it passed through between two steps. Rays do not meet the level. An object
 with `ignore static` never stores a previous centre, so it casts no rays (derived).
+
+### 1.5 Resting objects: the "to be collided" mark and waking
+
+An object's **"to be collided" mark** is set whenever its box is updated: after every step it was active in,
+after its post-step work (in which a shell that has come to rest leaves the active objects, `world` 4.4) [SR-B11],
+and when a shell is entered in the physics objects' spatial index, which it is whether activated switched on or
+off (`resting` 1) [SR-B8d]. Only the object's own collision pass clears it [SR-B11c], and only active objects run
+passes (1.1) [SR-B11d].
+
+So a resting shell keeps its mark set, and every active object whose box overlaps its box (as last updated) is
+collided with it at every step, exactly as with an active one (subject to the filter, 1.3).
+
+**Waking.** When a pair yields at least one contact joint, the two groups are merged for the step and, if the
+other object is not active, it is made active [SR-B12]: taken off the resting list (`world` 4.4) and appended to
+the end of the active objects, so it runs its own collision pass later in the same step and is solved with the
+merged group [SR-B12c]. The count is that of contact joints made: a contact the callbacks drop (2.3) makes none
+[SR-B12b]. That stepping the merged group switches its bodies back on is `library` 4.1's rule (every listed
+body's disabled flag is cleared).
+
+### 1.6 The merge and the solver requests
+
+A merge adds the other group's own requests (the exact-solver request of a shell with fixed bones, `shells` 3.5,
+among them) to the colliding object's own requests, which the per-step copy keeps from then on [SR-B13, SR-B4c]
+(**believed** consequence: from that step on, every group the colliding object heads with fewer than 30 joints is
+solved by the exact stepper). Which solver solves a merged group in the step of the merge, and in later steps,
+depends on which object's group heads it (**unestablished**).
 
 ## 2. Contact properties and what a contact joins
 
@@ -381,12 +407,12 @@ What the game does, from the data and sections 1 – 6:
    number (its model has no user data, `shells` 10); the player's body: 0x4 | 0x10. The filter passes [P3, T1].
    Neither word changes later: the door's shell (of the ordinary shell kind [R5]) never gets the "ignore
    characters once at rest" mark, which only death shells get (1.3), so it never gets bit 0x20, whether it rests
-   from the start (`root` 3.1), has been woken or has come to rest again; 0x8 is not set in single play; the
+   from the start (`resting` 4), has been woken or has come to rest again; 0x8 is not set in single play; the
    player's body never gets 0x8, 0x20 or 0x200 (section 5) [R1 – R6]. So the filter passes at every step, and the
    closed door at rest blocks the player's body from the moment its shell is entered in the index, as an active
-   door does (2. below). The door's shell never meets the level; its frame element has no geometry (`root` 1.3), so the leaf's box is
+   door does (2. below). The door's shell never meets the level; its frame element has no geometry (`shells` 3.5), so the leaf's box is
    its only geometry.
-2. **When.** The door's shell starts at rest (`root` 3.1) with its "to be collided" mark set; every step in
+2. **When.** The door's shell starts at rest (`resting` 4) with its "to be collided" mark set (1.5); every step in
    which the player's box overlaps the door's (the outer sphere's reach included), the player's pass collides
    the pair. After the door wakes it is appended after the player's body among the active objects, so the pair
    stays in the player's pass as long as the player's body is earlier in the list (it is, unless it was itself
@@ -401,7 +427,11 @@ What the game does, from the data and sections 1 – 6:
    player's shapes holds a crossed-triangle record from the floor (3.3).
 5. **Handling.** The player's shapes' callbacks (the outer sphere's), then the player's body rules (PH-8);
    kept contacts join the player's body and the leaf's body, in the player's group; the door's group merges in
-   (carrying its exact-solver request, `root` 4.3) and the door is woken by the first kept contact [C3, T2].
+   (carrying its exact-solver request, 1.6) and the door is woken by the first kept contact [C3, T2] (1.5): the
+   player's bottom sphere, torso cylinder or head sphere touching the resting door wakes it in that step (their
+   contacts are kept, `door` 3.1); the outer sphere's overlap alone does not (its contacts only set the "blocked"
+   flag, `door` 3.1) [SR-B12b]. From the merge on, the player's body itself requests the exact solver
+   (**believed**, 1.6).
 6. **Not involved.** Motion rays (neither object has the ray mark), liquid damping, the level collision of the
    leaf, the group limits (two small groups).
 
@@ -409,7 +439,13 @@ So an implementation needs: the pass and filter of section 1 (the player's pass 
 and cylinder–box (4.3) contacts, the properties of 2.2, the joint attachment and wake of 1.2 and 2.3, and the
 player's rules of PH-8.
 
-## 8. Unestablished and believed
+## 8. Corrections to approved specifications
+
+- `door` 3.2, which takes only active objects as collided: resting objects are collided too (1.5).
+- `world` 4.2 ("no code sets the exact-solver mark"): a merge carries a group's exact-solver request into the
+  colliding object's requests (1.6); fixed bones set it (`shells` 3.5).
+
+## 9. Unestablished and believed
 
 - The spatial index's box and ray query tests (1.1, 1.4).
 - Which objects set class bit 0x100, the character state that sets 0x20 at once, whether code outside the
@@ -420,11 +456,14 @@ player's rules of PH-8.
   (3.3); the box's cross-axis contact point and code-0 per-vertex depths (3.4); the cylinder's ordinary contacts
   (3.4); which geometries carry triangle callbacks.
 - Cylinder–box's 0.70710677 test quantity; cylinder–cylinder and cylinder–plane (4.3).
+- Which solver solves a merged group, by which object heads it (1.6); believed: an object that merged a group
+  requesting the exact solver requests it from then on (the player's body after merging with the trader's door,
+  section 7).
 - **Believed**: geometries offset from their body sit in geometry transforms (4.1); the liquid rule's 10⁻⁷ test
   is on `k` (2.4); the object box's radius serves the index (1.1); no step runs inside the actor's spawn routine
   that sets the player's material (5).
 
-## 9. Provenance
+## 10. Provenance
 
 - Date: 2026-11-27.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
@@ -443,7 +482,10 @@ player's rules of PH-8.
   the "ignore characters once at rest" mark (its one setter and every call through its slot), the routine giving
   bit 0x20 and its callers, every write of the class word, the shell kind of a type-3 physics object; the
   player's body's material (its setter and every call through its slot, the section's material key, the actor's
-  spawn); constants read from the binary. No execution or debugging; the game was not run. The checks in
-  `checks/physics-contacts/` reproduce every fact.
+  spawn); the "to be collided" mark's setting and clearing, the box update after a step, the entry of a shell in
+  the spatial index, waking by a contact and the merge of the groups' requests; constants read from the binary.
+  No execution or debugging; the game was not run. The checks in `checks/physics-contacts/` reproduce every fact
+  (the `SR-…` checks, moved here with sections 1.1, 1.2, 1.5, 1.6 and 7's facts from an earlier specification of
+  the trader's door's shell, through `shapeless_root.py`).
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
