@@ -32,6 +32,7 @@ pub mod level_details;
 pub mod level_doors;
 pub mod level_lights;
 pub mod level_maps;
+pub mod level_motion_channels;
 pub mod level_motions;
 pub mod level_physics;
 pub mod level_sound;

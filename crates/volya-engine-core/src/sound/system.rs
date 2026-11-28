@@ -196,6 +196,14 @@ impl Device for NoDevice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SoundId(usize);
 
+#[cfg(test)]
+impl SoundId {
+    /// A sound id for other modules' tests.
+    pub(crate) fn for_test(index: usize) -> Self {
+        SoundId(index)
+    }
+}
+
 /// Identifies an emitter, unique for the system's life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct EmitterId(u64);

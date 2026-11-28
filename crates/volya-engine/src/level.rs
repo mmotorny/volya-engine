@@ -427,6 +427,8 @@ pub struct LevelScreen {
     placements: Arc<Vec<Option<Mat4>>>,
     /// The motions the instances play (motion-playback.md).
     motions: crate::level_motions::LevelMotions,
+    /// The traders' motion channels (scripted-motion-channels.md).
+    motion_channels: crate::level_motion_channels::LevelMotionChannels,
     /// Instance of each object id with a loaded visual.
     instances: HashMap<u16, usize>,
     /// The level's particle objects: the effects of `level.ps_static`
@@ -2596,6 +2598,7 @@ impl NewGameLoad {
             .enumerate()
             .map(|(k, i)| (i.id, k))
             .collect();
+        let motion_channels = crate::level_motion_channels::LevelMotionChannels::new(&objects);
         // The first update after loading receives the rest of the load's
         // time (level-placed-effects.md section 5.3).
         let effects = self.effects.map(|(mut e, at)| {
@@ -2681,6 +2684,7 @@ impl NewGameLoad {
             simulation: Some(simulation),
             info_portions: Some(info_portions),
             motions: crate::level_motions::LevelMotions::new(placements.len()),
+            motion_channels,
             placements: Arc::new(placements),
             instances,
             effects,
@@ -2984,6 +2988,9 @@ impl LevelScreen {
             time_global: self.global_ms as u32,
             frame: self.frame as u32,
         });
+        // Their notifications reach the traders' motion channels, whose
+        // check follows (scripted-motion-channels.md 4.1).
+        (self.motion_channels).tracks_updated(self.motions.take_notifications());
         // The placed effects on the world clock, which is the global clock
         // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
         // still while the pause is on (the menu, a `pause_state on` intro
@@ -3557,9 +3564,16 @@ impl LevelScreen {
         script.removed.extend(&changes.removed);
         for &id in &changes.online {
             self.lights.object_online(id);
+            if let Some(&k) = self.instances.get(&id) {
+                let class_id = &self.world.objects.instances[k].class_id;
+                self.motion_channels.spawned(k, class_id);
+            }
         }
         for &id in changes.offline.iter().chain(&changes.removed) {
             self.lights.object_offline(id);
+            if let Some(&k) = self.instances.get(&id) {
+                self.motion_channels.destroyed(k);
+            }
         }
         let Some(sim) = &self.simulation else { return };
         // A zone record coming online for the first time creates its zone
@@ -3742,6 +3756,109 @@ impl LevelScreen {
     /// The motions the object instances play.
     pub fn motions(&self) -> &crate::level_motions::LevelMotions {
         &self.motions
+    }
+
+    /// The traders' motion channels (scripted-motion-channels.md).
+    pub fn motion_channels(&self) -> &crate::level_motion_channels::LevelMotionChannels {
+        &self.motion_channels
+    }
+
+    /// The parts a trader's call acts on.
+    fn traders<'a>(
+        &'a mut self,
+        tree: &'a dyn Vfs,
+        data: &'a GameData,
+    ) -> (
+        &'a mut crate::level_motion_channels::LevelMotionChannels,
+        crate::level_motion_channels::LevelTraders<'a>,
+    ) {
+        let clock = crate::core::motion_playback::Clock {
+            time_global: self.global_ms as u32,
+            frame: self.frame as u32,
+        };
+        let traders = crate::level_motion_channels::LevelTraders {
+            motions: &mut self.motions,
+            objects: &self.world.objects,
+            dir: &self.world.dir,
+            tree,
+            data,
+            clock,
+        };
+        (&mut self.motion_channels, traders)
+    }
+
+    /// Makes `call` on object `object` (scripted-motion-channels.md 2): on
+    /// an online trader with a loaded visual; a call's fatal error ends the
+    /// game.
+    pub fn motion_channel_call(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        object: u16,
+        call: &crate::core::scripted_motion_channels::ChannelCall,
+        sounds: &mut dyn crate::core::scripted_motion_channels::ChannelSounds,
+    ) {
+        let Some(&k) = self.instances.get(&object) else {
+            return;
+        };
+        let (channels, mut traders) = self.traders(tree, data);
+        let Some(record) = channels.record_mut(k) else {
+            return;
+        };
+        if let Err(e) = traders.call(k, record, call, sounds) {
+            self.record_fatal(e.to_string());
+        }
+    }
+
+    /// The traders' checks (scripted-motion-channels.md 4), once after
+    /// each level update: `raise` raises an event on a trader (its object
+    /// id) and gives the calls its function made on it. A call's fatal
+    /// error ends the game; the scripts' error is returned.
+    pub fn motion_channels_check<E>(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        sounds: &mut dyn crate::core::scripted_motion_channels::ChannelSounds,
+        raise: &mut dyn FnMut(
+            u16,
+            crate::core::scripted_motion_channels::ChannelEvent,
+        )
+            -> Result<Vec<crate::core::scripted_motion_channels::ChannelCall>, E>,
+    ) -> Result<(), E> {
+        use crate::level_motion_channels::{Check, CheckError};
+        if !self.motion_channels.take_due() {
+            return Ok(());
+        }
+        let traders = self.motion_channels.traders();
+        let ids: Vec<u16> = (traders.iter())
+            .map(|&k| self.world.objects.instances[k].id)
+            .collect();
+        let (channels, mut level_traders) = self.traders(tree, data);
+        let mut failed = None;
+        for (&k, &id) in traders.iter().zip(&ids) {
+            let Some(record) = channels.record_mut(k) else {
+                continue;
+            };
+            let mut raise_on = |event| raise(id, event);
+            let mut check = Check {
+                k,
+                traders: &mut level_traders,
+                sounds: &mut *sounds,
+                raise: &mut raise_on,
+            };
+            match record.check(&mut check) {
+                Ok(()) => {}
+                Err(CheckError::Script(e)) => return Err(e),
+                Err(CheckError::Call(e)) => {
+                    failed = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+        if let Some(e) = failed {
+            self.record_fatal(e);
+        }
+        Ok(())
     }
 
     /// `r__detail_density` now (read when a cell is built,
@@ -4241,16 +4358,15 @@ impl LevelScreen {
     }
 
     /// Queues what script API R's members, or the use action's accepted
-    /// talk offer, asked of the talk and the trader
-    /// ([`crate::scripts::apply_events`]).
+    /// talk offer, asked of the talk ([`crate::scripts::apply_events`]; the
+    /// trader members' are the motion channels').
     pub fn queue_dialog_events(&mut self, events: impl IntoIterator<Item = DialogEvent>) {
         self.dialog_events.extend(events);
     }
 
     /// What was queued since the last call, oldest first: the talk takes
     /// it. TODO(#1075): the talk window shown and the switch to trade are
-    /// the talk's; nothing takes them yet. TODO(#1091): a trader's motions
-    /// and sound.
+    /// the talk's; nothing takes them yet.
     pub fn take_dialog_events(&mut self) -> Vec<DialogEvent> {
         std::mem::take(&mut self.dialog_events)
     }
@@ -4749,6 +4865,7 @@ impl LevelScreen {
             info_portions: None,
             placements: Arc::new(Vec::new()),
             motions: Default::default(),
+            motion_channels: Default::default(),
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),

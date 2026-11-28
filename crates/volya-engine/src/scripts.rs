@@ -20,6 +20,7 @@ use crate::core::collision::CollisionWorld;
 use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::dialogs::Dialogs;
+use crate::core::scripted_motion_channels::{ChannelCall, ChannelEvent, ChannelSounds};
 use crate::core::simulation::ACTOR_ID;
 use crate::core::vfs::Vfs;
 use crate::core::zones;
@@ -29,9 +30,10 @@ use crate::level_physics::{LevelPhysics, ScriptWorld};
 use crate::loading_screen::{GAME_TYPE, Loading, Stage};
 use crate::objects::{LoadedModel, Names};
 use crate::script::classes::OverrideFailure;
-use crate::script::dialogs::{Event as DialogEvent, SharedDialog, offer_talk};
+use crate::script::dialogs::{Event as DialogEvent, SharedDialog, TraderMotion, offer_talk};
 use crate::script::entry_points::{GameScripts, Startup};
 use crate::script::files::FileSystem;
+use crate::script::game_object::callbacks::ObjectEvent;
 use crate::script::game_object::object_binder::update_delta;
 use crate::script::game_object::physics::{LevelQueries, PhysicsEvent, PhysicsShell};
 use crate::script::game_object::{
@@ -489,6 +491,72 @@ impl ScriptDialogs {
     }
 }
 
+/// The traders' motion channels after the scripts' part of a level frame
+/// (docs/behavior/scripted-motion-channels.md): the calls the trader
+/// members made since (script API R 6), then each trader's check, its
+/// events raised on the trader (spec O 4, ids 30 to 32) and the calls
+/// their functions made made at once (4.2). A script error is fatal.
+pub fn motion_channels_frame(
+    scripts: &mut GameScripts,
+    level: &mut LevelScreen,
+    tree: &dyn Vfs,
+    data: &GameData,
+    sounds: &mut dyn ChannelSounds,
+) -> Result<(), Error> {
+    let events = scripts.dialogs().borrow_mut().take_trader_events(None);
+    for (trader, call) in events.into_iter().filter_map(channel_call) {
+        level.motion_channel_call(tree, data, trader, &call, sounds);
+    }
+    let mut raise = |trader: u16, event: ChannelEvent| {
+        let event = match event {
+            ChannelEvent::GlobalAnimRequest => ObjectEvent::TraderGlobalAnimRequest,
+            ChannelEvent::HeadAnimRequest => ObjectEvent::TraderHeadAnimRequest,
+            ChannelEvent::SoundEnd => ObjectEvent::TraderSoundEnd,
+        };
+        let raised = scripts.scripts().raise(trader, &event);
+        raised?;
+        let events = scripts
+            .dialogs()
+            .borrow_mut()
+            .take_trader_events(Some(trader));
+        Ok(events
+            .into_iter()
+            .filter_map(channel_call)
+            .map(|(_, c)| c)
+            .collect())
+    };
+    level.motion_channels_check(tree, data, sounds, &mut raise)
+}
+
+/// The call of a trader member's event (script API R 6), with its trader.
+fn channel_call(event: DialogEvent) -> Option<(u16, ChannelCall)> {
+    match event {
+        DialogEvent::TraderMotion {
+            trader,
+            motion,
+            name,
+        } => Some((
+            trader,
+            match motion {
+                TraderMotion::Body => ChannelCall::SetGlobalAnim(name),
+                TraderMotion::Head => ChannelCall::SetHeadAnim(name),
+            },
+        )),
+        DialogEvent::TraderSound {
+            trader,
+            sound,
+            head_motion,
+        } => Some((
+            trader,
+            ChannelCall::SetSound {
+                sound,
+                head_anim: head_motion,
+            },
+        )),
+        _ => None,
+    }
+}
+
 /// Spawns `object` in the scripts (spec C 6.1, 6.2; spec M 3, 10.2; spec
 /// L 5.1): its client object created through the factory for its
 /// section's class id; a script entry's object spawns through its
@@ -566,10 +634,12 @@ fn binding_runs(system: &Config, object: &ClientObject) -> bool {
 /// handling (5.2) is the death's (#248); a stalker's wounded flag has no
 /// behaviour to update, and an explosion is spec Y's
 /// ([`apply_physics_events`]). The dialogs and trade's events (script API
-/// R) are queued for the talk and the trader
-/// ([`LevelScreen::take_dialog_events`]).
+/// R) are queued for the talk ([`LevelScreen::take_dialog_events`]), but
+/// the trader members', which are [`motion_channels_frame`]'s.
 pub fn apply_events(scripts: &mut GameScripts, level: &mut LevelScreen) {
-    level.queue_dialog_events(scripts.dialogs().borrow_mut().take_events());
+    // The trader members' events are the motion channels'
+    // ([`motion_channels_frame`]).
+    level.queue_dialog_events(scripts.dialogs().borrow_mut().take_other_events());
     let events = scripts.objects().borrow_mut().take_events();
     for event in events {
         match event {

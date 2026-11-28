@@ -19,7 +19,7 @@ use std::io;
 use std::sync::Arc;
 
 use crate::core::head_bone_turning::{turn, turning_angle};
-use crate::core::motion_playback::{AnimatedModel, Clock, Motions};
+use crate::core::motion_playback::{AnimatedModel, Clock, Motions, Notified};
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
 use crate::objects::{LoadedModel, Names};
@@ -143,6 +143,8 @@ pub struct LevelMotions {
     render: Vec<Mat4>,
     /// The latest frame's matrices, shared with its scene.
     poses: Arc<BonePoses>,
+    /// The latest frame's notifications, by instance (5.2).
+    notified: Vec<(usize, Notified)>,
 }
 
 impl LevelMotions {
@@ -205,11 +207,11 @@ impl LevelMotions {
             matrices: Vec::new(),
             first: vec![None; self.animated.len()],
         };
+        self.notified.clear();
         for (i, a) in self.animated.iter_mut().enumerate() {
             let Some(a) = a else { continue };
             a.update_tracks(clock);
-            // No object acts on its notifications yet (TC2, TC5, TC7).
-            a.take_notifications();
+            (self.notified).extend(a.take_notifications().into_iter().map(|n| (i, n)));
             // head-bone-turning.md 4, 5: the head bone turned by A each
             // time its matrix is computed, under script control too. The
             // level's player is its controlled object from its spawn on
@@ -229,6 +231,19 @@ impl LevelMotions {
             poses.matrices.extend(self.render.iter().map(bone_matrix));
         }
         self.poses = Arc::new(poses);
+    }
+
+    /// Instance `instance`'s playbacks to start cycles on, if it has played
+    /// a motion.
+    pub fn model_mut(&mut self, instance: usize) -> Option<&mut AnimatedModel> {
+        self.animated.get_mut(instance)?.as_mut()
+    }
+
+    /// The notifications of the latest frame's tracks updates, by
+    /// instance, in their order (5.2); those not taken are dropped at the
+    /// next frame.
+    pub fn take_notifications(&mut self) -> Vec<(usize, Notified)> {
+        std::mem::take(&mut self.notified)
     }
 
     /// The latest frame's render matrices.

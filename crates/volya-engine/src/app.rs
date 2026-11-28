@@ -1163,6 +1163,27 @@ impl App {
         {
             self.failed.get_or_insert(e.message);
         }
+        // The traders' motion channels follow, their check after the level
+        // update (scripted-motion-channels.md 4.1).
+        if let (Some(Phase::Level { level, .. }), Some(scripts)) =
+            (&mut self.phase, &mut self.scripts)
+        {
+            let mut sounds = crate::core::scripted_motion_channels::SystemSounds {
+                system: audio.sounds(),
+                tree,
+                aliases: &self.data.aliases,
+            };
+            let frame = crate::scripts::motion_channels_frame(
+                scripts,
+                level,
+                tree,
+                &self.data,
+                &mut sounds,
+            );
+            if let Err(e) = frame {
+                self.failed.get_or_insert(e.message);
+            }
+        }
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {

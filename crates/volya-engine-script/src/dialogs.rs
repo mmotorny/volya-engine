@@ -101,6 +101,34 @@ impl DialogsAndTrade {
     pub fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
+
+    /// The events since the last call other than the trader members'
+    /// ([`DialogsAndTrade::take_trader_events`]), oldest first; those are
+    /// kept.
+    pub fn take_other_events(&mut self) -> Vec<Event> {
+        let trader =
+            |e: &Event| matches!(e, Event::TraderMotion { .. } | Event::TraderSound { .. });
+        let (kept, taken) = std::mem::take(&mut self.events)
+            .into_iter()
+            .partition(trader);
+        self.events = kept;
+        taken
+    }
+
+    /// The trader members' events ([`Event::TraderMotion`],
+    /// [`Event::TraderSound`]) since the last call, oldest first: of
+    /// `trader`, or of every trader; the other events are kept.
+    pub fn take_trader_events(&mut self, trader: Option<u16>) -> Vec<Event> {
+        let (taken, kept) = std::mem::take(&mut self.events).into_iter().partition(|e| {
+            let of = match e {
+                Event::TraderMotion { trader, .. } | Event::TraderSound { trader, .. } => *trader,
+                _ => return false,
+            };
+            trader.is_none_or(|t| t == of)
+        });
+        self.events = kept;
+        taken
+    }
 }
 
 /// What the members share.
