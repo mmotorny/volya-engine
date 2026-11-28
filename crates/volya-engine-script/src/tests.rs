@@ -12,6 +12,54 @@ fn selftest() {
     }
 }
 
+/// The script classes' checks, one test per section of
+/// docs/behavior/script-api-script-classes-deriving-from-engine-classes.md
+/// (all of them run in [`selftest`] too, on every target).
+mod classes {
+    use crate::selftest::classes as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn declaring_a_class() {
+        section(checks::declaring);
+    }
+
+    #[test]
+    fn constructing() {
+        section(checks::constructing);
+    }
+
+    #[test]
+    fn super_calls() {
+        section(checks::super_calls);
+    }
+
+    #[test]
+    fn members_of_objects_and_classes() {
+        section(checks::members);
+    }
+
+    #[test]
+    fn engine_calls_into_overrides() {
+        section(checks::engine_calls);
+    }
+
+    #[test]
+    fn base_class_calls() {
+        section(checks::base_calls);
+    }
+
+    #[test]
+    fn finalize_and_operators() {
+        section(checks::finalize_and_operators);
+    }
+}
+
 #[test]
 fn rust_panics_become_lua_errors() {
     let mut lua = Lua::new().unwrap();

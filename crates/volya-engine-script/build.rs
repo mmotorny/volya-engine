@@ -28,6 +28,7 @@ const SHIMS: &[&str] = &[
     "volya_jit",
     "volya_coco",
     "volya_glue",
+    "volya_class",
     "volya_printf",
     "volya_rand",
 ];

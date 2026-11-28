@@ -90,6 +90,86 @@ pub struct Register {
     pub data: *mut c_void,
 }
 
+/// `volya_rust_fn` (csrc/volya_glue.h).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RustFn {
+    pub f: Option<Function>,
+    pub data: *mut c_void,
+}
+
+impl RustFn {
+    pub const NONE: RustFn = RustFn {
+        f: None,
+        data: std::ptr::null_mut(),
+    };
+}
+
+/// `volya_engine_method` (csrc/volya_class.c).
+#[repr(C)]
+pub struct EngineMethod {
+    pub name: *const c_char,
+    pub call: RustFn,
+    pub default: RustFn,
+}
+
+/// `volya_engine_property` (csrc/volya_class.c).
+#[repr(C)]
+pub struct EngineProperty {
+    pub name: *const c_char,
+    pub get: RustFn,
+    pub set: RustFn,
+}
+
+/// `volya_engine_constant` (csrc/volya_class.c).
+#[repr(C)]
+pub struct EngineConstant {
+    pub name: *const c_char,
+    pub value: c_int,
+}
+
+/// `volya_engine_class` (csrc/volya_class.c).
+#[repr(C)]
+pub struct EngineClass {
+    pub name: *const c_char,
+    pub base: *const c_char,
+    pub construct: RustFn,
+    pub methods: *const EngineMethod,
+    pub nmethods: usize,
+    pub properties: *const EngineProperty,
+    pub nproperties: usize,
+    pub constants: *const EngineConstant,
+    pub nconstants: usize,
+}
+
+pub const VOLYA_NOTHING: c_int = 0;
+pub const VOLYA_VALUE: c_int = 1;
+pub const VOLYA_INTEGER: c_int = 2;
+
+pub const VOLYA_CALLED: c_int = 0;
+pub const VOLYA_NO_OBJECT: c_int = 1;
+pub const VOLYA_NOT_OVERRIDDEN: c_int = 2;
+pub const VOLYA_FAILED: c_int = 3;
+
+/// `volya_dispatch` (csrc/volya_class.c).
+#[repr(C)]
+pub struct Dispatch {
+    pub part: f64,
+    pub method: *const c_char,
+    pub args: *const FlatValue,
+    pub nargs: usize,
+    pub conversion: c_int,
+    pub outcome: c_int,
+    pub read: Reader,
+    pub ctx: *mut c_void,
+}
+
+unsafe extern "C" {
+    pub fn volya_open_classes_protected(l: *mut LuaState, release: *mut RustFn) -> c_int;
+    pub fn volya_register_class_protected(l: *mut LuaState, class: *mut EngineClass) -> c_int;
+    pub fn volya_dispatch_protected(l: *mut LuaState, dispatch: *mut Dispatch) -> c_int;
+}
+
 unsafe extern "C" {
     pub fn volya_newstate(alloc: LuaAlloc, ud: *mut c_void) -> *mut LuaState;
     pub fn volya_run_protected(l: *mut LuaState, run: *mut Run) -> c_int;

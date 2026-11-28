@@ -209,7 +209,7 @@ fn prefix_checks() -> Result<(), String> {
 }
 
 /// Files in memory, recording every path opened.
-struct Files {
+pub(super) struct Files {
     files: HashMap<String, Vec<u8>>,
     opened: RefCell<Vec<String>>,
 }
@@ -305,8 +305,16 @@ const SCRIPTS: &[(&str, &str)] = &[
 ];
 
 fn scripts(prefix: Prefix) -> Result<(Scripts, Rc<Files>), String> {
+    scripts_of(SCRIPTS, prefix)
+}
+
+/// A state loading `scripts` (file names in `$game_scripts$` and texts).
+pub(super) fn scripts_of(
+    scripts: &[(&str, &str)],
+    prefix: Prefix,
+) -> Result<(Scripts, Rc<Files>), String> {
     let files = Rc::new(Files {
-        files: SCRIPTS
+        files: scripts
             .iter()
             .map(|(name, text)| (format!("gamedata/scripts/{name}"), text.as_bytes().to_vec()))
             .chain([(

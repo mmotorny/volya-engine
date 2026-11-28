@@ -19,6 +19,7 @@ use volya_engine_core::vfs::{self, Vfs};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx::value;
 
+use crate::classes::{Conversion, EngineClass, EnginePart, OverrideFailure};
 use crate::{Error, ErrorKind, Lua, Value};
 
 /// The path alias of the scripts' directory (2.1).
@@ -230,6 +231,8 @@ impl Scripts {
     /// resolves them).
     pub fn new(trees: Rc<dyn Trees>, aliases: &PathAliases, prefix: Prefix) -> Result<Self, Error> {
         let mut lua = Lua::new()?;
+        // The binding library, opened before `_G` loads (classes spec 1.1).
+        lua.open_classes()?;
         let failures = Rc::new(RefCell::new(Vec::new()));
         let fatal = Rc::new(RefCell::new(None));
         let aliases = aliases.clone();
@@ -332,6 +335,40 @@ impl Scripts {
     /// [`Lua::call`] on the state (which may load scripts).
     pub fn call(&mut self, function: &str, args: &[Value]) -> Result<Vec<Value>, Error> {
         self.guarded(|lua| lua.call(function, args))
+    }
+
+    /// [`Lua::register_class`] on the state: the engine registers its
+    /// classes before [`Scripts::load_globals`].
+    pub fn register_class(&mut self, class: EngineClass) -> Result<(), Error> {
+        self.guarded(|lua| lua.register_class(class))
+    }
+
+    /// [`Lua::dispatch`] on the state (which may load scripts). A failing
+    /// override stops the state as the loader's fatal error does: the
+    /// original stops the game (classes spec 5.3).
+    pub fn dispatch(
+        &mut self,
+        part: EnginePart,
+        method: &str,
+        args: &[Value],
+        conversion: Conversion,
+    ) -> Result<Value, OverrideFailure> {
+        let result = self.guarded(|lua| Ok(lua.dispatch(part, method, args, conversion)))?;
+        if let Err(failure) = &result
+            && failure.error.kind == ErrorKind::Fatal
+        {
+            *self.fatal.borrow_mut() = Some(failure.error.message.clone());
+        }
+        result
+    }
+
+    /// [`Lua::with_part`] on the state.
+    pub fn with_part<T: std::any::Any, R>(
+        &self,
+        part: EnginePart,
+        f: impl FnOnce(&mut T) -> R,
+    ) -> Option<R> {
+        self.lua.with_part(part, f)
     }
 
     /// The failures since the last call, oldest first.

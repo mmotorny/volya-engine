@@ -5,7 +5,8 @@
 //! the original embeds (docs/behavior/script-environment.md), vendored
 //! unmodified in `vendor/luajit-1.0.3` (build.rs patches a copy, adding the
 //! original's C-style comments) and run without its machine-code compiler,
-//! behind a thin safe API; [`loader`] loads the game's script files. See
+//! behind a thin safe API; [`loader`] loads the game's script files, and
+//! [`classes`] gives scripts classes deriving from engine classes. See
 //! docs/architecture/scripts.md.
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
@@ -17,6 +18,7 @@
 // FFI to the vendored interpreter and our C library shims.
 #![allow(unsafe_code)]
 
+pub mod classes;
 mod ffi;
 mod libc;
 pub mod loader;
@@ -27,6 +29,7 @@ use std::ffi::{CString, c_int, c_void};
 use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
+use std::rc::Rc;
 
 use ffi::{FlatValue, LuaState};
 
@@ -141,6 +144,9 @@ pub struct Lua {
     /// Lua holds a thin pointer to each inner box, which must not move.
     #[allow(clippy::vec_box)]
     functions: Vec<Box<Box<Function>>>,
+    /// The engine parts of script objects and the engine classes' default
+    /// implementations ([`classes`]).
+    classes: Rc<classes::State>,
 }
 
 impl Lua {
@@ -154,6 +160,7 @@ impl Lua {
         Ok(Lua {
             state,
             functions: Vec::new(),
+            classes: Rc::default(),
         })
     }
 
@@ -213,16 +220,29 @@ impl Lua {
         f: impl FnMut(&[Value]) -> Result<Vec<Value>, String> + 'static,
     ) -> Result<(), Error> {
         let name = cstring(name)?;
-        let mut f: Box<Box<Function>> = Box::new(Box::new(f));
+        let f = self.keep(f);
         let mut register = ffi::Register {
             name: name.as_ptr(),
             f: invoke,
-            data: (&mut *f as *mut Box<Function>).cast(),
+            data: f.data,
         };
-        self.functions.push(f);
         // SAFETY: the state is open; `register` and the function outlive the call.
         let status = unsafe { ffi::volya_register_protected(self.state.as_ptr(), &mut register) };
         self.check(status)
+    }
+
+    /// Keeps `f` until the state closes, for C to call.
+    fn keep(
+        &mut self,
+        f: impl FnMut(&[Value]) -> Result<Vec<Value>, String> + 'static,
+    ) -> ffi::RustFn {
+        let mut f: Box<Box<Function>> = Box::new(Box::new(f));
+        let data = (&mut *f as *mut Box<Function>).cast();
+        self.functions.push(f);
+        ffi::RustFn {
+            f: Some(invoke),
+            data,
+        }
     }
 
     fn run(

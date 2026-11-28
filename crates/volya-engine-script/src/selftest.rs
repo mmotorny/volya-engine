@@ -7,6 +7,7 @@
 
 use crate::{ErrorKind, Lua, Value};
 
+pub mod classes;
 mod loading;
 
 /// Runs every check; `Err` lists the failures.
@@ -20,6 +21,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = loading::check() {
+        fail(e);
+    }
+    if let Err(e) = classes::check() {
         fail(e);
     }
     if failures.is_empty() {

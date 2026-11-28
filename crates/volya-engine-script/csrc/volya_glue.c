@@ -19,36 +19,7 @@
 
 LUALIB_API int luaopen_coco(lua_State *L); /* lcoco.h needs lstate.h. */
 
-enum { VOLYA_NIL, VOLYA_BOOLEAN, VOLYA_NUMBER, VOLYA_STRING, VOLYA_TABLE };
-
-typedef struct volya_value {
-  int kind;
-  int boolean;
-  double number;
-  const char *bytes; /* VOLYA_STRING */
-  size_t len;        /* VOLYA_STRING: bytes; VOLYA_TABLE: key-value pairs */
-} volya_value;
-
-/* Stack slots reserved before Rust reads values: 2 per table level, up to
-** MAX_DEPTH (src/lib.rs) levels. With them, reading pushes without growing
-** the stack, so it allocates nothing and can raise nothing. */
-#define VOLYA_READ_SLOTS (2 * 64 + 2)
-
-/* Reads `count` values from the stack, from index `first`. */
-typedef void (*volya_reader)(void *ctx, lua_State *L, int first, int count);
-
-/* A Rust function's results or error, owned by Rust until released. */
-typedef struct volya_reply {
-  const volya_value *values;
-  size_t count; /* Top-level values. */
-  const char *error;
-  size_t error_len;
-  void *token;
-  void (*release)(void *token);
-} volya_reply;
-
-/* Calls a Rust function with its arguments at 1..top; fills `reply`. */
-typedef void (*volya_function)(void *data, lua_State *L, volya_reply *reply);
+#include "volya_glue.h"
 
 static const volya_value *push_value(lua_State *L, const volya_value *v)
 {
@@ -72,7 +43,7 @@ static const volya_value *push_value(lua_State *L, const volya_value *v)
   }
 }
 
-static void push_values(lua_State *L, const volya_value *v, size_t count)
+void volya_push_values(lua_State *L, const volya_value *v, size_t count)
 {
   size_t i;
   luaL_checkstack(L, count > 1000000 ? 1000000 : (int)count, "too many values");
@@ -177,7 +148,7 @@ static int run(lua_State *L)
   } else {
     lua_getglobal(L, r->global);
   }
-  push_values(L, r->args, r->nargs);
+  volya_push_values(L, r->args, r->nargs);
   lua_call(L, (int)r->nargs, LUA_MULTRET);
   if (r->code != NULL && r->registry) {
     lua_settop(L, base + 1); /* The first result, or nil. */
@@ -196,10 +167,8 @@ int volya_run_protected(lua_State *L, volya_run *r)
 
 /* --- Rust functions ------------------------------------------------------ */
 
-static int trampoline(lua_State *L)
+int volya_call_rust(lua_State *L, volya_function f, void *data)
 {
-  volya_function f = (volya_function)lua_touserdata(L, lua_upvalueindex(1));
-  void *data = lua_touserdata(L, lua_upvalueindex(2));
   volya_reply reply = {NULL, 0, NULL, 0, NULL, NULL};
   int top;
   luaL_checkstack(L, VOLYA_READ_SLOTS, "no stack space to read the arguments");
@@ -211,9 +180,15 @@ static int trampoline(lua_State *L)
     reply.release(reply.token);
     return lua_error(L);
   }
-  push_values(L, reply.values, reply.count);
+  volya_push_values(L, reply.values, reply.count);
   reply.release(reply.token);
   return lua_gettop(L) - top;
+}
+
+static int trampoline(lua_State *L)
+{
+  return volya_call_rust(L, (volya_function)lua_touserdata(L, lua_upvalueindex(1)),
+                         lua_touserdata(L, lua_upvalueindex(2)));
 }
 
 typedef struct volya_register {
