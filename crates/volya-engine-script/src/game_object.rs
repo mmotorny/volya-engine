@@ -39,6 +39,7 @@ use std::rc::{Rc, Weak};
 use volya_engine_core::config::Config;
 use volya_engine_core::physics::shell::Shell;
 use volya_engine_core::simulation::{NO_ID, class_of};
+use volya_engine_core::stalker_motions::StalkerModel;
 use volya_engine_formats::cp1251;
 use volya_engine_formats::model::{self, Mat4};
 use volya_engine_formats::object::ObjectRecord;
@@ -730,7 +731,9 @@ pub struct GameObjects {
 /// its restrictor's shape (6.2) and its character information's start
 /// dialog (docs/behavior/character-talk-state.md 6.2), the last three kept
 /// only where its kinds have the part (the start dialog: stalkers and
-/// traders, 6.1).
+/// traders, 6.1); a stalker's model's motions and its specific character's
+/// `crouch_type`, which its motion state's reload takes (stalker-motions.md
+/// 3.1, 10).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EngineState {
     pub visual: Option<Visual>,
@@ -738,6 +741,8 @@ pub struct EngineState {
     pub restrictor: Option<Restrictor>,
     /// Empty for an object without one.
     pub start_dialog: Vec<u8>,
+    pub stalker_model: Option<StalkerModel>,
+    pub crouch_type: i32,
 }
 
 impl GameObjects {
@@ -838,7 +843,9 @@ impl GameObjects {
         let mut object = GameObject::new(class, data, clsid);
         object.client = client;
         object.updated_at = self.server_time;
+        let mut stalker_model = (None, 0);
         if let Some(state) = self.prepared.remove(&data.id) {
+            stalker_model = (state.stalker_model, state.crouch_type);
             object.visual = state.visual;
             if object.physics.is_some() {
                 object.physics = state.physics.or(object.physics);
@@ -851,6 +858,13 @@ impl GameObjects {
             {
                 owner.talk.come_online(&state.start_dialog);
             }
+        }
+        // A stalker's motion state is reloaded as it spawns
+        // (stalker-motions.md 3.1).
+        let alive = object.entity.as_ref().is_some_and(|e| e.health > 0.0);
+        if let Some(s) = object.movement.stalker.as_mut() {
+            let (model, crouch_type) = stalker_model;
+            s.motions.reload(model, alive, crouch_type);
         }
         let id = object.id;
         *spawned = Some(id);

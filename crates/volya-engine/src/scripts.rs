@@ -979,6 +979,7 @@ pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::R
         physics: object.physics,
         restrictor: restrictor_of(&object.record),
         start_dialog: cp1251::encode(&start_dialog).unwrap_or_else(|| start_dialog.into_bytes()),
+        ..EngineState::default()
     })
 }
 

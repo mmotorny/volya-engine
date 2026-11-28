@@ -495,6 +495,17 @@ impl Scripts {
         Ok(results.first() == Some(&Value::Boolean(true)))
     }
 
+    /// Whether object `object`'s entry `id` has a function now (3.1).
+    pub fn has_callback(&mut self, object: u16, id: i32) -> Result<bool, Error> {
+        let args = [
+            "has".into(),
+            Value::Number(f64::from(object)),
+            Value::Number(f64::from(id)),
+        ];
+        let results = self.callbacks(&args)?;
+        Ok(results.first() == Some(&Value::Boolean(true)))
+    }
+
     /// Object `receiver`'s update delivers its queued sounds (4, id 17), in
     /// order, and empties the queue.
     pub fn deliver_sounds(&mut self, receiver: u16) -> Result<(), Error> {

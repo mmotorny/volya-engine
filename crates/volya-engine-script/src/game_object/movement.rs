@@ -31,6 +31,8 @@ use crate::classes::EngineClass;
 use crate::loader::Scripts;
 use crate::values::{Vector, to_bits32, to_f32};
 use volya_engine_core::config::{Config, value};
+use volya_engine_core::motion_playback::{AnimatedModel, Clock};
+use volya_engine_core::stalker_motions::{Outcome, StalkerMotions, StalkerState};
 
 /// The largest 32-bit float (conventions).
 pub const FLT_MAX: f32 = f32::MAX;
@@ -118,14 +120,6 @@ impl Default for SightRequest {
     }
 }
 
-/// A queued script animation (10.3).
-#[derive(Clone, Debug, PartialEq)]
-pub struct ScriptAnimation {
-    pub name: Vec<u8>,
-    pub a: bool,
-    pub b: bool,
-}
-
 /// The object handler's target `set_item` gives (10.1).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectTarget {
@@ -145,7 +139,8 @@ pub struct StalkerParts {
     /// Whether the path is marked to be rebuilt (3, 4.1).
     pub path_outdated: bool,
     pub sight: SightRequest,
-    pub animations: Vec<ScriptAnimation>,
+    /// Its motion state and script animation queue (10.3; CH-11).
+    pub motions: StalkerMotions,
     pub ignore_monster_threshold: f32,
     pub max_ignore_monster_distance: f32,
     pub object_target: Option<ObjectTarget>,
@@ -769,22 +764,22 @@ fn items(class: EngineClass, ctx: &Context) -> EngineClass {
     let class = member(class, ctx, "add_animation", |c| {
         let name = c.text(0)?;
         let (a, b) = (c.boolean(1)?, c.boolean(2)?);
-        // TODO(#1129): the model's motions aren't known to the scripts:
-        // every name is taken as one of them.
+        // A name the model lacks: the diagnostic goes to the routine that
+        // returns at once (M 2.3), nothing is appended (CH-11 8.1).
         if let Some(s) = stalker(c)? {
-            s.animations.push(ScriptAnimation { name, a, b });
+            s.motions.add_animation(&name, a, b);
         }
         none()
     });
     let class = member(class, ctx, "clear_animations", |c| {
         if let Some(s) = stalker(c)? {
-            s.animations.clear();
+            s.motions.clear_animations();
         }
         none()
     });
     let class = member(class, ctx, "animation_count", |c| {
         Ok(number(
-            stalker(c)?.map_or(-1, |s| s.animations.len() as i32),
+            stalker(c)?.map_or(-1, |s| s.motions.animation_count() as i32),
         ))
     });
     let class = member(class, ctx, "animation_slot", |c| {
@@ -891,5 +886,85 @@ impl Scripts {
         if let Some(o) = basics.objects.borrow_mut().get_mut(id) {
             fake_movement_update(o, vertices.as_ref().map(|v| &*v.ai));
         }
+    }
+}
+
+/// What the stalker motion update reads of stalker `o` (stalker-motions.md
+/// 1): its current states and its body's and head's headings as the
+/// engine keeps them.
+// TODO(#1129): its speed, path and sight turning are the movement's
+// (CH-10), whose fake (#1234) keeps it still: no path, not turning. TODO(#1132):
+// the item in hand and the object handler are CH-20's: none. Its critical
+// wounds (CH-21) and its sounds for the head (CH-25) aren't followed:
+// none, silent.
+fn stalker_state(o: &GameObject) -> StalkerState {
+    let states = o.movement.stalker.as_ref().map(|s| s.current);
+    let body = o.fighter.as_ref().map_or((0.0, 0.0), |f| f.body_heading);
+    let head = o.stalker.as_ref().map_or((0.0, 0.0), |s| s.head_heading);
+    let state =
+        |v: Option<i32>, fallback: u8| v.and_then(|v| u8::try_from(v).ok()).unwrap_or(fallback);
+    StalkerState {
+        body_state: state(states.map(|s| s.body_state), STANDING as u8),
+        movement_type: state(states.map(|s| s.movement_type), STAND as u8),
+        mental_state: state(states.map(|s| s.mental_state), DANGER as u8),
+        body_yaw: body.0,
+        body_target_yaw: body.1,
+        head_yaw: head.0,
+        head_target_yaw: head.1,
+        ..StalkerState::default()
+    }
+}
+
+impl Scripts {
+    /// Stalker `id`'s motion update (stalker-motions.md 3.3) on its
+    /// `model`, whose health is above 0 (3.2): the ends its model reached
+    /// handed to its slots, callback 29 (`script_animation`) called when a
+    /// script animation ended, then the script mode or the normal
+    /// selection, `draw` the global generator. The body's target heading
+    /// follows the legs (7.2, 7.3). Nothing for an object that isn't a
+    /// living stalker; a script error, or a fatal error of the playback, is
+    /// fatal.
+    pub fn update_stalker_motions(
+        &mut self,
+        id: u16,
+        model: &mut AnimatedModel,
+        clock: Clock,
+        draw: &mut dyn FnMut() -> u32,
+    ) -> Result<Option<Outcome>, crate::Error> {
+        let objects = self.game_objects()?;
+        let alive = |o: &GameObject| o.entity.as_ref().is_some_and(|e| e.health > 0.0);
+        let ended = {
+            let mut objects = objects.borrow_mut();
+            let Some(o) = objects.get_mut(id).filter(|o| alive(o)) else {
+                return Ok(None);
+            };
+            let Some(s) = o.movement.stalker.as_mut() else {
+                return Ok(None);
+            };
+            s.motions
+                .take_script_animation_end(model, clock.time_global)
+        };
+        if ended {
+            self.raise(id, &super::callbacks::ObjectEvent::ScriptAnimation)?;
+        }
+        let callback_set = self.has_callback(id, 29)?;
+        let mut objects = objects.borrow_mut();
+        let Some(o) = objects.get_mut(id).filter(|o| alive(o)) else {
+            return Ok(None);
+        };
+        let state = stalker_state(o);
+        let Some(s) = o.movement.stalker.as_mut() else {
+            return Ok(None);
+        };
+        let out = (s.motions)
+            .update(model, &state, callback_set, clock, draw)
+            .map_err(|e| crate::Error {
+                kind: crate::ErrorKind::Fatal,
+                message: e.to_string(),
+            })?;
+        if let (Some(yaw), Some(f)) = (out.body_target_yaw, o.fighter.as_mut()) {
+            f.body_heading.1 = yaw;
+        }
+        Ok(Some(out))
     }
 }

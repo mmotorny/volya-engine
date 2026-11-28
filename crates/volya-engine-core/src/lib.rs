@@ -43,6 +43,7 @@ pub mod physics;
 pub mod scripted_motion_channels;
 pub mod simulation;
 pub mod sound;
+pub mod stalker_motions;
 pub mod switching;
 pub mod talk;
 pub mod text;

@@ -318,6 +318,8 @@ return function(op, ...)
     return raise(...)
   elseif op == "perceive" then
     return perceive(...)
+  elseif op == "has" then
+    return has(...)
   elseif op == "deliver" then
     return deliver(...)
   elseif op == "update" then

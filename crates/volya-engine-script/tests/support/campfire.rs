@@ -8,6 +8,9 @@
 //! Included by the tests with `#[path]`, beside `gog_archives` and
 //! `shipped_scripts`.
 
+// Each test uses one of the two set-ups.
+#![allow(dead_code)]
+
 use std::cell::RefCell;
 use std::io::Cursor;
 use std::rc::Rc;
@@ -22,15 +25,15 @@ use volya_engine_core::info_portions::{Declarations, InfoPortions};
 use volya_engine_core::simulation::graph::Graph;
 use volya_engine_core::simulation::{AlifeConfig, Simulation};
 use volya_engine_core::vfs::db::DbVfs;
-use volya_engine_core::vfs::{StdVfs, read};
+use volya_engine_core::vfs::{StdVfs, VfsFile, read};
 use volya_engine_formats::game_graph::GameGraph;
 use volya_engine_formats::level_ai::LevelAi;
 use volya_engine_formats::level_cform::CformReader;
-use volya_engine_formats::object::Kind;
+use volya_engine_formats::object::{Kind, ObjectRecord};
 use volya_engine_formats::patrol_path::PatrolPaths;
 use volya_engine_script::entry_points::{GameScripts, Startup};
 use volya_engine_script::files::FileSystem;
-use volya_engine_script::game_object::{GameObjects, ObjectClass, SpawnData};
+use volya_engine_script::game_object::{EngineState, GameObjects, ObjectClass, SpawnData};
 use volya_engine_script::level::{Level, LevelVertices};
 use volya_engine_script::loader::Prefix;
 use volya_engine_script::services::EngineServices;
@@ -52,12 +55,22 @@ fn system(
 /// place, what it does for the camp scheme's first start (12.1),
 /// `xr_kamp.add_to_binder` (the job's logic is CH-28's, TODO(#1215)).
 pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), String>)> {
+    started_with(logic, |_, _| EngineState::default())
+}
+
+/// [`started`], the stalker given what `prepare` makes from the game's
+/// tree and its record as the engine's state as it spawns (spec M 3).
+pub fn started_with(
+    logic: Option<&[u8]>,
+    prepare: impl FnOnce(&DbVfs<Box<dyn VfsFile + 'static>>, &ObjectRecord) -> EngineState,
+) -> Option<(GameScripts, u16, Result<(), String>)> {
     let archives = gog_archives::archives()?;
     let root: &'static StdVfs =
         Box::leak(Box::new(StdVfs::new(archives[0].file.parent().unwrap())));
     let tree = DbVfs::open_game(root, Some("mods")).unwrap();
     let aliases = PathAliases::parse(FSGAME, "").unwrap();
     let trees = Rc::new(GameTrees { tree, root });
+    let game_trees = Rc::clone(&trees);
     let vfs = &trees.tree;
     let system = system(vfs, &aliases);
     // The game's information portions, as a New Game sets them (the
@@ -139,6 +152,8 @@ pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), Str
     trader_like_mut(&mut object.record).unwrap().community = position as i32;
     let record = sim.object(stalker).unwrap().record.clone();
     let mut data = SpawnData::from_record(stalker, &record, &system).unwrap();
+    let state = prepare(&game_trees.tree, &record);
+    scripts.objects().borrow_mut().prepare(stalker, state);
     if let Some(logic) = logic {
         data.custom_data = logic.to_vec();
     }
