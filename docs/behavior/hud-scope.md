@@ -8,7 +8,8 @@ covering one behaviour or one format, that can be investigated and reviewed on t
 It builds on the approved specifications `ui-layout` (`docs/formats/ui-layout.md`), `text-and-fonts`
 (`docs/formats/text-and-fonts.md`), `title-menu`, `player-state`, `player-movement` and
 `inventory-screen` (`docs/behavior/`), and names as dependencies the approved `startup`, `options-screens`,
-`save-load-screens`, `loading-screen`, `level-loading`, `level-objects`, `script-loading`,
+`save-load-screens`, `loading-screen`, `level-loading`, `offline-simulation`,
+`object-visual-and-transform`, `hanging-lamps`, `script-loading`,
 `script-environment` (`docs/behavior/`), `level-cform`, `sav`, `ogf` and `db-archive` (`docs/formats/`),
 all cited by name.
 
@@ -164,8 +165,8 @@ Binoculars (`config\weapons\w_binoc.ltx`, c7): `vision_present`, `vis_frame_spee
   `ui_mp_minimap_af_neutral`, `ui_pda_contacts`, `ui_slow_blinking_alpha` (c4).
   The file is shared beyond the HUD: the approved `startup` §6.4 establishes the entry `asus_logo_01`
   (frame rate, keys, ARGB values, whole-frame advance, linear interpolation, `la_alpha`/`la_texture`),
-  `options-screens` uses `ui_map_area_anim`, and `level-objects` names its entries as light colour
-  animators. `ui-layout` 11 leaves these animations in general unestablished.
+  `options-screens` uses `ui_map_area_anim`, and `hanging-lamps` (4.3) names its entries as light
+  colour animators. `ui-layout` 11 leaves these animations in general unestablished.
 - Shaders: `hud\hitmarker` is a `shaders.xr` entry (`ui-layout` 8) that neither `xrGame.dll` nor
   `XR_3DA.exe` names (c4); `hud\movie` draws video pictures (`ui-layout` 8).
 
@@ -366,7 +367,7 @@ specified yet and are named as "the script API".
     on the minimap, the pointers at its edge, and their colours by relation.
     Data: `map_spots.xml` and its includes (`map_spots_mp.xml` believed multiplayer, 2); its pictures
     of `ui\ui_hud` and `ui\ui_common` (c4). Depends on: `hud-minimap`, `colour-animations`,
-    `level-objects`, `script-loading`, `script-environment`; relations, tasks, the PDA map, the script
+    `offline-simulation`, `object-visual-and-transform`, `script-loading`, `script-environment`; relations, tasks, the PDA map, the script
     API (not specified). It also owns how a task objective's location becomes a minimap spot: the
     objectives' `map_location_type` and `map_location_hidden` (1.5), and the task scripts that set them.
     Scripts: `level.map_add_object_spot`, `_ser`, `map_remove_object_spot`, `map_change_spot_hint`,
@@ -377,7 +378,7 @@ specified yet and are named as "the script API".
     the new-contact sounds.
     Data: `maingame.xml` `static_pda_online`, `flashing_icons`, `new_contact_snd`; `[maingame_ui]`
     `snd_new_contact`, `snd_new_contact1`; the animation `ui_pda_contacts`. Depends on:
-    `colour-animations`, `level-objects`; PDA contacts and messages (not specified). Scripts: none
+    `colour-animations`, `offline-simulation`; PDA contacts and messages (not specified). Scripts: none
     found. Order 12.
 
 13. **Pick-up icon and hint line** (`hud-pickup-hint`). The icon of the item under the crosshair and
@@ -387,7 +388,7 @@ specified yet and are named as "the script API".
     `dead_character_use`, `dead_character_use_or_drag`, `inventory_box_use`, `inventory_item_use`,
     `car_character_use` (string ids named in `xrGame.dll`, c7; `bind_monster` and `xr_motivator` pass
     `character_use` to `set_tip_text`, `mob_trader` uses it as its default `tip_text`, c7). Depends on: `colour-animations`,
-    `level-objects`, `inventory-screen` 4.2 (icons), `level-cform`, `script-loading`,
+    `offline-simulation`, `object-visual-and-transform`, `inventory-screen` 4.2 (icons), `level-cform`, `script-loading`,
     `script-environment`; usable objects and the script API (not specified). Scripts: `set_tip_text`,
     `set_tip_text_default` (1.7). Order 13.
 
@@ -396,7 +397,8 @@ specified yet and are named as "the script API".
     Data: `hud_crosshair_dist`; character descriptions and relations; the string ids `enemy`,
     `friend`, `neutral`, `novice`, `stalker`, `veteran`, `master` (named in `xrGame.dll`, c7; to
     establish whether the crosshair shows them) (the switch `hud_info` is spec
-    2's). Depends on: `hud-crosshair`, `level-objects`, `text-and-fonts`; characters and relations (not
+    2's). Depends on: `hud-crosshair`, `offline-simulation`,
+    `object-visual-and-transform`, `text-and-fonts`; characters and relations (not
     specified). Scripts: none. Order 14.
 
 15. **Zoom picture** (`hud-zoom`). The scope or binoculars picture drawn while aiming.
@@ -410,8 +412,8 @@ specified yet and are named as "the script API".
     Data: `config\weapons\w_binoc.ltx` `vision_present`, `vis_frame_speed`, `vis_frame_color`,
     `found_snd` (`detectors\DA-2_beep1`), all four named in `xrGame.dll`; the picture
     `ui\ui_enemy_frame` (named in `xrGame.dll`; `textures\ui\ui_enemy_frame.dds`; id
-    `ui_enemy_frame` in `ui_old_textures.xml`) (c7). Depends on: `hud-zoom`, `level-objects`,
-    `player-state`; creatures and their visibility (not specified). Scripts: none. Order 16.
+    `ui_enemy_frame` in `ui_old_textures.xml`) (c7). Depends on: `hud-zoom`, `offline-simulation`,
+    `object-visual-and-transform`, `player-state`; creatures and their visibility (not specified). Scripts: none. Order 16.
 
 17. **Hit marks** (`hud-hit-marks`). The marks drawn when the player is hit.
     Data: `[hud_hitmark]`; `textures\ui\ui_hud_hit_mark*`; the animation `hud_hit_mark` (in

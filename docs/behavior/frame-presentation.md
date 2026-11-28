@@ -13,7 +13,7 @@ the menu over a level, and the title menu after a level was unloaded.
 Builds on: `docs/behavior/static-shading.md` (SS: scripted definitions 3.4, sampler states, pixel-program
 precision rules, target size 10.2), `docs/behavior/particle-drawing.md` (PD: the distortion pass, section 6),
 `docs/behavior/options-screens.md` (OS: video restart 5.4, back-buffer format 9),
-`docs/behavior/start-position.md` (SP: frame time, 7.2), `docs/behavior/hud-scope.md` (HS: proposed
+`docs/behavior/view-projection.md` (VP: frame time, 1 step 2), `docs/behavior/hud-scope.md` (HS: proposed
 specifications 19 `ppe-format`, 20 `screen-effects`, 21 `hud-night-vision`), `docs/formats/db-archive.md`,
 `docs/behavior/display-gamma.md` (DG: the display gamma ramp), `docs/behavior/loading-screen.md` (LS),
 `docs/behavior/title-menu.md` (TM: the lens, 4.6), `docs/formats/text-and-fonts.md` (TF: the main menu's
@@ -258,7 +258,7 @@ so tc0 spans the scene from (a₀, b₀) to (a₁ − d_h/2, b₁ − d_v/2), an
 (d_h/2, d_v/2).
 
 Noise coordinates [FP-7]: the noise cell n = ceil(noise.grain · 256 + 10⁻⁷). A countdown T (0 when the
-target is built) is lowered by the frame time in seconds (the value of SP 7.2) each time the quad is drawn
+target is built) is lowered by the frame time in seconds (the value of VP 1 step 2) each time the quad is drawn
 (3.1 step 5); when
 it becomes negative, two offsets o_x = r₁ mod max(n, 1) and o_y = r₂ mod max(n, 1) are drawn from the
 engine's shared generator (state ← state · 214013 + 2531011 mod 2³², value = (state >> 16) & 0x7FFF; two

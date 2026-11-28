@@ -25,16 +25,18 @@ Builds on (not repeated):
   rules by which a stored value changes, colour given as (R, G, B) storing A = 1), which lights are drawn and how they
   light the world. `docs/behavior/glows.md` (P15): the sources of glows (artefacts are not among them, section 5.1).
 - `docs/formats/lanims-xr.md` (P12): not used; an artefact's light has no colour animation (section 5.1).
-- `docs/behavior/level-objects.md`: which objects are online at the start (section 2, including the scripted
-  day-and-night rule for three `SCRPTART` sections, 2.5), the object transform *X* (3.4), visual types (4.1), bones
-  and bind matrices (4.4), the current model-space bone matrix *T* and the pose at rest (4.8).
+- `docs/behavior/offline-simulation.md`: which objects are online at the start (section 6.5, including the scripted
+  day-and-night rule for three `SCRPTART` sections, 6.5.4). `docs/behavior/object-visual-and-transform.md`: the
+  object transform *X* (section 4). `docs/formats/skeleton-ogf.md`: visual types (section 1), bones and bind matrices
+  (section 4). `docs/behavior/model-shading.md`: the current model-space bone matrix *T* and the pose at rest
+  (section 2).
 - `docs/formats/skeletal-motions.md`: a bone's *T* under a motion at a time.
 - `docs/formats/ogf.md`: the visual header with its bounding sphere.
 - `docs/formats/sav.md`: the record layouts; `docs/formats/ltx-config.md`: key lookup with inheritance, booleans,
   reading a missing key is fatal.
 - `docs/behavior/player-state.md` section 3.3: where an item the player takes is placed (slots, belt, backpack).
 
-Conventions: matrices in the row-vector convention of level-objects.md (row 3 of *X* is the position **p**; a point
+Conventions: matrices in the row-vector convention of object-visual-and-transform.md (row 3 of *X* is the position **p**; a point
 **q** is placed as [**q** 1] · *X*). Arithmetic is IEEE single precision (`f32`) unless stated. "ms" are milliseconds;
 the clock is the device clock of zone-idle-effects.md (*C* in whole milliseconds). *E* is the camera position of the
 frame. "Single-player game" is the game type `single` (the only one this specification needs; section 4.6 says what
@@ -54,7 +56,7 @@ that differ only in the per-update work of section 6.4 and in one key (`jump_hei
 - `SCRPTART`: the **plain** behaviour. The program registers this id itself only for a dedicated server; in a
   normal game the shipped `scripts\class_registrator.script` registers it, with the name under which the program
   exposes the plain behaviour to scripts and with the server-side script object of `se_artefact.script` (A1;
-  `data.py` D8). For the three sections named in level-objects.md 2.5 that script object decides when the record is
+  `data.py` D8). For the three sections named in offline-simulation.md 6.5.4 that script object decides when the record is
   online; it does not touch the effect or the light.
 
 Everything else in this specification holds for both ids.
@@ -139,8 +141,8 @@ released by its parent (4.7); carried → activating (7.1); any → absent on de
 When the artefact object is created from its record (it comes online), in this order (`bin_artefact.py` A4):
 
 1. the general creation steps of a physical item: among them the object transform *X* from the record
-   (level-objects.md 3.4) and a computation of the model's bone matrices (believed: the rest pose, every bone's *T*
-   its bind matrix *B*, level-objects.md 4.8; no motion plays yet);
+   (object-visual-and-transform.md 4) and a computation of the model's bone matrices (believed: the rest pose, every bone's *T*
+   its bind matrix *B*, model-shading.md 2; no motion plays yet);
 2. if the effect name is not empty: the **effect start** of section 4.2;
 3. a light record is created (always, also when `lights_enabled` is off) and its shadow setting set on;
 4. **lights on** (section 5.2);
@@ -202,7 +204,7 @@ From *S* the angles (*h*, *p*, *b*) are kept: with *w* = √(*S*[0][1]² + *S*[1
 *p* = −atan2(−*S*[2][1], *w*), *b* = 0 (P3). For **d** = (0, 1, 0): *h* = 0, *p* = π/2 (`f32` 0x3FC90FDB), *b* = 0 (M1).
 
 Later placements (section 4.4) use the **update rotation** *U* built from the kept angles in the form of
-level-objects.md 3.4 with *x* = *p*, *y* = *h*, *z* = *b*, each sine and cosine taken of the `f32` angle (P4). For the
+object-visual-and-transform.md 4 with *a*₀ = *p*, *a*₁ = *h*, *a*₂ = *b*, each sine and cosine taken of the `f32` angle (P4). For the
 idle effect *U* has rows (1, 0, 0), (0, *c*, −1), (0, 1, *c*) with *c* = cos(*p*) = −4.371139 × 10⁻⁸ (`f32`
 0xB33BBD2E) (M1), so the first placement (by *S*) and the later ones (by *U*) differ only by *c*.
 
@@ -402,7 +404,7 @@ electra phases at 5, 7, 7 and 9 s.
 
 - 6 artefact records (D3); online at the start only `esc_af_medusa` (`af_medusa`, `ARTEFACT`): `esc_af_blood` and
   `esc_af_cristall_flower` are offline by distance, the three `SCRPTART` records follow the day-and-night rule
-  (level-objects.md 2.5) (D3).
+  (offline-simulation.md 6.5.4) (D3).
 - `esc_af_medusa` shows the group `anomaly2\artefact\artefact_gravi`; its light is off (`lights_enabled` false) (D3).
   Its *X* has row 3 (−244.8165, −13.1585, −33.6452); its effect point (bone 0 at rest of `artefact_blackdrip`, type 10)
   is (−244.8057, −13.1224, −33.6349) (M2). Its model sphere is centred at (0.0062, 0.1543, −0.0049), radius 0.23
@@ -411,7 +413,7 @@ electra phases at 5, 7, 7 and 9 s.
 - These are its values **at creation**. `af_medusa` has class `ARTEFACT` and `jump_height` 0.5 (AJ-2), so from its
   first processed frame the jumping work of 6.4 pushes it up whenever it is within 0.5 m above a surface; it does
   not stay at its record position, and where it is at a later moment is **unestablished** (6.4). Its record is
-  online from the start (level-objects.md 2: 101.5 m from the actor, within the 135 m online distance) and
+  online from the start (offline-simulation.md 6.5: 101.5 m from the actor, within the 135 m online distance) and
   no shipped script names `esc_af_medusa`, and the only script naming `af_medusa` is a dialogue of
   `escape_dialog.script` that gives the player one (AJ-3) (**believed**: no character picks
   it up; not traced). **Measured** (one capture of the unmodified game, headless, Wine 11 under box64, 1024 × 768,

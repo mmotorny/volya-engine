@@ -11,7 +11,7 @@ CH-2 of `docs/behavior/characters-scope.md` (cited as `scope`), section 5.
 Builds on (not repeated): `docs/formats/sav.md` (cited as `sav`; 7.4 the Trader-like, Creature and
 Visual blocks and the layouts per kind, 9 chunk 9, 11.2 the load order), `docs/behavior/offline-simulation.md`
 (cited as `offline`; 8 the creation and registration order, 7.4 and 1.6 the terrain masks),
-`docs/behavior/level-objects.md` (cited as `objects`; 3.2 the model name), `docs/formats/text-and-fonts.md`
+`docs/behavior/object-visual-and-transform.md` (cited as `objects`; 2 the model name), `docs/formats/text-and-fonts.md`
 1.4 (string-table lookup), `docs/behavior/original-determinism.md` 2.2 (the shared random generator),
 `docs/behavior/console-log.md` (the report of a fatal error), `docs/formats/ltx-config.md`.
 
@@ -55,7 +55,7 @@ Conventions:
 | rank, reputation | Trader-like block | −2,147,483,647 each |
 | character name | Trader-like block | empty |
 | money | Trader-like block | the section's `money`, else 0 |
-| model name | Visual block (`objects` 3.2) | — |
+| model name | Visual block (`objects` 2) | — |
 | team | Creature block, first byte (stalkers only) | — |
 | terrain masks | not saved (`offline` 7.4) | from the section's `terrain` |
 
@@ -178,7 +178,7 @@ A trader object has no Creature block and no terrain masks, so steps 3 and 4 onl
   a save) ends with the choice [W1]. Writing the block writes the stored values as they are [W2]. A stalker's
   state is read Trader-like block first, then its Monster-like block (`sav` 7.4.2), so the Creature block's
   team and the Visual block's model name read after it replace what step 3 and 2 set at that moment
-  (`objects` 3.2 item 3).
+  (`objects` 2 item 3).
 - **The supplies step** (the items created with a new object, `offline` 8.1 step 3.4), for every stalker and
   trader, scripted or not [W4, W5]:
   1. a stalker first makes the choice (it changes nothing when the specific character is already set);
@@ -231,7 +231,7 @@ defaults, which may repeat any of them. Which descriptions are chosen depends on
 which comes from a time-stamp-counter read and every earlier draw (`original-determinism.md` 2.2): it is not
 reproducible from the data.
 
-Consequence for stalkers' models (**believed**, a correction to `objects` 3.2 item 3): `objects` has a
+Consequence for stalkers' models (**believed**, a correction to `objects` 2 item 3): `objects` has a
 stalker show its record's model whatever its profile, from the order of the blocks in its state; but the
 supplies choice sets the description's model after that (step 3 above, 3 step 2), and nothing found sets it
 back. For 651 of the 1,073 stalker records some candidate's visual differs from the record's [D17]. The
@@ -349,7 +349,7 @@ His identity is thus the same in every game and needs no random choice (`scope` 
   seed and the number of draws made before, by every consumer) (2, 4.2).
 - That nothing else of the program adds to or removes from the in-use registry, or changes a set specific
   character (2.1; believed from the absence of other accesses found).
-- The stalkers' model after a New Game (4.2, believed: the description's), against `objects` 3.2 item 3.
+- The stalkers' model after a New Game (4.2, believed: the description's), against `objects` 2 item 3.
 - What uses a monster's `rank`, and whether any composed key name reads `community` or `spec_rank` (6).
 - How the player's identity is filled (7) and what multiplayer does (2 step 1).
 - What follows an assertion failure in the running game (believed: the game ends).
@@ -378,9 +378,8 @@ His identity is thus the same in every game and needs no random choice (`scope` 
 - Terms: what this specification calls a **description** and its **description index** are CH-1's
   **specific character** (the entry) and **registration index** (CH-1 3.1); the two specifications' names
   should be one.
-- The citations of `level-objects.md` 3.2 (`objects`) are to be repointed to
-  `docs/behavior/object-visual-and-transform.md` section 2, as `level-objects.MAP.md` directs; the believed
-  correction of 4.2 (the stalkers' model after a New Game) applies to that section.
+- The believed correction of 4.2 (the stalkers' model after a New Game) applies to
+  `docs/behavior/object-visual-and-transform.md` section 2 item 3 (`objects`).
 - Setting a specific character with an empty id is an assertion failure (the set checks its id first); not
   stated in section 3 (no caller of the choice passes an empty id).
 - Which profile and specific-character entries each choice loads, which CH-1 3.2 leaves to this

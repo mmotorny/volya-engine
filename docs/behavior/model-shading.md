@@ -177,7 +177,7 @@ passes, are specified in DL (sections 4 – 6; the level's chunk-6 point lights 
 
 ## 10. Provenance
 
-- Date: 2026-11-24 (as sections 4.7 – 4.9 and 5 of `level-objects.md`; revised 2026-11-26 after
+- Date: 2026-11-24 (as sections 4.7 – 4.9 and 5 of the former specification of level objects; revised 2026-11-26 after
   object-projected-light.md and dynamic-lights.md); moved into this specification unchanged on 2026-11-27
   when that specification was split by system. Sections 3 and 6 now point to the specifications that settled
   the small-part test, the detail value and the per-object visibility values.

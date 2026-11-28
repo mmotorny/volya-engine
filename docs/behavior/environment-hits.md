@@ -19,7 +19,8 @@ It builds on:
 - `docs/behavior/zone-idle-effects.md` (cited as `idle`): the zone records, the zone's five states and the
   event by which a state changes (sections 2, 7), creation (3.1), the zone update and the scheduled update
   with fast mode and the shape sphere (6.1, 6.2), the switching rule that disables a zone (7);
-- `docs/behavior/level-objects.md`: which objects are online (section 2), the object transform `X` (3.4);
+- `docs/behavior/offline-simulation.md`: which objects are online (section 6.5);
+  `docs/behavior/object-visual-and-transform.md`: the object transform `X` (section 4);
 - `docs/formats/sav.md` (cited as `sav`): the Zone block with its maximum power (section 7.4.1) and the
   layouts per class id (7.4.2);
 - `docs/formats/ltx-config.md`: sections, inheritance; a missing key read without a default is fatal.

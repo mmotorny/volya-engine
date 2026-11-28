@@ -1,7 +1,7 @@
 # Detail level and size thresholds of objects (first renderer)
 
 Behaviour specification of what `r__geometry_lod` and the per-frame size thresholds derived from it do to
-**objects** (the online objects of `docs/behavior/level-objects.md`, whose visuals are skeleton models) when
+**objects** (the online objects of `docs/behavior/offline-simulation.md` section 6.5, whose visuals are skeleton models) when
 the first (static-lighting) renderer runs: which of a model's meshes are skipped as too small, which detail
 window a skinned progressive mesh draws, when a model would be replaced by a simpler visual, and the other
 places the same thresholds act that no approved specification describes (the order in which pass groups are
@@ -14,13 +14,14 @@ Builds on (not repeated here):
   *T*\_A, *T*\_B, *P*\_lo, *P*\_hi.
 - `docs/formats/ogf.md` (here "OGF"): the visual header (section 2), the detail windows and their selection
   (section 6), the static visuals' use of the thresholds (section 8).
-- `docs/behavior/level-objects.md` (here "LO"): model files (section 4), the object transform *X* (3.4),
-  child meshes and their windows (4.5), shading and the element choice (5).
+- `docs/formats/skeleton-ogf.md` (here "SK"): model files; child meshes and their windows (section 5).
+- `docs/behavior/object-visual-and-transform.md`: the object transform *X* (section 4).
+- `docs/behavior/model-shading.md` (here "MS"): shading and the element choice (sections 3 – 5).
 - `docs/behavior/static-shading.md` (here "SS"): drawing order per frame (10.3), selection (10.2).
 
 Conventions as in those specifications: little-endian; matrices in the row-vector convention (a point
 **p** is transformed as [**p** 1] · *X*); clamp(*x*, *a*, *b*) limits *x* to *a* … *b*. "The camera
-position" **E** is the eye position of the frame. A model's **parts** are its child meshes (LO 4.5, types 5
+position" **E** is the eye position of the frame. A model's **parts** are its child meshes (SK 5, types 5
 and 4). The **measure** of a sphere (centre **C**, radius *r*) is *m* = *r* / (|**E** − **C**|² + 10⁻⁵).
 
 **Checks.** Bracketed ids [ODL-*n*] name the checks of the dirty workspace's script
@@ -61,7 +62,7 @@ sphere used in rule 1 is its header sphere, which the program re-fits to the pos
 
 ## 3. A model part: the small-part test
 
-This answers LO 5.1. Each part of a drawn model is tested on its own [ODL-4]:
+This answers MS 3 (the small-part test). Each part of a drawn model is tested on its own [ODL-4]:
 
 - Its sphere is the part's header sphere (chunk 1, bytes 28 – 43: centre and radius, OGF 2), in model space,
   as stored in the file [ODL-4]; the centre is transformed by the object transform, **C**′ = [**C** 1] · *X*;
@@ -80,13 +81,13 @@ Solved for the distance, a part of radius *r* is drawn while |**E** − **C**′
 
 ## 4. Detail level of a part
 
-This answers LO 4.9. When a queued part is drawn, its **detail value** is
+This answers MS 3 (the detail window). When a queued part is drawn, its **detail value** is
 *q* = √(clamp((*m* − *P*\_lo) / (*P*\_hi − *P*\_lo), 0, 1)), from the measure kept in section 3 [ODL-5]. The
 same value is computed for the non-sorted passes and for the lists drawn entry by entry: the strict-sorted
 passes and two further lists (**believed**: among them the first-person view's) [ODL-5]. It is the formula of OGF 8.3 for static progressive
 meshes.
 
-- A **skinned progressive mesh** (type 4) draws window *j* of its chunk 6 (LO 4.5), with *n* the number of
+- A **skinned progressive mesh** (type 4) draws window *j* of its chunk 6 (SK 5), with *n* the number of
   windows: *j* = floor((1 − *q*) × (*n* − 1) + 0.5) [ODL-6], exactly as OGF 6 for static progressive
   meshes [ODL-6]. Window *j* is drawn with its own offset, triangle count and vertex count (OGF 6) [ODL-6].
   So *q* = 1 (*m* ≥ *P*\_hi) draws window 0, the full mesh; *q* = 0 (*m* ≤ *P*\_lo) draws window *n* − 1,

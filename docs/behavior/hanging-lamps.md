@@ -365,8 +365,8 @@ Checks: `hl_data.py` HL-D5.
 
 ## 10. Statements of earlier specifications settled here
 
-None remain: the lamp statements of the former `level-objects.md` section 6, which this specification
-settled, are stated in sections 2 – 5 and 9.3.
+None remain: the lamp statements of section 6 of the former specification of level objects, which this
+specification settled, are stated in sections 2 – 5 and 9.3.
 
 ## 11. Unestablished
 
@@ -381,8 +381,8 @@ settled, are stated in sections 2 – 5 and 9.3.
 
 ## 12. Provenance
 
-- Date: 2026-11-24; revised 2026-11-27: references to `level-objects.md` replaced by the specifications its
-  content moved to when it was split by system, and its first-level lamp facts (section 6 and 7.2 there)
+- Date: 2026-11-24; revised 2026-11-27: references to the former specification of level objects replaced by the
+  specifications its content moved to when it was split by system, and its first-level lamp facts (section 6 and 7.2 there)
   moved into section 9.3 unchanged.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\xrGame.dll` and `bin\XR_3DA.exe` (static analysis), all files under `bin\`

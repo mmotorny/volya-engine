@@ -279,7 +279,7 @@ New Game does not show.
 
 ### 8.4 The player object in `spawns\all.spawn`
 
-Of the 8,641 spawn records (start-position specification, section 3), exactly one has bit 0x08 set in its
+Of the 8,641 spawn records (`docs/formats/sav.md` sections 7.2, 10.1), exactly one has bit 0x08 set in its
 spawn-record flags: the actor (index 63, section `actor`, flags `0x0029`); all others have `0x0021`
 (8,629) or `0x0023` (11). Its game-graph vertex 4 lies on level id 1, `l01_escape`.
 

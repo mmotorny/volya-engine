@@ -10,7 +10,7 @@ Conventions: paths are stored paths of the combined game-data tree (`docs/format
 later archive wins); a sound name *n* names the file `sounds\<n>.ogg` (`docs/behavior/title-menu.md`
 section 6); "exists" means that file is in the archives. Text files are Windows-1251, LTX per
 `docs/formats/ltx-config.md` (including `#include` and section inheritance). "Records" are records of
-`spawns\all.spawn` on `l01_escape` (`docs/behavior/level-objects.md` section 2.1 and table 7.1).
+`spawns\all.spawn` on `l01_escape` (`docs/behavior/offline-simulation.md` sections 5.1, 6.1 and 9.1).
 
 **Checks.** Every factual claim carries a tag [D*n*]. The checks are scripts in the dirty workspace,
 `checks/level-sound-scope/`; `run_all.py` extracts the needed files from the archives (`extract.py`) and
@@ -290,7 +290,7 @@ need scripts or AI.
   `sound` names an existing file, `sounds\zone_mosquito_bald.ogg` [D20]; whether and how the program
   plays it for an anomaly is **unestablished** (the key name is too generic to search the program for).
   The further `zone_*` sections reached from these by reference (section 2) are also S15's data [D21].
-- **Depends on:** S2, S6; `level-objects.md` (which objects are present); a specification of anomaly
+- **Depends on:** S2, S6; `offline-simulation.md` (which objects are present, 6.5); a specification of anomaly
   behaviour (when an anomaly is entered, hits or discharges; none approved).
 - **Scripts or AI:** none for the player and the anomalies themselves; entrances by other characters or
   monsters need AI.
@@ -311,7 +311,7 @@ need scripts or AI.
   [D31]. Each of the four sections has lines naming existing sound files (keys among `starting`,
   `flying`, `idle_before_spawning`, `spawning`) [D21, D28]. Whether and when an artefact is activated in normal
   play is **unestablished**.
-- **Depends on:** S2; `level-objects.md`; a specification of artefact activation (none approved).
+- **Depends on:** S2; `offline-simulation.md`; a specification of artefact activation (none approved).
 - **Scripts or AI:** **unestablished**.
 
 ### S17. The player's body sounds

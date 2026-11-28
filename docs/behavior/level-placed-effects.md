@@ -21,8 +21,8 @@ Builds on (not repeated):
 - `docs/formats/chunks.md` (sections 4 and 5: sequential iteration, compressed chunks);
 - `docs/behavior/autosave-timing.md` (section 1: the world clock; section 2.3: the engine's scheduler, its due
   rule and its per-frame budget);
-- `docs/behavior/level-objects.md` (matrix convention: row vectors, a point **p** placed as [**p** 1] · *M*, row 3
-  the translation).
+- `docs/behavior/object-visual-and-transform.md` (matrix convention: row vectors, a point **p** placed as
+  [**p** 1] · *M*; row 3 the translation, section 4).
 
 Conventions: *M*[*r*][*c*] is row *r*, column *c* of a 4 × 4 matrix; the 16 stored floats are *M* row by row.
 Arithmetic is IEEE single precision (`f32`) unless stated. "The clock" is the world clock of autosave-timing.md

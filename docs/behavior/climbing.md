@@ -26,9 +26,10 @@ Builds on (not repeated here):
 - `docs/behavior/sound-positional.md` (S2) and the other sound specifications: how a sound plays (nothing
   here plays one).
 - `docs/formats/sav.md` (section 7: the records of `spawns\all.spawn`, the Object and Shape blocks),
-  `docs/behavior/level-objects.md` (a record's level, section 2.1; switching online, 2.3 – 2.4; the
-  object transform, 3.4), `docs/behavior/start-position.md` (world axes, +y up; the camera's yaw, pitch and
-  view direction, section 5).
+  `docs/behavior/offline-simulation.md` (a record's level, sections 5.1, 6.1; switching online, 6.5.2 –
+  6.5.3), `docs/behavior/object-visual-and-transform.md` (kinds without a model, section 3; the object
+  transform, section 4), `docs/behavior/world-coordinates.md` (world axes, +y up, section 1; the camera's yaw,
+  pitch and view direction, sections 2 – 3).
 
 Conventions:
 
@@ -39,7 +40,7 @@ Conventions:
   body mass; **g** = 19.62 m/s² the gravity of `movement` section 6.1.
 - **a** is the acceleration the body holds, `a_k` of `movement` section 6.1; "input" means `a` is not zero.
 - **c** is the first-person camera's view direction, `(cos p · sin y, −sin p, cos p · cos y)` with yaw `y`
-  and pitch `p` (start-position section 5; positive pitch looks down), so `c.y = −sin p`.
+  and pitch `p` (world-coordinates sections 2, 3; positive pitch looks down), so `c.y = −sin p`.
 - `hcos(u, v)` is the cosine of the horizontal angle between `u` and `v`:
   `(u.x·v.x + u.z·v.z) / sqrt((u.x² + u.z²)·(v.x² + v.z²))`; a test on it fails when the denominator is 0.
 - "Step" is one step of the physics simulation (`movement` section 6.1); "frame" one rendered frame.
@@ -64,15 +65,15 @@ and 3 written from this text, run on the records).
   one shape, a box (type 1), whose four rows have all elements zero except element 0 of row 0, element 1
   of row 1 and element 2 of row 2; custom data is empty and the state flags are 0xFFFFFFBF [D2].
 - A ladder never switches offline and, with state flag 0x02 set, switches online regardless of distance
-  (`level-objects` sections 2.3, 2.4), so all ladders of the level are present from the first frame [D2].
-  A ladder draws nothing (`level-objects` section 3.3).
+  (`offline-simulation` sections 6.5.2, 6.5.3), so all ladders of the level are present from the first frame [D2].
+  A ladder draws nothing (`object-visual-and-transform` section 3).
 
 ### 1.2 The ladder's frame
 
 When a ladder comes online the game derives its frame from the record [B1 – B4]:
 
-1. `R0`, `R1`, `R2` are the rows of the record's rotation and `p` its position (`level-objects` section
-   3.4). The **extents** `e0, e1, e2` are element 0 of row 0, element 1 of row 1 and element 2 of row 2 of
+1. `R0`, `R1`, `R2` are the rows of the record's rotation and `p` its position (`object-visual-and-transform`
+   section 4). The **extents** `e0, e1, e2` are element 0 of row 0, element 1 of row 1 and element 2 of row 2 of
    the first shape's box; nothing else of the shape is used [B1]. (In the shipped data they are the box's
    half-sizes along `R0`, `R1`, `R2`; section 5.2 shows the lower ends lying on the ground.)
 2. The rows are given three roles, **axis** (along the ladder), **side** (across it) and **normal**

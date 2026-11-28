@@ -27,8 +27,8 @@ Conventions:
 - Abbreviations of approved specifications (`docs/behavior/` unless noted): OS `options-screens.md`,
   ST `steering-the-original.md`, TM `title-menu.md`, SLS `save-load-screens.md`, SAV
   `docs/formats/sav.md`, LL `level-loading.md`, PM `player-movement.md`, DG `display-gamma.md`,
-  DM `display-mode.md`, TQ `texture-quality-filtering.md`, SP `start-position.md`, FP
-  `frame-presentation.md`, DL `dynamic-lights.md`, GL `glows.md`, LO `level-objects.md`, TO `torch.md`,
+  DM `display-mode.md`, TQ `texture-quality-filtering.md`, VP `view-projection.md`, FP
+  `frame-presentation.md`, DL `dynamic-lights.md`, GL `glows.md`, MS `model-shading.md`, TO `torch.md`,
   CF `docs/formats/level-cform.md`, SR `sound-reverb.md`, SPOS `sound-positional.md`, SLM
   `sound-level-music.md`, AT `autosave-timing.md`, PH `player-hits.md`, DO `detail-objects.md`, R1S
   `r1-settings-scope.md`, R2S `r2-renderers-scope.md`, SWA `sound-weather-ambient.md`, TF
@@ -343,7 +343,7 @@ mentions the command [CS-3]) or the proposed specification of section 11. All ro
 | `rs_c_gamma` | E | real | 0.5 … 1.5 | 1. | `1.` | yes | shows | DG | DG |
 | `rs_c_brightness` | E | real | 0.5 … 1.5 | 1. | `1.` | yes | shows | DG | DG |
 | `rs_c_contrast` | E | real | 0.5 … 1.5 | 1. | `1.` | yes | shows | DG | DG |
-| `rs_vis_distance` | E | real | 0.4 … 1.5 | 1. | `1.` | yes | shows | SP 7, R1S 2.2 | SP R1S |
+| `rs_vis_distance` | E | real | 0.4 … 1.5 | 1. | `1.` | yes | shows | VP 2.1, R1S 2.2 | VP R1S |
 | `r__supersample` | E | integer | 1 … 4 | 1 | `2` | yes | shows | R1S 2.7, FP | R1S FP |
 | `texture_lod` | E | integer | 0 … 4 | 0 | `0` | yes | shows | TQ | TQ |
 | `rs_stats` | E | on/off | — | off | `off` | yes | shows | engine statistics overlay (R1S 2.11) | R1S |
@@ -359,7 +359,7 @@ mentions the command [CS-3]) or the proposed specification of section 11. All ro
 | `r__tf_aniso` | R | integer | 1 … 16 | 4 | `16` | yes | shows | R1S 2.6, TQ | R1S TQ |
 | `r1_ssa_lod_a` | R | real | 16. … 96. | 64. | `64.` | yes | shows | R1S 2.3 | R1S |
 | `r1_ssa_lod_b` | R | real | 16. … 64. | 48. | `48.` | yes | shows | R1S 2.3 | R1S |
-| `r1_lmodel_lerp` | R | real | 0. … 0.333 | 0.1 | `0.1` | yes | shows | LO | LO |
+| `r1_lmodel_lerp` | R | real | 0. … 0.333 | 0.1 | `0.1` | yes | shows | MS 7 | MS |
 | `r1_tf_mipbias` | R | real | −0.5 … 0.5 | 0. | `0.` | yes | shows | R1S 2.6, TQ | R1S TQ |
 | `r1_dlights` | R | on/off | — | on | `on` | yes | shows | DL | DL |
 | `r1_dlights_clip` | R | real | 10. … 150. | 30. | `75.` | yes | shows | DL; registered twice with identical commands (1) | DL |
@@ -438,7 +438,7 @@ mentions the command [CS-3]) or the proposed specification of section 11. All ro
 |---|---|---|---|---|---|---|---|---|---|
 | `mouse_invert` | E | on/off | — | off | `off` | yes | shows | PM 8.1 | PM |
 | `mouse_sens` | E | real | 0.05 … 0.6 | 1. | `0.12` | yes | shows | PM 8.1; built-in value: see 8. **Disputed in review:** the built-in value is 0.12, not 1.: the registration code sets the variable to 0.12 before registering the command, which matches OS 7.2 and PM 1.2 | PM |
-| `cam_inert` | E | real | 0. … 1. | 0.7 | `0.` | yes | shows | SP 6 | SP |
+| `cam_inert` | E | real | 0. … 1. | 0.7 | `0.` | yes | shows | VP 1.1 | VP |
 | `cam_slide_inert` | E | real | 0. … 1. | 0.25 | `0.25` | yes | shows | effect unestablished | 7 |
 
 #### Gameplay and HUD

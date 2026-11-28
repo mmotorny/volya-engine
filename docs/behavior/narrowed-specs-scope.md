@@ -8,7 +8,7 @@ It states no game behaviour of its own beyond the data facts it cites as evidenc
 | Approved specification | Issue | Follow-up already open |
 |---|---|---|
 | `docs/behavior/save-load-screens.md` | #74 | #118 |
-| `docs/behavior/level-objects.md` | #84 | |
+| `docs/behavior/object-visual-and-transform.md`, `docs/formats/skeleton-ogf.md`, `docs/behavior/model-shading.md`, `docs/behavior/hanging-lamps.md`, with `docs/behavior/offline-simulation.md` 6.5 (one specification when scoped) | #84 | |
 | `docs/behavior/offline-simulation.md` | #89 | |
 | `docs/behavior/player-state.md` | #90 | |
 | `docs/behavior/script-environment.md` (with `docs/behavior/script-loading.md`, #104) | #92 | #106; the script API is scoped by #119; the runtime decision is #91 [S31] |
@@ -122,15 +122,15 @@ leaves open:
 
 | Scope item of #84 (quoted) [S59] | Approved coverage | Proposals |
 |---|---|---|
-| "which all.spawn objects of l01_escape are present in the level on New Game" | level-objects 2 | OS-5 (smart-terrain jobs, script state at the first evaluation) |
-| "online/offline switching distance as far as it decides presence at start" | level-objects 2.2–2.4; offline-simulation 6.2 | LO-0 (correction of 2.4) |
-| "how each kind's visual is drawn at rest" | level-objects 3–6 | LO-3, LO-4, LO-6, LO-7 |
-| "visual paths in the records and configuration" | level-objects 3.1, 3.2 | LO-3 (visual flags byte) |
-| "the OGF variants they use beyond docs/formats/ogf.md" ("dynamic", …) | level-objects 4.1–4.7 | LO-3 (detail window) |
-| "skinned/skeletal at bind pose or the first animation frame" | bind pose: level-objects 4.8 | first animation frame: LO-1, LO-2 |
-| "transforms from position/angles" | level-objects 3.4 | none needed |
-| "shading reuse from static-shading.md" | level-objects 5 | LO-4, LO-6, LO-7 |
-| "hanging lamps' light only structurally" | level-objects 6 | LO-5 |
+| "which all.spawn objects of l01_escape are present in the level on New Game" | offline-simulation 6.5 | OS-5 (smart-terrain jobs, script state at the first evaluation) |
+| "online/offline switching distance as far as it decides presence at start" | offline-simulation 6.2, 6.5.1–6.5.3 | LO-0 (correction of the switch-pass limits) |
+| "how each kind's visual is drawn at rest" | object-visual-and-transform; skeleton-ogf; model-shading; hanging-lamps | LO-3, LO-4, LO-6, LO-7 |
+| "visual paths in the records and configuration" | object-visual-and-transform 1, 2 | LO-3 (visual flags byte) |
+| "the OGF variants they use beyond docs/formats/ogf.md" ("dynamic", …) | skeleton-ogf 1–6; model-shading 1 | LO-3 (detail window) |
+| "skinned/skeletal at bind pose or the first animation frame" | bind pose: model-shading 2 | first animation frame: LO-1, LO-2 |
+| "transforms from position/angles" | object-visual-and-transform 4 | none needed |
+| "shading reuse from static-shading.md" | model-shading | LO-4, LO-6, LO-7 |
+| "hanging lamps' light only structurally" | hanging-lamps | LO-5 |
 | "Characters' animation and AI are out of scope" | — | kept out: characters' motion choice (LO-2) |
 
 ### 2.2 Missing against the issue
@@ -148,22 +148,28 @@ leaves open:
   glow drawing details.
 - Also in its section 8 [S32]: how `process_time` and `objects_per_update` limit the switch pass, and the
   exact script state at the first switch evaluation. The first is settled by offline-simulation, whose
-  introduction corrects level-objects 2.4 (`process_time` limits one switch pass to about 900 s;
-  `objects_per_update` limits scheduled updates, not the switch pass) [S33]; level-objects 2.4 and 8 still
-  carry the uncorrected text; LO-0 corrects it. The second goes to OS-5 with the smart-terrain jobs.
+  introduction corrects section 2.4 of the first specification of #84 (`process_time` limits one switch
+  pass to about 900 s; `objects_per_update` limits scheduled updates, not the switch pass) [S33]; that
+  specification's 2.4 and 8 carried the uncorrected text; LO-0 corrects it (offline-simulation 6.2). The
+  second goes to OS-5 with the smart-terrain jobs.
 - The appearance of the scripted model shaders `models\xwindows`, `models\pautina`, `models\xdistort`,
   `models\xdistortcolor`, `models\xdistortcolorl`, `models\xanomaly` and `models\xmonolith`, which
-  level-objects 5.2 puts outside its scope [S34]: LO-6.
-- Anomalies' particle effects (`idle_particles`, …), out of scope in level-objects 3.3 [S35]: these belong
-  to the particle work, #99 (the effects present in `l01_escape` on New Game) and #116 (effects elsewhere)
+  model-shading 4 puts outside its scope [S34]: LO-6.
+- Anomalies' particle effects (`idle_particles`, …), out of scope in object-visual-and-transform 3 [S35]:
+  these belong to the particle work, #99 (the effects present in `l01_escape` on New Game) and #116 (effects elsewhere)
   [S42], not to a proposal here.
 
 ### 2.3 Proposals
 
-**LO-0 Correction of level-objects 2.4 and 8** (a revision of `docs/behavior/level-objects.md`)
+**LO-0 Correction of the switch-pass limits** (sections 2.4 and 8 of the first specification of #84; the
+corrected text is `docs/behavior/offline-simulation.md` 6.2)
 
-- What: replace level-objects' statements on `process_time` and `objects_per_update` (2.4, and the item of
-  section 8) with offline-simulation's [S32, S33], citing offline-simulation 6.2 and 7.1.
+**Disputed in review:** nothing remains to be done under LO-0: the specification it would revise is
+retired, and the corrected statements on `process_time` and `objects_per_update` are those of
+`docs/behavior/offline-simulation.md` 6.2 and 7.1.
+
+- What: replace that specification's statements on `process_time` and `objects_per_update` (2.4, and the
+  item of section 8) with offline-simulation's [S32, S33], citing offline-simulation 6.2 and 7.1.
 - Data: `config\alife.ltx` `[alife]`.
 - Depends on: `docs/behavior/offline-simulation.md` (6.2, 7.1).
 - Scripts and unbuilt systems: none. Reviewed like any specification; the corrected file replaces the
@@ -174,11 +180,11 @@ leaves open:
 
 - What: decode a model's motions and compute every bone's current matrix at a given time of a motion.
 - Data: motion chunks 14 and 15 and the motion-file list chunk 19 of type-3 `.ogf` models
-  (level-objects 4.3); the `.omf` files [D1]; bone data chunks 13 and 16.
+  (skeleton-ogf 3); the `.omf` files [D1]; bone data chunks 13 and 16.
 - Covers: motion and key formats, bone matching between motion and model, the evaluation at time *t*
-  (*t* = 0 is the first frame), which feeds the render matrices of level-objects 4.8. Playback over time,
+  (*t* = 0 is the first frame), which feeds the render matrices of model-shading 2. Playback over time,
   blending and motion choice are not part of it.
-- Depends on: `docs/behavior/level-objects.md` (4.3, 4.4, 4.8), `docs/formats/ogf.md`,
+- Depends on: `docs/formats/skeleton-ogf.md` (3, 4), `docs/behavior/model-shading.md` (2), `docs/formats/ogf.md`,
   `docs/formats/chunks.md`.
 - Scripts and unbuilt systems: none.
 - Order: 1.
@@ -191,7 +197,7 @@ leaves open:
 - Covers: lamps' `idle`, the Skeleton block's startup animation, the time each is at in the first frame.
   Characters, monsters and crows choose motions through AI and scripts, outside #84 [S8]; physics settling
   belongs to physics.
-- Depends on: LO-1, `docs/behavior/level-objects.md` (4.8, 6).
+- Depends on: LO-1, `docs/behavior/model-shading.md` (2), `docs/behavior/hanging-lamps.md`.
 - Scripts and unbuilt systems: none expected; anything found scripted is reported as such.
 - Order: 2.
 
@@ -200,18 +206,20 @@ leaves open:
 - What: the small-object test, the detail window of skinned progressive meshes, and the effect of the visual
   flags byte.
 - Data: the Visual block's flags byte in `spawns\all.spawn`; chunk 6 of type-4 child meshes.
-- Settles: level-objects 3.2 (visual flags), 4.9, 5.1.
-- Depends on: `docs/behavior/level-objects.md`, `docs/formats/level.md` (9.4), `docs/formats/ogf.md` (6).
+- Settles: object-visual-and-transform 2 and 6 (visual flags), model-shading 3 (detail window, small-object test).
+- Depends on: `docs/formats/skeleton-ogf.md`, `docs/behavior/model-shading.md`, `docs/formats/level.md` (9.4),
+  `docs/formats/ogf.md` (6).
 - Scripts and unbuilt systems: none.
 - Order: 1.
 
 **LO-4 Per-object lighting at the first frame** (`object-lighting.md`)
 
 - What: the light inputs of each object model in the first frame.
-- Data: the level's lights, the hanging lamps' lights (level-objects 6), the weather inputs.
-- Settles: level-objects 5.3 (receiver order), 5.4 (light-track values at the first frame), 5.6 (which
-  dynamic lights affect which object).
-- Depends on: `docs/behavior/level-objects.md` (5), `docs/behavior/static-shading.md`; #116, whose scope
+- Data: the level's lights, the hanging lamps' lights (hanging-lamps), the weather inputs.
+- Settles: object-projected-light 9 (receiver order; light-track values at the first frame), model-shading 8
+  (which dynamic lights affect which object).
+- Depends on: `docs/behavior/model-shading.md`, `docs/behavior/object-projected-light.md`,
+  `docs/behavior/static-shading.md`; #116, whose scope
   includes general lamp and dynamic lighting [S30]: which dynamic lights reach which object is specified
   once, in whichever of the two is investigated first, and cited by the other.
 - Scripts and unbuilt systems: none.
@@ -219,11 +227,11 @@ leaves open:
 
 **LO-7 Projected light texture** (`projected-light-texture.md`)
 
-- What: how the texture that level-objects 5.5 projects onto object models is filled, and when.
+- What: how the texture that model-shading 7 projects onto object models is filled, and when.
 - Data: the objects and lights that contribute to it; the shaders and render states of the pass that fills
   it.
-- Settles: level-objects 5.5 (content of the projected light texture) [S10].
-- Depends on: `docs/behavior/level-objects.md` (5.3, 5.5), `docs/behavior/static-shading.md`; LO-4 for the
+- Settles: model-shading 7 (content of the projected light texture) [S10].
+- Depends on: `docs/behavior/model-shading.md` (5, 7), `docs/behavior/static-shading.md`; LO-4 for the
   receiver order.
 - Scripts and unbuilt systems: none.
 - Order: 4 (after LO-4).
@@ -232,19 +240,19 @@ leaves open:
 
 - What: the remaining bits of a hanging lamp's light flags and how a lamp's glow is drawn.
 - Data: the hanging-lamp block of `spawns\all.spawn` (sav.md 7.4.2); glow textures.
-- Settles: level-objects 6 (flag bits with unestablished meaning, glow drawing).
-- Depends on: `docs/behavior/level-objects.md` (6), `docs/formats/level.md` (8, level glows).
+- Settles: hanging-lamps 2.2 (flag bits with unestablished meaning), `glows.md` (glow drawing).
+- Depends on: `docs/behavior/hanging-lamps.md`, `docs/formats/level.md` (8, level glows).
 - Scripts and unbuilt systems: none. The colour animators (`lanims.xr`) animate over time and stay with
   the particle and lighting work (#116).
 - Order: 2.
 
 **LO-6 Scripted model shaders with distortion and blending** (`model-effect-shaders.md`)
 
-- What: how object meshes using the seven scripted model shaders of level-objects 5.2 [S34] are drawn.
+- What: how object meshes using the seven scripted model shaders of model-shading 4 [S34] are drawn.
 - Data: the passes of `shaders\r1\models_*.s` for those names; the textures and render states they use; the
   object models whose child meshes name them.
-- Settles: level-objects 5.2 ("their appearance is outside this specification").
-- Depends on: `docs/behavior/level-objects.md` (5), `docs/behavior/static-shading.md` (3.4, render-state
+- Settles: model-shading 4 ("their appearance is outside this specification").
+- Depends on: `docs/behavior/model-shading.md`, `docs/behavior/static-shading.md` (3.4, render-state
   vocabulary, dynamic light passes).
 - Scripts and unbuilt systems: the shader scripts only (static-shading 3.4 already loads them); distortion
   needs the frame behind the object, which the renderer has to provide.
@@ -262,7 +270,7 @@ switch evaluation [S32], are part of OS-5.
 | "`game.graph` in full" | offline-simulation 1 | OS-1 |
 | "graph vertices/edges/levels" | offline-simulation 1.2–1.6 | OS-1 (level points) |
 | "each object's offline location and path progress" | offline-simulation 5; path progress is not saved [S63] | OS-2 (open cases, `level.ai` vertex bytes), OS-4 (group kinds) |
-| "online/offline switching rules and distances" | offline-simulation 6.2–6.4; level-objects 2.2–2.5 | OS-5 (job-online values) |
+| "online/offline switching rules and distances" | offline-simulation 6.2–6.5 | OS-5 (job-online values) |
 | "time-driven offline movement" | offline-simulation 7 | OS-2, OS-4, OS-5 |
 | "registration order" | offline-simulation 8 | OS-3 (supplies, random generator, ids) |
 | "current level selection on load" | offline-simulation 6.1 [S16] | none needed |
@@ -345,7 +353,7 @@ Missing [S13]:
   that decides whether it is online.
 - Data: smart-terrain records of `spawns\all.spawn` and their custom data; `scripts\smart_terrain.script`,
   `scripts\xr_gulag.script` and the 18 `scripts\gulag_*.script` files [D12].
-- Settles: offline-simulation 7.2 (acceptance, suitability, joining), level-objects 2.5 (whether jobs bring
+- Settles: offline-simulation 7.2 (acceptance, suitability, joining), offline-simulation 6.5.4 (whether jobs bring
   characters online before the first frame) [S10].
 - Depends on: OS-2, `docs/behavior/script-loading.md`, #119.
 - Scripts and unbuilt systems: the logic is defined by the shipped scripts. If they run on the chosen
@@ -419,7 +427,7 @@ proposal here. Also missing:
 - What: when falls, anomaly zones and radiation zones hit the player character, and how hard.
 - Data: zone records of `spawns\all.spawn` (shapes) and zone sections, among them the 6 of class id
   `Z_RADIO` [D5]; landing data of the movement.
-- Depends on: PS-1, `docs/behavior/player-movement.md`, `docs/behavior/level-objects.md` (3.3).
+- Depends on: PS-1, `docs/behavior/player-movement.md`, `docs/behavior/object-visual-and-transform.md` (3).
 - Scripts and unbuilt systems: anomaly visuals and particles are other work (#116); any zone behaviour found
   scripted is reported as such.
 - Order: 2.
@@ -521,8 +529,8 @@ proposal here. Also missing:
   dropped item ends up.
 - Data: item records of `spawns\all.spawn`; item sections.
 - Settles: the dependent part of inventory-screen 5.7 [S21].
-- Depends on: `docs/behavior/player-state.md` (3.3), `docs/behavior/level-objects.md`,
-  `docs/behavior/inventory-screen.md` (5.7).
+- Depends on: `docs/behavior/player-state.md` (3.3), `docs/behavior/offline-simulation.md`,
+  `docs/behavior/object-visual-and-transform.md`, `docs/behavior/inventory-screen.md` (5.7).
 - Scripts and unbuilt systems: a dropped item's fall needs physics, which has no specification.
 - Order: 2.
 
@@ -715,7 +723,7 @@ engine calls later; save-load-screens 14 needs the latter [S3].
   the configuration and layout files naming script functions, `scripts\*.script`.
 - Settles: script-loading 5 ("which of the reachable scripts are actually loaded in a given play session")
   as far as static reading allows.
-- Depends on: `docs/behavior/script-loading.md` (2, 3), `docs/behavior/level-objects.md` (2).
+- Depends on: `docs/behavior/script-loading.md` (2, 3), `docs/behavior/offline-simulation.md` (6.5).
 - Scripts and unbuilt systems: none to specify; the measured set needs X-1.
 - Order: 2.
 

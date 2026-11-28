@@ -6,13 +6,15 @@ lights exist, which of them are drawn, which static geometry and which objects e
 and spot passes with their programs, constants and attenuation textures, and the settings `r1_dlights` and
 `r1_dlights_clip`. It also states what the renderer does with every record of the level's chunk 6,
 including the directional (sun) record, and settles the statements that `static-shading.md` section 12,
-`level-objects.md` section 5.6 and `level.md` section 7 leave unestablished or state otherwise (section 11).
+`model-shading.md` section 8 and `level.md` section 7 leave unestablished or state otherwise (section 11).
 What could not be established is marked **unestablished**.
 
 Builds on (not repeated): `docs/formats/level.md` (chunk 6 layout, section 9 camera sector and traversal),
 `docs/behavior/static-shading.md` (shader resolution, elements, program inputs, fog, precision rules,
-drawing order, weather inputs), `docs/behavior/level-objects.md` (objects present at the start, object
-transform, model shader classes, per-object light inputs, hanging-lamp structure),
+drawing order, weather inputs), `docs/behavior/offline-simulation.md` (objects present at the start, section 6.5),
+`docs/behavior/object-visual-and-transform.md` (object transform, section 4), `docs/behavior/model-shading.md`
+(model shader classes, sections 4 – 5), `docs/behavior/object-projected-light.md` (per-object light inputs,
+section 5), `docs/behavior/hanging-lamps.md` (hanging-lamp structure),
 `docs/formats/ogf.md`, `docs/formats/sav.md`, `docs/formats/ltx-config.md`,
 `docs/behavior/options-screens.md` (quality presets). The colour a light shows over time comes from its
 owner (hanging lamps P13, zones P9, searchlights P14, torches P20, artefacts P10) through `lanims.xr`
@@ -63,7 +65,7 @@ Checks: `dl_r1.py` DL-R1.
 - Direction, the second vector, colour, type, active and shadow: always stored.
 - The colour may be given as (R, G, B, A) or as (R, G, B), which stores A = 1.
 - Two further settings are accepted and have no effect in the first renderer: a projected texture name
-  (lamps pass their light texture, `level-objects.md` section 6) and one other value (meaning
+  (lamps pass their light texture, `hanging-lamps.md` section 3.1) and one other value (meaning
   **unestablished**).
 
 Checks: `dl_r1.py` DL-R2, `dl_game.py` DL-G1, DL-G2.
@@ -109,7 +111,7 @@ with the **excluded** mark and the shadow setting off. By record type (the u32 a
   both first aimed along the record's direction (offset 68). No other field of the record is used.
 - A level without a directional record is fatal ("Where is sun?").
 
-Each frame, before any object's light inputs are updated (`level-objects.md` section 5.4), A and B are set
+Each frame, before any object's light inputs are updated (`object-projected-light.md` section 5), A and B are set
 from the weather (`static-shading.md` section 9; L_sun_dir, sun_color):
 
 - A: direction L_sun_dir, position E − 500·L_sun_dir, colour sun_color, range 600.
@@ -118,7 +120,7 @@ from the weather (`static-shading.md` section 9; L_sun_dir, sun_color):
   `r2_sun_lumscale` (section 8); range 600.
 
 So the record's own direction is overwritten before it is ever used. B's direction is the sun direction of
-the objects' sun-visibility ray: the ray of `level-objects.md` section 5.4 goes in direction −d_B. At the
+the objects' sun-visibility ray: the ray of `object-projected-light.md` section 5.2 goes in direction −d_B. At the
 first level's start (L_sun_dir ≈ (0.9132, −0.2079, 0.3505), altitude 12.0°) d_B ≈ (0.6670, −0.6997,
 0.2560), altitude 44.4° (`dl_numeric.py` DL-N1). B also enters the brightness value (section 9). A is
 used by nothing in the first renderer.
@@ -133,7 +135,7 @@ has):
 
 | Source (data) | Records | Type | Shadow setting | Owner |
 |---|---|---|---|---|
-| hanging lamp (`O_HLAMP` record, `level-objects.md` section 6) | main light | spot if light-flag bit 0x10, else point | light-flag bit 0x02 | P13 |
+| hanging lamp (`O_HLAMP` record, `hanging-lamps.md` section 3.1) | main light | spot if light-flag bit 0x10, else point | light-flag bit 0x02 | P13 |
 | | ambient light (light-flag bit 0x20) | point | off | P13 |
 | searchlight (`projector_definition`) | one | spot | on | P14 |
 | torch (`torch_definition`) | main light | spot | on | P20 |
@@ -147,7 +149,7 @@ also create lights; they belong to F1 and are drawn by the same rules. Checks: `
 
 ### 3.3 At the first level's start
 
-The five lamps online at the start (`level-objects.md` section 6) have health > 0 and give seven records:
+The five lamps online at the start (`hanging-lamps.md` section 9.3) have health > 0 and give seven records:
 five spot main lights (cone 120°, ranges 1, 1.5, 2, 3, 3; shadow bit clear) and two point ambient lights
 of the television sets (radius 1, power 0.2) (`dl_lamps.py` DL-L1). Zone idle lights are off and the
 artefact's lights disabled (scoping section 1.3). Whether the actor's torch and the helicopter's light are
@@ -358,7 +360,7 @@ DL-D4.
 | `wmark_*` | the wall-mark position shift of `static-shading.md` section 8.3 | unpacked normal | as normal elements |
 | `tree_w_*` | the waving position of `static-shading.md` section 7.3 (`_w` programs) | normalize(normal transformed by X's rotation) | (m.x, m.y)·consts.xy |
 | `tree_s_*` | the unmoved position (`_s`) | as `tree_w_*` | as `tree_w_*` |
-| `model_def_*` | the skinned model position (`level-objects.md` section 4.8) transformed by the object's world matrix | normalize(normal transformed likewise) | the vertex texture coordinate |
+| `model_def_*` | the skinned model position (`model-shading.md` section 2) transformed by the object's world matrix | normalize(normal transformed likewise) | the vertex texture coordinate |
 
 The model programs come in the four skinning variants of the normal model programs. Unlike the trees'
 normal passes (`static-shading.md` 7.3: N_w not renormalised), the tree light programs normalise n; and a
@@ -437,11 +439,16 @@ Sections 2.3, 3.1, 5.2, 5.3 and 6.3 give examples (`dl_numeric.py` DL-N1 … DL-
 - `static-shading.md` section 12, "the level's 40 point lights (chunk 6) become active dynamic lights when
   `r1_dlights` is on": they are made active (registered) but excluded; they are never drawn (sections 3.1,
   4). Which lights reach which geometry: sections 4 and 5; the attenuation textures: section 6.4.
-- `level-objects.md` section 5.6, "the level's point lights and the hanging lamps' lights are added to
-  models": the lamps' lights are (with every other game-created light) by sections 4 and 5; the level's
-  point lights are not. Which object a light reaches: section 5.5.
-- `level-objects.md` section 5.4: the sun-visibility ray goes in direction −d_B (section 3.1), not
-  −L_sun_dir.
+- `model-shading.md` section 8, the level's point lights and the hanging lamps' lights added to
+  models: the lamps' lights are (with every other game-created light) by sections 4 and 5; the level's
+  point lights are not. Which object a light reaches: section 5.5. **Disputed in review:** `model-shading.md`
+  section 8 does not make the statement settled here: it already says that the level's chunk-6 point lights
+  are never drawn and refers to sections 4 – 6 of this specification; the statement settled was made by the
+  former specification of level objects, which is retired.
+- `object-projected-light.md` section 5.2: the sun-visibility ray goes in direction −d_B (section 3.1), not
+  −L_sun_dir. **Disputed in review:** `object-projected-light.md` section 5.2 already states direction −d_B
+  (the directional record B of section 3.1); the −L_sun_dir statement was made by the former specification
+  of level objects, which is retired.
 - `level.md` section 7, chunk-6 lights "serve dynamic lighting of objects": they are never drawn as
   lights; the point records enter only the approximate colour of objects (section 9), which reaches the
   picture through the projected light texture; "how the sun record relates to the environment's sun":

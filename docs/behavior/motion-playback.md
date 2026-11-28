@@ -24,8 +24,8 @@ Builds on (not repeated):
 - `docs/behavior/script-api-engine-services.md` (spec B): `CKinematicsAnimated:PlayCycle(name)` as used by
   scripts, the cycle lookup by name and its failure (5.2); the device's `frame` and `time_global()` and the
   constant-step mode (3.2, 3.3).
-- `docs/behavior/level-objects.md`: bones, parents, the root bone, skinning with the current matrices (4.4,
-  4.8).
+- `docs/formats/skeleton-ogf.md`: bones, parents, the root bone (section 4); `docs/behavior/model-shading.md`:
+  skinning with the current matrices (section 2).
 
 Conventions as in skeletal-motions: times in seconds unless stated, f32(*x*) is *x* rounded to single
 precision, quaternions are (*x*, *y*, *z*, *w*). Bracketed ids ([P1] …) name the check that backs the

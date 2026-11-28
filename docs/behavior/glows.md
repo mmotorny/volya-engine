@@ -12,11 +12,12 @@ It builds on:
   and the sector traversal (sections 9.1, 9.2);
 - `docs/behavior/static-shading.md` (cited as `SS`): the `S_SET   ` pass states (section 7.5), the `shaders.xr`
   definitions (section 3.2), the frame order (section 10.3);
-- `docs/behavior/start-position.md` (cited as `SP`): the camera basis and projection (sections 6, 7), the far
-  plane (section 7.1), the frame time;
+- `docs/behavior/view-projection.md` (cited as `VP`): the view matrix and projection (sections 1.1, 2), the far
+  plane (section 2.1), the frame time (section 1);
 - `docs/behavior/sky.md`: the sprite triangle order (section 7.4) and the flares drawn after the glows (section 10);
-- `docs/behavior/level-objects.md` (cited as `objects`): the hanging-lamp light placement and on/off rule
-  (section 6), bones (section 4.4), the object transform *X* (section 3.4);
+- `docs/behavior/hanging-lamps.md`: the hanging-lamp light placement and on/off rule (sections 4.2, 5);
+  `docs/formats/skeleton-ogf.md`: bones (section 4); `docs/behavior/object-visual-and-transform.md`: the object
+  transform *X* (section 4); `docs/behavior/offline-simulation.md`: the objects online at the start (section 9.1);
 - `docs/formats/sav.md`: the hanging-lamp block (glow texture, glow radius; section 7.4.2);
 - `docs/formats/level-cform.md`: the collision triangles of `level.cform`;
 - `docs/behavior/options-screens.md`: the `rspec_*.ltx` scripts (section 8).
@@ -24,8 +25,8 @@ It builds on:
 Conventions:
 
 - Vectors are world-space, metres. *E* is the camera position, **d** the camera's view direction, **u** its up
-  vector and **r** its right vector (`SP` section 6). *Z* is the far plane of `SP` section 7.1 (the target
-  value, including environment modifiers and `rs_vis_distance`, not the smoothed value of `SP` 7.2) [X1, X9].
+  vector and **r** its right vector (`VP` section 1.1). *Z* is the far plane of `VP` section 2.1 (the target
+  value, including environment modifiers and `rs_vis_distance`, not the smoothed value of `VP` 2.2) [X1, X9].
   *dt* is the frame time in seconds (0 while the game is paused) [X1].
 - "Frame" is one rendered frame; each frame has a number that increases by one per frame [X1].
 - Statements are static (read from the program and the data; the game was not run). Where the program was not
@@ -85,11 +86,11 @@ An object glow starts off, with *f* = 1, occluded = false, *ρ* = 0.1, no direct
 - on/off as below. Switching on, or a taken position or radius change, marks the glow's sector for
   re-detection (section 3) [X5].
 
-**Hanging lamps** (`objects` section 6). A lamp gets a glow only if its glow texture is non-empty; the glow's
+**Hanging lamps** (`hanging-lamps.md`). A lamp gets a glow only if its glow texture is non-empty; the glow's
 texture is the lamp's glow texture and *ρ* its glow radius (sav.md 7.4.2) [G1]. The glow is on exactly while the
 lamp's lights are on (lights on at spawn when health > 0; switched off and on with them) [G1]. While the lamp's
 main light is on, each frame the glow's position is set to the main light's position: the translation row of
-the light's matrix *M* (`objects` section 6; this settles the "believed" translation there: it is row 3) [G2].
+the light's matrix *M* (`hanging-lamps.md` section 4.2: it is row 3) [G2].
 A lamp glow has no direction [G2]. **Disputed in review:** the per-frame placement also requires the lamp's health to be above 0 at that frame, not only the main light being on; while health is 0 the glow keeps its last position. In the data, 20 of the 745 lamp records have a glow texture: 9 with
 `glow\glow_ghost` radius 0.3, 7 with `glow\glow_orange` radius 1.0, 4 with `glow\glow_orange` radius 0.3; all
 20 exist for the first renderer (light-flag bit 0x04) [D4].
@@ -183,7 +184,7 @@ The ray hits when either holds [X3]:
   objects create one [X4, G8]. A skeleton form is hit when the ray passes its bounding sphere and hits the shape of
   one of its bone elements (box, sphere or cylinder, in the current pose; elements without a shape are
   skipped) from either side [X4]. The bone shapes and their placement are those of the model's bones
-  (`objects` section 4.4); the intersection tests are the usual ray–box, ray–sphere and ray–cylinder tests
+  (`skeleton-ogf.md` section 4); the intersection tests are the usual ray–box, ray–sphere and ray–cylinder tests
   (believed).
 
   Only objects in the level's spatial index that are marked collidable are considered [X13]: an object enters
@@ -205,7 +206,7 @@ triangles of materials with the **pass-through** flag 0x80 (`materials\water`, `
 flags 0x400 / 0x800 (attribute bits 14 / 15) occlude glows like any other triangle [X12]. So the static test,
 expressed against `gamemtl.xr`'s flags, is: a triangle occludes whatever its material's flags are.
 
-On `levels\l01_escape\` the camera at the New Game start (`SP`: eye (−246.72630, −23.263261, −134.43387)) is
+On `levels\l01_escape\` the camera at the New Game start (`VP` 2.3: eye (−246.72630, −23.263261, −134.43387)) is
 close to `materials\fake` triangles: rays from it to the level glows cross coincident pairs of `fake` triangles
 0.75 … 1.69 m from the eye for 12 of the 22 level glows. The static part alone gives, for that eye (section 7,
 [D8]): 20 of the 22 level glows hit, 2 not hit (glows 7 and 20); of the 20, glows 6 and 21 are hit only by
@@ -276,7 +277,7 @@ All 30 shipped levels [D1]:
 - 22 level glows: `effects\glow/glow\glow_04` 12 (radius 1.0), `effects\glow/glow\glow_red2` 6 (0.5),
   `effects\glow/glow\glow_white` 4 (two 0.7, two 0.5); sum of radii 17.4; glow 0 at (30.484, 19.756, 679.066),
   radius 1.0.
-- The 5 lamps online at the start (`objects` 2.6) all have glows: the 3 `physics\light\lampa_01_on` with
+- The 5 lamps online at the start (`offline-simulation.md` 9.1) all have glows: the 3 `physics\light\lampa_01_on` with
   `glow\glow_orange` radius 0.3, the 2 `physics\decor\tv_1` with `glow\glow_orange` radius 1.0.
 
 `shaders.xr` [D3]: `effects\glow` — `S_SET   `, blending 5, clamp, alpha ref 0, Z-test on, Z-write off, fog off;

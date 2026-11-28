@@ -18,19 +18,22 @@ flag bits, bounding sphere and updates (section 2), the chunk-6 records and the 
 and B (3.1), the lights game objects create (3.2), the camera's pass (4) and the light passes (5, 6)),
 `docs/behavior/hanging-lamps.md` (cited as `HL`), `docs/behavior/torch.md` (cited as `TO`),
 `docs/behavior/static-shading.md` (cited as `SS`: shader resolution and elements (3), drawing order
-(10.3), the projected-size measure and ssa_min (10.2)), `docs/behavior/level-objects.md` (cited as `LO`:
-which objects are online (2), the object transform *X* (3.4), model files and their bounding spheres (4),
-shading of objects (5), including the sun visibility *s* (5.4)), `docs/formats/level-cform.md` (cited as
+(10.3), the projected-size measure and ssa_min (10.2)), `docs/behavior/offline-simulation.md` (which
+objects are online (6.5), those of the first level at the start (9.1)), `docs/behavior/object-visual-and-transform.md`
+(the object transform *X*, 4), `docs/formats/skeleton-ogf.md` (cited as `SK`: model files and
+their bounding spheres (2)), `docs/behavior/model-shading.md` (cited as `MS`: shading of objects, element choice
+(5)), `docs/behavior/object-projected-light.md` (cited as `OPL`: the projected light texture (2), the sun
+visibility *s* (5)), `docs/behavior/object-detail-level.md` (cited as `ODL`: detail level of a part (4)), `docs/formats/level-cform.md` (cited as
 `CF`: `level.cform`, the loaded triangle bits (3.3), `gamemtl.xr`), `docs/formats/level.md` (sectors),
 `docs/behavior/options-screens.md` (cited as `OS`), `docs/behavior/hud-scope.md`,
 `docs/formats/sav.md` (spawn records and their class ids), `docs/formats/ogf.md`.
 
 Conventions: as `DL` (vectors are rows; `·` dot, `×` cross product; `sat(x)` = clamp to [0, 1];
 `normalize(v)` = v / |v|; a matrix M maps a point p by (p, 1)·M). E is the camera position, "frame" one
-drawn image, Δt the frame time in seconds (as `LO` 5.4). A light record's position is P, direction D,
+drawn image, Δt the frame time in seconds (as `OPL` 5.3). A light record's position is P, direction D,
 range r, colour (c_r, c_g, c_b); its **type** is directional, point or spot (`DL` 2.1). The records A and B
 of `DL` 3.1 are directional; every other record is point or spot. An object's **model sphere** is the
-bounding sphere of its model (`LO` 4.2) with centre transformed by the object transform *X*: centre C,
+bounding sphere of its model (`SK` 2) with centre transformed by the object transform *X*: centre C,
 radius R. Every fact carries the name of its check, a script in `checks/light-shadows-projection/` of the
 dirty workspace (`run_all.py` runs them all; `gen.py`, run first, produces the decompilations the binary
 checks read). Facts marked **believed** are inferred rather than read from the program or the data.
@@ -153,7 +156,7 @@ registration names as client class, **believed**) (`data.py` LS-D5):
 Over all levels the spawn records count 7,565 of casting classes, 699 of non-casting ones, the actor, and
 376 `SMRTTRRN` and `RE_SPAWN` records without a model. On `l01_escape`: 708 casting, 111 not (`AI_CROW` 55,
 `O_BRKBL` 49, `ARTEFACT` 3, `SCRPTART` 3, `C_HLCP_S` 1), the actor, 50 without a model (which of them are
-online at the start: `LO` 7.1). An object without a model is never drawn and never casts.
+online at the start: `offline-simulation.md` 9.1). An object without a model is never drawn and never casts.
 
 ### 3.4 Parts
 
@@ -161,7 +164,7 @@ While a caster is current and the renderer is not in first-person mode, every mo
 is recorded for the caster with the object matrix current at that moment, if (`bin_casters.py` LS-C3):
 
 1. it passes the tests by which the camera's pass draws a part: at most once per traversal, projected-size
-   measure above ssa_min (`SS` 10.2), and its shader has an element for the pass (`LO` 5.3) in an enabled
+   measure above ssa_min (`SS` 10.2), and its shader has an element for the pass (`MS` 5) in an enabled
    priority group; and
 2. its shader has an element 4.
 
@@ -204,7 +207,7 @@ So an object's list follows the lights only when it is the actor or every N-th f
 ### 4.2 The full update
 
 With C, R the object's model sphere, the **sample point** is C′ = C + (0, 0.3 R, 0) (`bin_track.py`
-LS-T2). The update first refreshes the object's sky and sun visibility as `LO` 5.4 (the sun visibility *s*
+LS-T2). The update first refreshes the object's sky and sun visibility as `OPL` 5.2 (the sun visibility *s*
 used below). The list is rebuilt only when the object's class answers yes to "cast shadow" or to
 "receive shadow" (every class except `AI_CROW` and the particle effects answers yes to the latter,
 `bin_casters.py` LS-C6) and the object's light flag is set (object flags start as 7 and the game sets only 7)
@@ -220,8 +223,8 @@ used below). The list is rebuilt only when the object's class answers yes to "ca
    x = cos(2π k₂ / 32767) · √(1 − z²), y = sin(2π k₂ / 32767) · √(1 − z²), with k₁ then k₂ the next two
    integers 0 … 32767 of the renderer's random generator (s ← 214013 s + 2531011 modulo 2³², value =
    (s >> 16) & 0x7FFF; its state and seed are **unestablished**). A ray from P towards C′ + 0.5 R · u, as
-   long as the distance to that point, is tested against the static collision (as the sky rays of `LO`
-   5.4, the object itself excluded). Then t ← clamp(t + (free ? 4 : −2) · Δt, −0.5, 1) and
+   long as the distance to that point, is tested against the static collision (as the sky rays of `OPL`
+   5.2, the object itself excluded). Then t ← clamp(t + (free ? 4 : −2) · Δt, −0.5, 1) and
    e ← 0.9 e + 0.1 t (`bin_track.py` LS-T5).
 3. **List**: each tracked light with (c_r + c_g + c_b) / 3 · e > 10⁻⁵ is listed with energy 0.5 e and
    colour 0.5 e · (c_r, c_g, c_b); for a light without the excluded mark (every light created by a game
@@ -240,7 +243,7 @@ Example: a light seen at once, updated every frame at 60 frames/s, reaches the s
 ### 5.1 When
 
 After the camera's pass has handled every object (and before the objects' projected light texture of
-`LO` 5.5 is prepared), once per frame. The two render targets used are made when a level loads, whatever
+`OPL` 2 is prepared), once per frame. The two render targets used are made when a level loads, whatever
 the settings: `$user$temp` and `$user$shadow`, 512 × 512, 32-bit A8R8G8B8 (`bin_gen.py` LS-G1).
 
 ### 5.2 Which shadows
@@ -280,7 +283,7 @@ frame, `$user$temp` becomes the target and is cleared to white (0xFFFFFFFF). Sha
 viewport x = 85 · (i mod 6), y = 85 · ⌊i / 6⌋, 85 × 85 pixels, depth range 0 – 1, with view V and projection Q:
 each recorded part of the caster with its recorded object matrix as world matrix and its shader's
 element 4 (`bin_gen.py` LS-G6, LS-G7). A type-4 (progressive) mesh is drawn with the detail argument −1,
-whose meaning is **unestablished** (`LO` 4.9).
+whose meaning is **unestablished** (`ODL` 4).
 
 ### 5.5 The shadow element
 
@@ -431,7 +434,7 @@ keeps a name (`bin_proj.py` LS-X4).
 Nothing. A spot light's pass projects `internal\internal_light_att` (with `internal\internal_light_attclip`
 for depth) whatever the light (`DL` 6.2 – 6.4; every spot pass names these fixed textures, `bin_proj.py`
 LS-X3); a point light's pass uses `internal\internal_light_attpoint`. Object shadows (sections 3 – 7) do
-not use a texture of the light. The objects' projected light texture `$user$projector` (`LO` 5.5) cannot
+not use a texture of the light. The objects' projected light texture `$user$projector` (`OPL` 2) cannot
 depend on a light's texture name, since none is kept. A spot light lights the same geometry, with the same
 colour, as it would without a projected texture; so does a point light (a lamp's ambient light).
 
