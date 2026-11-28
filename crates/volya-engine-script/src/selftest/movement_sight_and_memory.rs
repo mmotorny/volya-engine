@@ -32,6 +32,7 @@ pub const SECTIONS: &[(&str, Check)] = &[
     ("1 what is registered", registered),
     ("2 kinds and fallbacks", kinds),
     ("3 stalker movement", stalker_movement),
+    ("3 the fake stalker movement (#1234)", fake_movement),
     ("4 paths and patrol paths", paths),
     ("5 space restrictions", restrictions),
     ("6 sight", sight),
@@ -454,6 +455,88 @@ eq(h.z, 1, "the head looks along z at heading 0")
     })
 }
 
+/// FAKE(#1234): the fake stalker movement places a stalker told to walk a
+/// level path at its destination vertex at its next update, facing the
+/// desired direction, and its path reads completed; standing, it stays.
+pub fn fake_movement() -> Result<(), String> {
+    let mut t = state()?;
+    let level = Rc::new(RefCell::new(crate::level::LevelState::new()));
+    t.s.register_level(level).map_err(|e| e.message)?;
+    t.s.start_level(crate::level::Level {
+        name: None,
+        bounding_volume: ([0.0; 3], [1.4, 10.0, 1.4]),
+        vertices: Some(super::level::grid()),
+    })
+    .map_err(|e| e.message)?;
+    run(
+        &mut t.s,
+        "3 fake, the request",
+        &format!(
+            r#"
+local s = obj({STALKER})
+s:set_path_type(1)
+s:set_movement_type(0)
+s:set_mental_state(1)
+s:set_dest_level_vertex_id(5)
+s:set_desired_direction(vector():set(-2, 5, 0))
+eq(s:path_completed(), false, "before the update")
+"#
+        ),
+    )?;
+    t.s.fake_stalker_movement(STALKER);
+    run(
+        &mut t.s,
+        "3 fake, arrived",
+        &format!(
+            r#"
+local function near(a, b, what) eq(math.abs(a - b) < 1e-6, true, what .. ": " .. a) end
+local s = obj({STALKER})
+eq(s:path_completed(), true, "path_completed")
+eq(s:level_vertex_id(), 5, "level_vertex_id")
+local p = s:position()
+near(p.x, 0.7, "x")
+near(p.y, 0.001, "y: the plane's height + 0.001")
+near(p.z, 1.4, "z")
+local d = s:direction()
+near(d.x, -1, "facing the desired direction's x")
+near(d.z, 0, "and z")
+eq(s:movement_type(), 2, "standing still")
+eq(s:mental_state(), 1, "the target mental state")
+eq(s:path_type(), 1, "the target path type")
+eq(s:location_on_path(1, vector()), 5, "location_on_path")
+s:set_dest_level_vertex_id(2)
+eq(s:path_completed(), false, "a new destination")
+"#
+        ),
+    )?;
+    t.s.fake_stalker_movement(STALKER);
+    run(
+        &mut t.s,
+        "3 fake, standing",
+        &format!(
+            r#"
+local s = obj({STALKER})
+eq(s:level_vertex_id(), 2, "the second destination")
+eq(math.abs(s:position().z - 1.4) < 1e-6, true, "its z")
+s:set_movement_type(2)
+s:set_dest_level_vertex_id(7)
+"#
+        ),
+    )?;
+    t.s.fake_stalker_movement(STALKER);
+    run(
+        &mut t.s,
+        "3 fake, stays",
+        &format!(
+            r#"
+local s = obj({STALKER})
+eq(s:level_vertex_id(), 2, "told to stand, it stays")
+eq(s:path_completed(), false, "and its new path isn't completed")
+"#
+        ),
+    )
+}
+
 /// Section 4: patrol paths, the detail path's members.
 pub fn paths() -> Result<(), String> {
     let mut t = state()?;
@@ -475,8 +558,8 @@ s:set_patrol_path("walk", 2, 1, false)
 eq(obj({TRADER}):patrol(), "", "the trader's scripted part's name (TODO)")
 eq(s:path_completed(), false, "path_completed")
 local out = vector():set(9, 9, 9)
-raises(function() return s:location_on_path(15, out) end, "TODO(#1129)",
-  "location_on_path without a detail path")
+eq(s:location_on_path(15, out), s:level_vertex_id(),
+  "location_on_path without a detail path: the level vertex (CH-10 5.4)")
 eq(out.x, 0, "out is the position first")
 eq(s:location_on_path(15, nil), -1, "location_on_path without out")
 raises(function() return s:extrapolate_length() end, "TODO(#1129)", "its first value")

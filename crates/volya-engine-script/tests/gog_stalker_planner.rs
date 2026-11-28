@@ -35,7 +35,7 @@ const CAMPFIRE_LOGIC: &[u8] =
 
 /// 8 steps 1 – 4: the root, built at the spawning with the scripts' parts
 /// on it, plans "go to position", "wait", then the alife planner, and runs
-/// "go to position".
+/// "go to position"; on its vertex, "wait".
 #[test]
 fn the_campfire_novice_reaches_the_scripts_actions() {
     let Some((mut scripts, stalker, spawned)) = started(Some(CAMPFIRE_LOGIC)) else {
@@ -52,6 +52,7 @@ fn the_campfire_novice_reaches_the_scripts_actions() {
     assert_eq!(got, [Value::from("kamp1@esc_lager")], "the active section");
     // The clock well past the 3 s of the enemy rule (1.2).
     let mut now = 10_000;
+    let mut waiting = false;
     for update in 0..20 {
         now += 100;
         scripts
@@ -81,11 +82,23 @@ fn the_campfire_novice_reaches_the_scripts_actions() {
             Some(&false),
             "update {update}: danger"
         );
-        assert_eq!(
-            plan,
-            [GO_TO_POSITION, WAIT, ACTION_ALIFE_PLANNER],
-            "update {update}'s plan"
-        );
-        assert_eq!(current, Some(GO_TO_POSITION), "update {update} runs");
+        // Until on its vertex, "go to position" first; then "wait" keeps
+        // running (8 step 4; FAKE(#1234): the stalker is on its seat after
+        // the first think step that gives it its destination).
+        if waiting {
+            assert_eq!(plan, [WAIT, ACTION_ALIFE_PLANNER], "update {update}'s plan");
+            assert_eq!(current, Some(WAIT), "update {update} runs");
+        } else if current == Some(WAIT) {
+            assert_eq!(plan, [WAIT, ACTION_ALIFE_PLANNER], "update {update}'s plan");
+            waiting = true;
+        } else {
+            assert_eq!(
+                plan,
+                [GO_TO_POSITION, WAIT, ACTION_ALIFE_PLANNER],
+                "update {update}'s plan"
+            );
+            assert_eq!(current, Some(GO_TO_POSITION), "update {update} runs");
+        }
     }
+    assert!(waiting, "on its seat, it waits");
 }

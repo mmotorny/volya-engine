@@ -1466,6 +1466,11 @@ mod movement_sight_and_memory {
     }
 
     #[test]
+    fn the_fake_stalker_movement() {
+        section(checks::fake_movement);
+    }
+
+    #[test]
     fn paths_and_patrol_paths() {
         section(checks::paths);
     }

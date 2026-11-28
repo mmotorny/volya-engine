@@ -11,8 +11,9 @@
 //! planner, the anomaly evaluator replaced by a constant, the script
 //! themes' sound collections on the stalker's profile, and the camp
 //! scheme's parts (its `add_to_binder` in place of the logic set-up the
-//! scripts reach later, on other specs' names). Skips when
-//! `VOLYA_GOG_INSTALLER` is unset.
+//! scripts reach later, on other specs' names). The level is `l01_escape`
+//! with its level vertices, where the fake stalker movement (#1234) takes
+//! the stalker to its seat. Skips when `VOLYA_GOG_INSTALLER` is unset.
 
 #[path = "support/campfire.rs"]
 mod campfire;
@@ -150,4 +151,67 @@ fn a_campfire_stalker_builds_its_planners() {
         got,
         [Value::Boolean(true), Value::Number(f64::from(plan[0]))]
     );
+}
+
+/// FAKE(#1234): the campfire stalker given stalker-movement.md 7's "go to
+/// position" for the seat 45,947 with the scripts' constants (destination
+/// vertex, desired direction *pp* − seat, level path, walk, free,
+/// standing) is at the seat at its next update, at the height of
+/// object-visual-and-transform.md 4.1, facing the fire (heading 180°), and
+/// script API X's members read its arrival.
+#[test]
+fn a_campfire_stalker_reaches_its_seat_at_once() {
+    let Some((mut scripts, stalker, spawned)) = started(None) else {
+        return;
+    };
+    let s = scripts.scripts();
+    assert_eq!(spawned, Ok(()), "spawning; {:?}", s.take_failures());
+    let code = format!(
+        "local s = level.object_by_id({stalker})\n\
+         s:set_dest_level_vertex_id(45947)\n\
+         s:set_desired_direction(vector():set(0, 0, -2.1))\n\
+         s:set_path_type(game_object.level_path)\n\
+         s:set_movement_type(move.walk)\n\
+         s:set_mental_state(anim.free)\n\
+         s:set_body_state(move.standing)\n\
+         return s:path_completed()"
+    );
+    let got = s.exec("=go", code.as_bytes()).unwrap();
+    assert_eq!(got, [Value::Boolean(false)], "before the update");
+    s.fake_stalker_movement(stalker);
+    let code = format!(
+        "local s = level.object_by_id({stalker})\n\
+         local p, d = s:position(), s:direction()\n\
+         return s:path_completed(), s:level_vertex_id(), p.x, p.y, p.z, d.x, d.z,\n\
+         s:movement_type(), s:mental_state(), s:location_on_path(15, vector())"
+    );
+    let got = s.exec("=arrived", code.as_bytes()).unwrap();
+    let numbers: Vec<f64> = (got[1..].iter())
+        .map(|v| match v {
+            Value::Number(n) => *n,
+            v => panic!("{v:?}"),
+        })
+        .collect();
+    assert_eq!(got[0], Value::Boolean(true), "path_completed");
+    let height = {
+        let level = scripts.level().borrow();
+        let ai = &level.level.as_ref().unwrap().vertices.as_ref().unwrap().ai;
+        let [x, _, z] = ai.position(45_947).unwrap();
+        ai.plane_height(45_947, x, z).unwrap() + 0.001
+    };
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-3;
+    let [vertex, x, y, z, dx, dz, movement, mental, on_path] = numbers[..] else {
+        panic!("{numbers:?}");
+    };
+    assert_eq!(vertex, 45_947.0, "level_vertex_id");
+    // stalker-movement.md 7's seat: (−207.2, −19.9, −137.9).
+    assert!(near(x, -207.2) && near(z, -137.9), "x, z: {x}, {z}");
+    assert_eq!(y, f64::from(height), "y");
+    assert!((-19.95..-19.85).contains(&y), "y near −19.9: {y}");
+    assert!(
+        near(dx, 0.0) && near(dz, -1.0),
+        "facing the fire: {dx}, {dz}"
+    );
+    assert_eq!((movement, mental), (2.0, 1.0), "standing still, free");
+    assert_eq!(on_path, 45_947.0, "location_on_path");
 }

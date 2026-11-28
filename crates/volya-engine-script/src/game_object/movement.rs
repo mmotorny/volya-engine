@@ -15,14 +15,20 @@
 //! (TODO(#1129)), the level graph and restrictions are outside the scripts
 //! (TODO(#1130)), no one perceives (TODO(#1131)). A member whose answer
 //! needs such a part raises a script error naming its issue; one whose
-//! state the engine keeps answers from it.
+//! state the engine keeps answers from it. Until stalker movement (CH-10,
+//! #1233) lands, a lightweight fake places a stalker at its destination
+//! vertex at once ([`Scripts::fake_stalker_movement`]; every spot is
+//! marked FAKE(#1234)).
 
 use volya_engine_formats::cp1251;
+use volya_engine_formats::level_ai::LevelAi;
+use volya_engine_formats::model;
 
 use super::members::{Call, boolean, member, number};
 use super::{Context, Event, GameObject, Kinds, ObjectClass};
 use crate::Value;
 use crate::classes::EngineClass;
+use crate::loader::Scripts;
 use crate::values::{Vector, to_bits32, to_f32};
 use volya_engine_core::config::{Config, value};
 
@@ -35,6 +41,13 @@ pub const STANDING: i32 = 1;
 pub const STAND: i32 = 2;
 pub const DANGER: i32 = 0;
 pub const NO_PATH: i32 = 3;
+
+/// The level path's path type (`game_object.level_path`, CH-10 3.1).
+pub const LEVEL_PATH: i32 = 1;
+
+/// How far above its level vertex's plane an object is placed
+/// (object-visual-and-transform.md 4.1 step 5).
+pub const ABOVE_PLANE: f32 = 0.001;
 
 /// `set_item`'s queue size and interval when not given (10.1).
 pub const DEFAULT_QUEUE_SIZE: i32 = -1;
@@ -136,6 +149,9 @@ pub struct StalkerParts {
     pub ignore_monster_threshold: f32,
     pub max_ignore_monster_distance: f32,
     pub object_target: Option<ObjectTarget>,
+    /// FAKE(#1234): the fake movement placed it at its destination vertex;
+    /// its path is completed until marked to be rebuilt.
+    pub arrived: bool,
 }
 
 /// A fighter's patrol path (4.1): indices −1 for "none".
@@ -494,8 +510,15 @@ fn paths(class: EngineClass, ctx: &Context) -> EngineClass {
         }
         none()
     });
-    // TODO(#1129): no path is built, so none is completed.
-    let class = member(class, ctx, "path_completed", |_| Ok(boolean(false)));
+    // FAKE(#1234): a stalker's path is completed once the fake placed it at
+    // its destination, until the path is marked to be rebuilt; no other
+    // fighter's path is built (TODO(#1129)).
+    let class = member(class, ctx, "path_completed", |c| {
+        let o = c.object()?;
+        let outdated = (o.movement.fighter.as_ref()).is_some_and(|f| f.path_outdated);
+        let arrived = (o.movement.stalker.as_ref()).is_some_and(|s| s.arrived && !s.path_outdated);
+        Ok(boolean(arrived && !outdated))
+    });
     let class = member(class, ctx, "location_on_path", |c| {
         if matches!(c.arg(1), Value::Nil) {
             return Ok(number(-1));
@@ -505,10 +528,16 @@ fn paths(class: EngineClass, ctx: &Context) -> EngineClass {
             return Ok(number(-1));
         }
         let p = position(o);
+        let (stalker, vertex) = (o.movement.stalker.is_some(), o.level_vertex);
         let out = c.arg(1).clone();
         c.o.set(&out, Vector::new(p[0], p[1], p[2]));
-        // Without a detail path (CH-10, TODO(#1129)) the result is a
-        // number of the movement state, unestablished which.
+        // FAKE(#1234): a stalker never has a detail path, and without one
+        // the result is its level vertex (CH-10 5.4). Another fighter's
+        // without one is a number of its movement state, unestablished
+        // which (TODO(#1129)).
+        if stalker {
+            return Ok(number(vertex));
+        }
         Err(unavailable(c, 1129))
     });
     let class = member(class, ctx, "extrapolate_length", |c| {
@@ -781,4 +810,86 @@ fn items(class: EngineClass, ctx: &Context) -> EngineClass {
         hide_weapon_event(c, false);
         none()
     })
+}
+
+/// FAKE(#1234): stalker movement (CH-10, #1233) until the level graph and
+/// paths exist (CH-8, CH-9). At an update of a living stalker whose
+/// movement is enabled (CH-10 3.1; not disabled, as its first value is
+/// unestablished), its current states are those of a stalker without an
+/// unfinished detail path (3.4): standing still, with the target body and
+/// mental states (and path type, believed). Told to walk or run a level
+/// path without a desired position (3.3: with one the path ends at that
+/// position), it is placed at once where that path ends: at its
+/// destination vertex's x and z, [`ABOVE_PLANE`] over the vertex's plane
+/// (object-visual-and-transform.md 4.1 step 5), its level vertex the
+/// destination, body and head facing the desired direction's x–z heading
+/// when one is set ((0, 1) when its squared length is below 0.001, 5.1),
+/// else as they were. Its path then counts as completed (X 4.1) until
+/// marked to be rebuilt. Simplified: no walking or turning, no game vertex
+/// change, no restrictions.
+pub fn fake_movement_update(o: &mut GameObject, ai: Option<&LevelAi>) {
+    let alive = o.entity.as_ref().is_none_or(|e| e.health > 0.0);
+    let (Some(s), Some(f)) = (&mut o.movement.stalker, &mut o.movement.fighter) else {
+        return;
+    };
+    if !alive || f.movement_enabled == Some(false) {
+        return;
+    }
+    let r = &s.request;
+    s.current = MovementStates {
+        body_state: r.target.body_state,
+        movement_type: STAND,
+        mental_state: r.target.mental_state,
+        path_type: r.target.path_type,
+    };
+    let walks = r.target.movement_type != STAND && r.target.path_type == LEVEL_PATH;
+    let Some(vertex) = (r.dest_level_vertex).filter(|_| walks && !r.desired_position_set) else {
+        return;
+    };
+    if s.arrived && !s.path_outdated && !f.path_outdated {
+        return;
+    }
+    let Some([x, _, z]) = ai.and_then(|ai| ai.position(vertex)) else {
+        return;
+    };
+    let Some(height) = ai.and_then(|ai| ai.plane_height(vertex, x, z)) else {
+        return;
+    };
+    let heading = r.desired_direction_set.then(|| {
+        let [dx, _, dz] = r.desired_direction;
+        if dx * dx + dz * dz < 0.001 {
+            0.0
+        } else {
+            dx.atan2(dz)
+        }
+    });
+    s.arrived = true;
+    s.path_outdated = false;
+    f.path_outdated = false;
+    let heading = heading
+        .or_else(|| o.fighter.as_ref().map(|f| f.body_heading.0))
+        .unwrap_or(0.0);
+    o.placement = model::transform([x, height + ABOVE_PLANE, z], [0.0, -heading, 0.0]);
+    o.level_vertex = vertex;
+    if let Some(f) = &mut o.fighter {
+        f.body_heading = (heading, heading);
+    }
+    if let Some(s) = &mut o.stalker {
+        s.head_heading = (heading, heading);
+    }
+}
+
+impl Scripts {
+    /// FAKE(#1234): object `id`'s stalker movement at the end of its think
+    /// step, after its decision planner (CH-10 conventions;
+    /// [`fake_movement_update`]), over the started level's vertices.
+    pub fn fake_stalker_movement(&mut self, id: u16) {
+        let vertices = self.level_vertices();
+        let Some(basics) = self.game_object_state.as_ref() else {
+            return;
+        };
+        if let Some(o) = basics.objects.borrow_mut().get_mut(id) {
+            fake_movement_update(o, vertices.as_ref().map(|v| &*v.ai));
+        }
+    }
 }

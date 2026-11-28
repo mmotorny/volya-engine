@@ -636,6 +636,13 @@ impl Scripts {
             .ok_or_else(|| api("the level isn't registered"))
     }
 
+    /// The started level's vertices, if any (FAKE(#1234): the fake
+    /// stalker movement's).
+    pub(crate) fn level_vertices(&self) -> Option<LevelVertices> {
+        let state = self.level_state.as_ref()?.ctx.state.borrow();
+        state.level.as_ref()?.vertices.clone()
+    }
+
     /// The level is created (conventions): the functions read `level`, and
     /// its client spawn manager is made with it (2.7). A level already
     /// there is ended first ([`Scripts::end_level`]).

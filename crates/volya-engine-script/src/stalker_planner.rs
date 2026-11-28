@@ -471,8 +471,9 @@ impl Scripts {
     /// it over (CH-24), the scripted actions instead (5.1 step 3; the
     /// local-control flag believed always set): the root's update (1.4:
     /// the goal choice, then the general update), then, when it is alive,
-    /// its movement (CH-10; TODO(#1129): nothing moves yet). Its place in
-    /// the scheduled update is after the binder's `update` (5.1 step 2).
+    /// its movement (CH-10; FAKE(#1234): [`Self::fake_stalker_movement`]
+    /// until #1233). Its place in the scheduled update is after the
+    /// binder's `update` (5.1 step 2).
     pub fn think_step(&mut self, id: u16) -> Result<(), Error> {
         let (objects, _) = self.planner_shared()?;
         let scripted = (objects.borrow().get(id))
@@ -481,7 +482,9 @@ impl Scripts {
         if scripted {
             return self.run_action_queue(id);
         }
-        self.update_motivation_manager(id)
+        self.update_motivation_manager(id)?;
+        self.fake_stalker_movement(id);
+        Ok(())
     }
 
     /// The root's saved state of stalker `id` (6): the end of its saved

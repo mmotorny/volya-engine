@@ -18,6 +18,7 @@ use super::shipped_scripts::{FSGAME, GameTrees};
 use volya_engine_core::character_identity::trader_like_mut;
 use volya_engine_core::config::{self, Config, PathAliases};
 use volya_engine_core::console::{Console, ConsoleFiles};
+use volya_engine_core::info_portions::{Declarations, InfoPortions};
 use volya_engine_core::simulation::graph::Graph;
 use volya_engine_core::simulation::{AlifeConfig, Simulation};
 use volya_engine_core::vfs::db::DbVfs;
@@ -59,6 +60,15 @@ pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), Str
     let trees = Rc::new(GameTrees { tree, root });
     let vfs = &trees.tree;
     let system = system(vfs, &aliases);
+    // The game's information portions, as a New Game sets them (the
+    // scripts may give some as the stalker spawns: measured, when it is
+    // the process's second spawning).
+    let declarations = Declarations::read(vfs, &aliases, &system).unwrap();
+    let story = Rc::new(RefCell::new(Story::new()));
+    story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(
+        Arc::new(declarations),
+        0,
+    ))));
     let game = config::load_aliased(vfs, &aliases, "$game_config$", "game.ltx").unwrap();
     let alife_ltx = config::load_aliased(vfs, &aliases, "$game_config$", "alife.ltx").unwrap();
     let spawn_file = read(vfs, "gamedata/spawns/all.spawn").unwrap();
@@ -71,7 +81,7 @@ pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), Str
     sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5), None)
         .unwrap();
     let ai = read(vfs, "gamedata/levels/l01_escape/level.ai").unwrap();
-    let (ai, _, links) = LevelAi::read_in_with_lights_and_links(
+    let (ai, lights, links) = LevelAi::read_in_with_lights_and_links(
         Cursor::new(&ai[..]),
         |len| Ok(vec![0; len]),
         |len| Ok(vec![0; len]),
@@ -98,7 +108,7 @@ pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), Str
         services,
         objects: Rc::new(RefCell::new(GameObjects::new())),
         files,
-        story: Rc::new(RefCell::new(Story::new())),
+        story: Rc::clone(&story),
         dialogs: Rc::default(),
         times: Rc::default(),
         sounds: Rc::default(),
@@ -140,6 +150,8 @@ pub fn started(logic: Option<&[u8]>) -> Option<(GameScripts, u16, Result<(), Str
     // The game clock at its start (our choice: the logic set-up reads it,
     // nothing here depends on its value).
     scripts.times().borrow_mut().level_frame(0, 1.0);
+    // The level's vertex count, which `set_dest_level_vertex_id` reads.
+    scripts.objects().borrow_mut().level_vertex_lights = lights;
     scripts.level().borrow_mut().patrol_paths =
         Some(Rc::new(PatrolPaths::parse(&spawn_file).unwrap()));
     scripts
