@@ -58,7 +58,7 @@ Conventions:
 `checks/script-api-inventory/run_all.py` (`python3 -I run_all.py`): it reads the game library's bytes and run-time
 type information, the evidence of read-only headless static analysis (produced by `gh.py` beside it; spec M's
 registration evidence as M's checks produced it), the listing, the scoping spec's scan and the shipped scripts.
-All checks pass (`ALL PASS 25`).
+All checks pass (`ALL PASS 28`).
 
 ## 1. What this spec owns
 
@@ -138,7 +138,11 @@ active** (false for slots 6, 7, 8, 9) [S-6]. It also keeps a list of **all its i
 taken: each take appends the item to the end [S-6]; removing an item keeps the order of the rest (**believed**).
 Whether the belt **counts** for 3.4 is a property of the inventory: false when made, set for the player (static:
 the player's object sets it when made); no other owner is known to set it (**believed** false for all others)
-[S-6]. Each take also stamps the inventory as changed (7.2) [S-6].
+[S-6]. Whether the slots **count** for 3.4 is a second property: true when made, set true again whenever an owner
+reads its section's settings (the player's, a stalker's, the trader's and a monster's routines that do so; when
+they run is **unestablished**), and set false only on a stalker's inventory, by the stalker routine that also sets
+the dying-fire flag of 7.4 (**believed**: when the stalker dies) [S-9]. (An inventory a vehicle makes for itself
+starts with it false; vehicles are not owners.) Each take also stamps the inventory as changed (7.2) [S-6].
 
 Each item has a **dropped mark** (5.4), cleared when the item is made and whenever an inventory takes it [S-6,
 S-16], and two section keys read when it loads: `can_trade` (true when absent) and `quest_item` (false when
@@ -175,20 +179,14 @@ through the simulation (spec K), which takes effect later (believed).
 
 ### 3.4 `obj:inventory_for_each(f)` (entry point)
 
-Calls `f` with **one argument**, the item's handle, for each item the owner **offers for trade**, in this order
-[S-9]:
-
-**Disputed in review:** `f` is called with two arguments, not one: first the item's handle, then the handle of
-the owner `obj` (static). The shipped scripts' functions take only the first.
+Calls `f` with **two arguments**, first the item's handle, then the handle of the owner `obj`, for each item the
+owner **offers for trade**, in this order [S-9]:
 
 1. the backpack, in its order;
 2. the belt, only when it counts (2.2: the player);
-3. the slots in slot order: the item of every slot that is not persistent (slots 1, 2, 6, 10 by `pstate` 3.3),
-   and an item whose slot is 3 (a grenade; **believed**: the slot its section's `slot` names) [S-9].
-   **Disputed in review:** the slots are not always included: they are only while a second flag of the
-   inventory is set, which is set when the inventory is made and cleared on a stalker's inventory by the same
-   stalker routine that sets the dying-fire flag of 7.4 (static; **believed**: when the stalker dies), so a dead
-   stalker offers no slot items.
+3. the slots, only when they count (2.2; so a stalker whose slots no longer count, **believed** a dead one, offers
+   no slot items), in slot order: the item of every slot that is not persistent (slots 1, 2, 6, 10 by `pstate`
+   3.3), and an item whose slot is 3 (a grenade; **believed**: the slot its section's `slot` names) [S-9].
 
 An item is offered when its `can_trade` is true, its `quest_item` false, and the owner allows it [S-9]. Which
 items an owner allows [S-10]:
@@ -203,7 +201,7 @@ items an owner allows [S-10]:
 
 The calls are protected, errors fatal and results ignored, as 3.3 [S-9]. For an object that is not an owner:
 diagnostics only [S-9]. `f` = nil: as 3.3 (**believed** crash). The shipped scripts call it on the player and on
-characters (`xr_effects.script`, to drop or transfer their items) [S-25].
+characters (`xr_effects.script`, to drop or transfer their items), with functions that take only the item [S-25].
 
 ## 4. Slots (static)
 
@@ -232,7 +230,8 @@ Asks for slot `n` to become the active slot (the item in the hands), as the inve
 
 1. In one marked frame (**believed**: the frame in which the inventory restores a saved active slot; when that
    happens is **unestablished**), only the slot recorded for it is accepted, and only when it holds an item;
-   otherwise nothing happens [S-12].
+   otherwise nothing happens [S-12]. Accepting it clears the mark, so the restriction holds for that one call:
+   later calls in the same frame go on as for any other frame [S-12].
 2. A slot whose block count is above 0 is refused (**believed**: the blocks of `use` 7.1's event 40) [S-12].
 3. A slot number other than "no slot" outside the slots is a failed check (fatal) [S-12]. A slot that can never be
    active (6 … 9) is refused [S-12].
@@ -317,19 +316,29 @@ Applies to owners; otherwise diagnostics only [S-18]. It restocks the owner from
    (class id `II_BOLT`, C) and a PDA (class id `D_PDA`) whose original owner is `obj` [S-18].
 2. The owner's earlier restock record is emptied [S-18].
 3. The section is read (a missing section is fatal, F 2.4; `ini` = nil reaches through no file, **believed** a
-   crash) and each line `item section = count, probability` is taken in order: `count` is the first
+   crash) and each line `item section = count, probability` is taken in the section's sorted order, the order of
+   F 3.7's `r_line` (`ltx-config` 6: keys by unsigned byte comparison, not file order): `count` is the first
    comma-separated part read as a decimal integer, `probability` the second read as a decimal number [S-18].
 4. For each line, a random generator of its own is seeded with the low 32 bits of the processor's performance
-   counter; then `count` times: with *d* a draw of that generator (the step of `original-determinism` 2.2:
-   *s* ← *s* · 214,013 + 2,531,011 mod 2³², *d* = (*s* ≫ 16) AND 32,767), when *d* / 32,767 ≤ `probability` an item
-   of the line's section is created at the owner's position with the owner as its holder [S-18]. A section that
-   names no item is a failed check (fatal) [S-18].
+   counter; then `count` times, `count` taken as an unsigned 32-bit value (0 gives no tries; a negative `count`
+   gives `count` + 2³², about 4 billion, tries): with *d* a draw of that generator (the step of
+   `original-determinism` 2.2: *s* ← *s* · 214,013 + 2,531,011 mod 2³², *d* = (*s* ≫ 16) AND 32,767), when
+   *d* / 32,767 ≤ `probability` an item of the line's section is created at the owner's position with the owner as
+   its holder [S-18]. A section that names no item is a failed check (fatal) [S-18].
 5. The restock record keeps, for the line's section, the value `count` / max(*k*, 0.3) · `probability`, *k* being
-   the number of items created [S-18]; what reads it is **unestablished** (**believed**: the trader's prices,
+   the number of items created, both read as unsigned values (so a negative `count` counts as `count` + 2³²)
+   [S-18]; what reads it is **unestablished** (**believed**: the trader's prices,
    #284).
 
 So the items created are not reproducible from a saved state (static: the seed is the performance counter).
-`trade_manager.script` calls it on traders with the section its `buy_supplies` condition list picks [S-25].
+`trade_manager.script` calls it as `npc:buy_supplies(tt.config, str)` on a character that trades (a stalker or the
+trader): `tt.config` is the `ini_file` of the character's trade file (the file its logic names under `trade`,
+`misc\trade_generic.ltx` when none), `str` the section named by that file's `[trader]` key `buy_supplies`, a
+condition list from which the script picks one section; it calls it again only when the picked section changes
+[S-25]. Five shipped trade files have the key (`trade_barman`, `trade_dolg`, `trade_ecolog`, `trade_freedom`,
+`trade_trader` in `config\misc\`) [S-25]. For example `[supplies_start]` of `trade_trader.ltx` is taken in the
+order `ammo_5.45x39_fmj`, `antirad`, `bandage`, `bread`, `conserva`, `energy_drink`, `killer_outfit`, `kolbasa`,
+`medkit`, `vodka`, `wpn_groza_m1`, not in the file's order [S-25].
 
 ## 6. Money (static)
 
@@ -384,7 +393,8 @@ For a magazine weapon (2.1): unless its holder is a stalker with its **dying-fir
 out of the magazine and discarded (no ammunition item is made from them) [S-21]. For any other object: diagnostics
 only [S-21]. The dying-fire flag is set at random (one chance in two, when a setting of the stalker allows it) by a
 routine of the stalker (**believed**: when it dies); while it is set the stalker goes on firing for up to 500 ms
-(**believed**) [S-21]. `death_manager.keep_item` unloads the weapons of a dead character's slots 1 and 2 [S-25].
+(**believed**) [S-21]. The same routine makes the stalker's slots no longer count for trade (2.2) [S-9].
+`death_manager.keep_item` unloads the weapons of a dead character's slots 1 and 2 [S-25].
 
 ## 8. Other item members (static)
 
@@ -443,7 +453,7 @@ scripts) per name [S-25]: `object` 41 (51), `money` 10 (10), `active_item` 8 (10
 
 ## 11. Verification facts
 
-All reproduced by `run_all.py` (25 PASS lines, no failure):
+All reproduced by `run_all.py` (28 PASS lines, no failure):
 
 - Scope: 29 listed items, the candidate `invulnerable` (M's), 21 used names, 26 (54) loadable scripts [S-2]; 30
   registered forms paired with implementations [S-3].
@@ -452,11 +462,14 @@ All reproduced by `run_all.py` (25 PASS lines, no failure):
   results [S-4].
 - Kinds: item and attachable queries answered by every item, the weapon query by 19 classes, 18 magazine weapons
   [S-5]; the inventory's slot properties, its item list and the belt flag [S-6].
-- Members: items and iteration [S-7 – S-10]; slots and the outfit with its 10 protection keys [S-11 – S-13]; the
-  drop, the server's handling of events 1, 3, 8, 29 and 32 [S-14 – S-16]; eating [S-17]; restocking with its
-  generator (multiplier 214,013, increment 2,531,011, scale 1/32,767, floor 0.3) [S-18]; money with `infinitive`
-  [S-19]; ammunition [S-20, S-21]; attachable items, boxes, best item and weapon [S-22 – S-24].
-- Script use and the worked example [S-25].
+- Members: items and iteration, with `inventory_for_each`'s two arguments and the slots' trade property and
+  its writers [S-7 – S-10]; slots and the outfit with its 10 protection keys, and the single call the marked
+  frame admits [S-11 – S-13]; the drop, the server's handling of events 1, 3, 8, 29 and 32 [S-14 – S-16]; eating
+  [S-17]; restocking with its generator (multiplier 214,013, increment 2,531,011, scale 1/32,767, floor 0.3), the
+  unsigned count and the section's sorted line order [S-18]; money with `infinitive` [S-19]; ammunition [S-20,
+  S-21]; attachable items, boxes, best item and weapon [S-22 – S-24].
+- Script use, the worked example, and `buy_supplies`' caller, its trade files and the sorted order of
+  `[supplies_start]` [S-25].
 
 ## 12. Unestablished
 
@@ -486,11 +499,3 @@ All reproduced by `run_all.py` (25 PASS lines, no failure):
   the scoping spec's script scan reused; the listing and the scripts read as text. No binary was executed.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
 
-## Gaps found in review
-
-- `activate_slot` (4.1 step 1): when the marked frame's recorded slot is accepted, the mark is cleared, so the
-  restriction applies to one call only.
-- `buy_supplies` (5.6 step 4): `count` is compared as an unsigned value, so a negative `count` gives about 4
-  billion tries; a `count` of 0 gives none.
-- The order in which `buy_supplies` takes a section's lines (file order or another) is not stated here; it is
-  F's order of a section's lines.
