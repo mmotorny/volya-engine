@@ -1,0 +1,166 @@
+/* SPDX-FileCopyrightText: 2026 Maksym Motorny */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+/* A frame on the UX audit page: the device's safe-area insets (env() is 0
+   in a frame), and its status bar drawn over the page as iOS does. */
+
+main {
+  padding: calc(var(--inset-top, 0px) + 2rem) calc(var(--inset-right, 0px) + 1.25rem)
+    calc(var(--inset-bottom, 0px) + 1.25rem) calc(var(--inset-left, 0px) + 1.25rem);
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  main {
+    padding-top: calc(var(--inset-top, 0px) + 1.25rem);
+  }
+}
+
+.ux-status-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--inset-top);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2.2rem;
+  font: 600 17px system-ui, -apple-system, sans-serif;
+  color: #fff;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.ux-status-bar .island {
+  position: absolute;
+  left: 50%;
+  top: 11px;
+  width: 125px;
+  height: 37px;
+  transform: translateX(-50%);
+  border-radius: 20px;
+  background: #000;
+}
+
+.ux-home-indicator {
+  position: fixed;
+  left: 50%;
+  bottom: 8px;
+  width: 140px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* In the level: a plain backdrop instead of the game's frame, and the
+   touch controls clear of the device's safe areas; on an upright phone
+   turned with the canvas (style.css), as on the device. */
+html[data-ux-level] {
+  background: linear-gradient(#5b6168, #2f3337);
+}
+
+:is(#touch-controls, #console-touch) {
+  --safe-top: var(--inset-top, 0px);
+  --safe-right: var(--inset-right, 0px);
+  --safe-bottom: var(--inset-bottom, 0px);
+  --safe-left: var(--inset-left, 0px);
+}
+
+html[data-ux-turned] :is(#touch-controls, #console-touch) {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+  --safe-top: var(--inset-right, 0px);
+  --safe-right: var(--inset-bottom, 0px);
+  --safe-bottom: var(--inset-left, 0px);
+  --safe-left: var(--inset-top, 0px);
+}
+
+/* The console on touch screens (#642): stand-ins for the game's console
+   (console-window.md 4.1, 4.3: the top half, the prompt line
+   rgb(128, 128, 255)) and main menu, and for the system's keyboard and
+   Paste bubble. */
+#console-keys {
+  padding-left: max(8px, var(--inset-left, 0px));
+  padding-right: max(8px, var(--inset-right, 0px));
+}
+
+.ux-console {
+  position: absolute;
+  inset: 0 0 50% 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 0 calc(var(--safe-right) + 8px) 6px calc(var(--safe-left) + 8px);
+  background: rgb(32, 32, 32);
+  color: rgb(200, 200, 200);
+  font: 13px/1.5 ui-monospace, Menlo, monospace;
+}
+
+.ux-console p {
+  margin: 0;
+}
+
+.ux-console .prompt {
+  color: rgb(128, 128, 255);
+}
+
+.ux-stand-in {
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.55);
+  font: 600 15px system-ui, -apple-system, sans-serif;
+}
+
+.ux-menu {
+  position: absolute;
+  inset: 0;
+}
+
+/* A stand-in for the game's picture, laid out as the canvas (style.css),
+   with a grid that shows its magnification. */
+.ux-game {
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.08) 0 1px, transparent 1px 40px),
+    linear-gradient(#3a2f22, #14110c);
+}
+
+html[data-ux-turned] .ux-game {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: 100vh;
+  height: 100vw;
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+.ux-keyboard {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  background: #2b2d31;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ux-paste-bubble {
+  position: fixed;
+  z-index: 3;
+  transform: translate(-50%, -100%);
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #3a3b3f;
+  color: #fff;
+  font: 15px system-ui, -apple-system, sans-serif;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}

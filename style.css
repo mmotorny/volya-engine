@@ -1,0 +1,1526 @@
+/* SPDX-FileCopyrightText: 2026 Maksym Motorny */
+/* SPDX-License-Identifier: BSD-3-Clause */
+
+/* The app's own screens follow the logo: a blueprint. Navy paper with a
+   two-level grid, white line work, light-blue annotations. */
+
+:root {
+  --navy-1: #163f7e;
+  --navy-2: #0f2f63;
+  --navy-3: #0a2147;
+  --line: #9fcbfa;
+  --ink: #f2f8ff;
+  --ink-2: #b9d3ef;
+  --ink-3: #7fa3cc;
+  --panel: rgba(8, 26, 58, 0.62);
+  --panel-edge: rgba(159, 203, 250, 0.22);
+  --danger: #ff9b8f;
+  --radius: 16px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html {
+  min-height: 100%;
+  /* The page's colour at its top edge: iOS 26 tints the status bar from the
+     background colour (it ignores theme-color and draws no page content
+     there), so this keeps the bar continuous with the blueprint below. */
+  background-color: #103266;
+  /* Grid lines: fine every 24 px, main every 96 px; then the paper. */
+  background-image:
+    linear-gradient(rgba(159, 203, 250, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(159, 203, 250, 0.11) 1px, transparent 1px),
+    linear-gradient(rgba(159, 203, 250, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(159, 203, 250, 0.045) 1px, transparent 1px),
+    radial-gradient(ellipse at 50% 30%, var(--navy-1), var(--navy-2) 55%, var(--navy-3));
+  background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px, 100% 100%;
+  background-position: center top;
+  background-attachment: fixed;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* No browser zoom anywhere (zoom.js): every element pans but never zooms
+   (WebKit resets touch-action at scroll containers, so not only the root).
+   A page zoomed anyway pans and zooms until back at scale 1. */
+* {
+  touch-action: pan-x pan-y;
+}
+
+html[data-zoomed],
+html[data-zoomed] * {
+  touch-action: manipulation !important;
+}
+
+/* The engine owns the screen and its input (input.js): no page gestures,
+   on every element (each sets its own, as above). */
+html[data-engine-input],
+html[data-engine-input] * {
+  touch-action: none;
+}
+
+html[data-engine-input] {
+  /* The engine draws its own cursor. */
+  cursor: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* What holds the game's picture: magnified by a pinch on the screens
+   with the game's cursor in the ergonomic mode
+   (direct-touch.js, #807), from its top left. */
+#screen {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
+canvas#view {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  /* Shown only while the engine owns the screen; the page's own interface
+     shows the blueprint background. Hidden, it keeps its size and the
+     engine keeps rendering. */
+  visibility: hidden;
+}
+
+html[data-engine-input] canvas#view {
+  visibility: visible;
+}
+
+/* The game is drawn in landscape: on an upright phone (iOS lets web apps
+   neither lock nor request an orientation) the canvas is laid out
+   landscape and turned 90° clockwise, so the engine sees a landscape size.
+   input.js turns positions back. Not in the ergonomic mobile mode
+   (main.js, #806): upright, at the screen's own aspect. */
+@media (orientation: portrait) and (pointer: coarse) {
+  html:not([data-touch-mode="experimental"]) canvas#view {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
+/* The level's touch controls (touch-controls.js) and the console's on
+   touch screens (console-touch.js): over the canvas, in the game's
+   landscape frame, clear of the safe areas. */
+:is(#touch-controls, #console-touch) {
+  --safe-top: env(safe-area-inset-top);
+  --safe-right: env(safe-area-inset-right);
+  --safe-bottom: env(safe-area-inset-bottom);
+  --safe-left: env(safe-area-inset-left);
+  --edge: 16px;
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Turned with the canvas on upright phones (unless in the ergonomic mode): the
+   controls' top is the screen's right, their left the screen's top. */
+@media (orientation: portrait) and (pointer: coarse) {
+  html:not([data-touch-mode="experimental"]) :is(#touch-controls, #console-touch) {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+    --safe-top: env(safe-area-inset-right);
+    --safe-right: env(safe-area-inset-bottom);
+    --safe-bottom: env(safe-area-inset-left);
+    --safe-left: env(safe-area-inset-top);
+  }
+}
+
+/* Over the game, instruments in the style of its HUD (design A of #105;
+   the art is touch-art.js): gunmetal discs with thin rims at the weight of
+   the minimap's ring, teal glyphs. The colours come from the game when it
+   is imported (touch-controls.js sets them): teal, the HUD's posture
+   icons'; grey, the crosshair's. These are the approximations'. */
+:is(#touch-controls, #console-touch) {
+  --hud-teal: 36, 178, 162;
+  --hud-teal-hi: 112, 205, 195;
+  --hud-grey: 178, 178, 178;
+  --hud-rim: 1.5px;
+}
+
+.touch-move,
+.touch-look {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.touch-move {
+  left: 0;
+  right: 50%;
+}
+
+.touch-look {
+  left: 50%;
+  right: 0;
+}
+
+/* Experimental touch controls (#772, #802): the whole picture moves and
+   looks, a tap moving there, a drag looking; no stick. */
+.touch-controls[data-mode="experimental"] .touch-look {
+  left: 0;
+}
+
+.touch-controls[data-mode="experimental"] .touch-move {
+  display: none;
+}
+
+/* A trip's destination (#772): a plain ring with a dot, centred on the
+   place touch-controls.js moves it to. */
+.touch-destination {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid rgb(var(--hud-teal-hi));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
+.touch-destination::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: rgb(var(--hud-teal-hi));
+}
+
+.touch-destination[hidden] {
+  display: none;
+}
+
+/* The art's canvases, centred in their element at their own CSS size
+   (touch-controls.js sizes them). */
+:is(#touch-controls, #console-touch) canvas {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* The move stick: a gunmetal disc resting at the bottom left; held, centred
+   under the thumb. Its radius (56 px) is the full deflection; beyond it the
+   sprint chevrons and the sprint lock target, placed by touch-controls.js
+   (2.1 radii up, controls.rs LOCK_REACH, or closer or turned where that
+   won't fit). Past the rim and locked the segmented ring shows. */
+.touch-stick {
+  position: absolute;
+  left: calc(var(--safe-left) + var(--edge) + 64px);
+  top: calc(100% - var(--safe-bottom) - var(--edge) - 64px);
+  width: 112px;
+  height: 112px;
+  margin: -56px 0 0 -56px;
+  border-radius: 50%;
+  pointer-events: none;
+  transition: opacity 0.6s;
+}
+
+.touch-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
+}
+
+.touch-stick.held .touch-rim {
+  border-color: rgb(var(--hud-teal-hi));
+}
+
+.touch-stick:is(.past, .locked) .touch-rim {
+  border-color: transparent;
+}
+
+.touch-stick.held > .touch-disc {
+  opacity: 0.75;
+}
+
+.touch-segments {
+  visibility: hidden;
+  opacity: 0.8;
+}
+
+.touch-stick:is(.past, .locked) .touch-segments {
+  visibility: visible;
+}
+
+.touch-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  box-sizing: border-box;
+  width: 48px;
+  height: 48px;
+  margin: -24px 0 0 -24px;
+}
+
+.touch-knob::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.85);
+}
+
+.touch-stick.held .touch-knob::after {
+  border-color: rgb(var(--hud-teal-hi));
+}
+
+/* Past the rim the knob goes translucent: the chevrons and the target it
+   moves over stay readable; on the target and locked only its rim shows. */
+.touch-stick.past .touch-knob .touch-disc {
+  opacity: 0.35;
+}
+
+.touch-stick:is(.on-target, .locked) .touch-knob::after {
+  border-color: #fff;
+}
+
+.touch-stick:is(.on-target, .locked) .touch-knob .touch-disc {
+  visibility: hidden;
+}
+
+/* Sprint ahead and the lock target: shown while the stick is held, bright
+   past the rim, filled teal with the knob on it and once locked. */
+.touch-sprint-hint,
+.touch-lock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.touch-sprint-hint {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: rgb(var(--hud-grey));
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.touch-lock {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  padding: 3px;
+  border-radius: 50%;
+  background: rgba(10, 12, 16, 0.3) content-box;
+}
+
+.touch-figure.lit {
+  visibility: hidden;
+}
+
+.touch-stick:is(.held, .locked) :is(.touch-sprint-hint, .touch-lock) {
+  visibility: visible;
+}
+
+.touch-stick:is(.past, .locked) .touch-sprint-hint {
+  opacity: 1;
+  stroke: rgb(var(--hud-teal-hi));
+}
+
+.touch-stick:is(.past, .locked) .touch-lock {
+  opacity: 1;
+  transform: scale(1.15);
+}
+
+.touch-stick:is(.on-target, .locked) .touch-lock {
+  background-color: rgba(var(--hud-teal), 0.45);
+}
+
+.touch-stick:is(.on-target, .locked) .touch-figure {
+  visibility: hidden;
+}
+
+.touch-stick:is(.on-target, .locked) .touch-figure.lit {
+  visibility: visible;
+}
+
+/* Buttons: the disc, then the glyph, then the rim (grey; white held; bright
+   teal over a faint teal fill when on). */
+:is(#touch-controls, #console-touch) button.touch-button {
+  position: absolute;
+  box-sizing: border-box;
+  min-height: 0;
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: rgb(var(--hud-grey));
+  isolation: isolate;
+  transition: opacity 0.6s;
+  transform: none;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button::before,
+:is(#touch-controls, #console-touch) button.touch-button::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button::before {
+  z-index: 1;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button::after {
+  z-index: 3;
+  border: var(--hud-rim) solid rgba(var(--hud-grey), 0.7);
+}
+
+:is(#touch-controls, #console-touch) button.touch-button .touch-glyph {
+  z-index: 2;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button:focus-visible {
+  outline: 2px solid rgb(var(--hud-teal-hi));
+  outline-offset: 3px;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button.down {
+  transform: scale(0.92);
+}
+
+:is(#touch-controls, #console-touch) button.touch-button.down::after {
+  border-color: #fff;
+}
+
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"]::before {
+  background: rgba(var(--hud-teal), 0.16);
+}
+
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"]::after {
+  border-color: rgb(var(--hud-teal-hi));
+}
+
+:is(#touch-controls, #console-touch) button.touch-button[aria-pressed="true"].down::after {
+  border-color: #fff;
+}
+
+/* Crouch: the crouch icon; brighter when on; the creep icon in the low
+   crouch. */
+button.touch-button.crouch .touch-glyph:is(.on, .low),
+button.touch-button.crouch[aria-pressed="true"] .touch-glyph,
+button.touch-button.crouch.low .touch-glyph.on {
+  visibility: hidden;
+}
+
+button.touch-button.crouch[aria-pressed="true"]:not(.low) .touch-glyph.on,
+button.touch-button.crouch.low .touch-glyph.low {
+  visibility: visible;
+}
+
+/* Torch and Night vision: their glyph; brighter when on. */
+button.touch-button:is(.torch, .night-vision) .touch-glyph.on,
+button.touch-button:is(.torch, .night-vision)[aria-pressed="true"] .touch-glyph:not(.on) {
+  visibility: hidden;
+}
+
+button.touch-button:is(.torch, .night-vision)[aria-pressed="true"] .touch-glyph.on {
+  visibility: visible;
+}
+
+/* The gestures a button takes, as chevrons at its edges while it is held
+   (our design: no permanent arrows). */
+.touch-edges {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.6;
+  visibility: hidden;
+}
+
+button.touch-button.down .touch-edges {
+  visibility: visible;
+}
+
+/* Console (#642): right of Menu in the level; over the main menu, where
+   Menu isn't, at Menu's place. */
+#touch-controls button.touch-button.console,
+#console-touch button.touch-button.console {
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+#touch-controls button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge) + 56px);
+}
+
+#console-touch button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge));
+}
+
+#touch-controls button.touch-button.menu {
+  left: calc(var(--safe-left) + var(--edge));
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+/* Inventory (#110) in the top right corner, Menu's counterpart, above the
+   look area and clear of the right thumb's zone. */
+#touch-controls button.touch-button.inventory {
+  right: calc(var(--safe-right) + var(--edge));
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+/* PDA (#730) left of Inventory, the other in-game window. */
+#touch-controls button.touch-button.pda {
+  right: calc(var(--safe-right) + var(--edge) + 56px);
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+/* Over the open PDA its button alone, at its place, or with the cursor's
+   controls (touch-controls.js); touches elsewhere pass to input.js. */
+#touch-controls:is(.pda-open, .cursor) {
+  pointer-events: none;
+}
+
+#touch-controls.pda-open:not(.cursor) > :not(button.touch-button.pda) {
+  display: none;
+}
+
+#touch-controls:is(.pda-open, .cursor) :is(button.touch-button, .touch-move) {
+  pointer-events: auto;
+}
+
+/* The cursor's controls (#856): the stick, Menu, Click and Right-click,
+   PDA over the open PDA; no sprint. */
+#touch-controls.cursor > :not(.touch-move, button.touch-button:is(.menu, .pda), .touch-cursor-actions),
+#touch-controls.cursor:not(.pda-open) > button.touch-button.pda,
+#touch-controls.cursor :is(.touch-sprint-hint, .touch-lock),
+#touch-controls:not(.cursor) > .touch-cursor-actions {
+  display: none;
+}
+
+/* Over the main menu Console moves aside for Menu, as in the level. */
+#touch-controls.cursor:not([hidden]) ~ #console-touch button.touch-button.console {
+  left: calc(var(--safe-left) + var(--edge) + 56px);
+}
+
+/* Torch, then Night vision, in a row left of PDA along the top edge
+   (#363): above the look area and clear of both thumbs' zones, away from
+   Menu's side, where the move stick's lock target reaches up. Fixed places:
+   Night vision showing or not moves nothing. */
+#touch-controls button.touch-button:is(.torch, .night-vision) {
+  top: calc(var(--safe-top) + var(--edge));
+  width: 44px;
+  height: 44px;
+}
+
+#touch-controls button.touch-button.torch {
+  right: calc(var(--safe-right) + var(--edge) + 112px);
+}
+
+#touch-controls button.touch-button.night-vision {
+  right: calc(var(--safe-right) + var(--edge) + 168px);
+}
+
+:is(#touch-controls, #console-touch) :is(button.touch-button, .console-area)[hidden] {
+  display: none;
+}
+
+/* Use above Jump (#874), shown while an object under the crosshair has a
+   hint: under the right thumb, clear of Jump and Crouch. */
+#touch-controls button.touch-button.use {
+  right: calc(var(--safe-right) + var(--edge) + 8px);
+  bottom: calc(var(--safe-bottom) + var(--edge) + 100px);
+  width: 64px;
+  height: 64px;
+}
+
+/* Jump, the primary, at the corner; Crouch to its left. */
+.touch-actions {
+  position: absolute;
+  right: calc(var(--safe-right) + var(--edge));
+  bottom: calc(var(--safe-bottom) + var(--edge));
+  width: 164px;
+  height: 80px;
+  pointer-events: none;
+}
+
+.touch-actions button.touch-button {
+  pointer-events: auto;
+}
+
+#touch-controls button.touch-button.jump {
+  right: 0;
+  bottom: 0;
+  width: 80px;
+  height: 80px;
+}
+
+#touch-controls button.touch-button.crouch {
+  right: 100px;
+  bottom: 4px;
+  width: 64px;
+  height: 64px;
+}
+
+/* Click at Jump's place, Right-click at Crouch's (#856). */
+.touch-cursor-actions {
+  position: absolute;
+  right: calc(var(--safe-right) + var(--edge));
+  bottom: calc(var(--safe-bottom) + var(--edge));
+  width: 164px;
+  height: 80px;
+  pointer-events: none;
+}
+
+#touch-controls button.touch-button.click {
+  right: 0;
+  bottom: 0;
+  width: 80px;
+  height: 80px;
+}
+
+#touch-controls button.touch-button.right-click {
+  right: 100px;
+  bottom: 4px;
+  width: 64px;
+  height: 64px;
+}
+
+/* Idle a while (touch-controls.js): everything but a held stick fades. */
+.touch-controls.idle button.touch-button,
+.touch-controls.idle .touch-stick:not(.held, .locked) {
+  opacity: 0.6;
+}
+
+/* The text entry for the save screen's name field on touch screens
+   (text-entry.js, #94): laid out as the canvas, an unseen input over the
+   field the engine draws, never taking taps itself (the cursor clicks the
+   field, #108). 16 px text: iOS zooms into smaller fields on focus
+   (believed). */
+#text-entry {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+@media (orientation: portrait) and (pointer: coarse) {
+  html:not([data-touch-mode="experimental"]) #text-entry {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    width: 100vh;
+    height: 100vw;
+    width: 100dvh;
+    height: 100dvw;
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+}
+
+#text-entry input {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  pointer-events: none;
+}
+
+/* The game's picture lifted while the console's key strip would cover its
+   prompt line (console-touch.js, #682); never where both are turned
+   instead (upright phones in the standard mode). */
+html[data-console-lift] :is(canvas#view, #console-touch) {
+  transform: translateY(calc(-1 * var(--console-lift)));
+}
+
+/* The console's layer takes only the taps of what it shows. */
+#console-touch {
+  pointer-events: none;
+}
+
+#console-touch :is(button, .console-area) {
+  pointer-events: auto;
+}
+
+/* The console's area (console-window.md 4.1: the top half over a level or
+   the menu): a tap raises the device's keyboard again. */
+#console-touch .console-area {
+  position: absolute;
+  inset: 0 0 50% 0;
+}
+
+/* The console's unseen input (console-touch.js), at the frame's top left;
+   16 px text, as the save field's. */
+#console-entry {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  opacity: 0;
+  pointer-events: none;
+  /* WebKit edits no text where selection is off (believed). */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* The console's key strip, right on top of the device's keyboard (and of
+   iOS's form accessory bar, console-touch.js) and upright with it:
+   one compact row of keys in the style of the touch controls, drawn 30 px
+   high, each a target the strip's full 44 px high (Apple's minimum). */
+#console-keys {
+  position: fixed;
+  left: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  display: flex;
+  gap: 4px;
+  padding: 0 max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  background: rgba(16, 18, 22, 0.92);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+#console-keys[hidden] {
+  display: none;
+}
+
+#console-keys button {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 44px;
+  margin: 0;
+  padding: 0 4px;
+  isolation: isolate;
+  border: none;
+  background: transparent;
+  color: rgb(178, 178, 178);
+  font: 600 14px/1 system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+}
+
+#console-keys button::before {
+  content: "";
+  position: absolute;
+  inset: 7px 0;
+  z-index: -1;
+  border: 1.5px solid rgba(178, 178, 178, 0.7);
+  border-radius: 7px;
+  background: rgba(40, 44, 50, 0.95);
+}
+
+#console-keys button.down {
+  color: #fff;
+}
+
+#console-keys button.down::before {
+  border-color: #fff;
+  background: rgba(36, 178, 162, 0.3);
+}
+
+/* The offer of full screen with Keyboard Lock in the level (fullscreen.js,
+   #85): small, in the top right corner over the game, with the system
+   pointer showing while it does (the engine draws none in the level). */
+html[data-engine-input][data-offer] {
+  cursor: auto;
+}
+
+.fullscreen-offer {
+  position: fixed;
+  padding-right: 2.5rem;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  box-sizing: border-box;
+  max-width: 17rem;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  background: var(--panel);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  user-select: none;
+}
+
+.fullscreen-offer p {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.fullscreen-offer button {
+  min-height: 36px;
+}
+
+/* Its close control, in the corner. */
+.fullscreen-offer button.close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  min-height: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.fullscreen-offer p {
+  padding-right: 0.5rem;
+}
+
+main {
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100vh;
+  min-height: 100dvh;
+  max-width: 34rem;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: calc(env(safe-area-inset-top) + 2rem) calc(env(safe-area-inset-right) + 1.25rem)
+    calc(env(safe-area-inset-bottom) + 1.25rem) calc(env(safe-area-inset-left) + 1.25rem);
+}
+
+/* Brand: the project's logo (docs/logo.svg's drawing and wordmark, without
+   its tile) straight on the page's blueprint. */
+.brand {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 0.25rem;
+}
+
+.brand h1 {
+  margin: 0;
+  line-height: 0;
+}
+
+.brand .logo {
+  display: block;
+  width: min(46vw, 200px);
+  height: auto;
+}
+
+/* The compact lockup, for short screens: the drawing beside the wordmark. */
+.brand .lockup {
+  display: none;
+  align-items: center;
+  gap: 0.9rem;
+}
+
+.brand .lockup img:first-child {
+  height: 56px;
+}
+
+.brand .lockup img:last-child {
+  height: 18px;
+}
+
+/* Deeper screens (Settings, Licences): the logo is Home's; the compact
+   lockup on top is the way Home (game-ui.js), on every device. */
+html[data-screen] .brand {
+  justify-content: flex-start;
+  margin-bottom: 0.25rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+html[data-screen] .brand:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 4px;
+}
+
+html[data-screen] .brand .logo {
+  display: none;
+}
+
+html[data-screen] .brand .lockup {
+  display: flex;
+}
+
+/* Moving between screens: a short slide, forward into deeper screens and
+   back out of them (navigate() in game-ui.js). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.24s;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+html[data-nav="forward"]::view-transition-old(root) {
+  animation-name: slide-out-left;
+}
+
+html[data-nav="forward"]::view-transition-new(root) {
+  animation-name: slide-in-right;
+}
+
+html[data-nav="back"]::view-transition-old(root) {
+  animation-name: slide-out-right;
+}
+
+html[data-nav="back"]::view-transition-new(root) {
+  animation-name: slide-in-left;
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-out-left {
+  to {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-30%);
+    opacity: 0;
+  }
+}
+
+@keyframes slide-out-right {
+  to {
+    transform: translateX(30%);
+    opacity: 0;
+  }
+}
+
+/* Footer: the version line, a drawing's title-block note, and the links. */
+footer {
+  margin-top: auto;
+  padding-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The links' line: the source and Licences, a dot between them. */
+footer .links {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--ink-3);
+}
+
+footer .licences-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+footer .licences-part[hidden] {
+  display: none;
+}
+
+footer .links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 32px;
+  padding: 0 0.75rem;
+  border-radius: 999px;
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+footer .links svg {
+  width: 16px;
+  height: 16px;
+}
+
+footer .links a:hover {
+  color: var(--ink);
+  background: rgba(159, 203, 250, 0.1);
+}
+
+footer .links a:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+#status {
+  margin: 0;
+  text-align: center;
+  font: 12px/1.4 var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+#status[data-state="error"] {
+  color: var(--danger);
+}
+
+#game {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* Secondary actions: at the bottom, away from Play, as wide as its panel's
+   content (Play's width). */
+#game .bottom {
+  margin-top: auto;
+  padding: 0 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.screen-head h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+button.back {
+  padding: 0 0.9rem;
+}
+
+/* Licences' text: the notices as written, wrapped to the column (no
+   sideways scrolling on a phone), selectable, scrolled with the page. */
+.panel.notices pre {
+  margin: 0;
+  font: 0.75rem/1.55 var(--mono);
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.panel.notices .note {
+  margin-top: 0 !important;
+}
+
+.panel.notices button {
+  margin-top: 0.75rem;
+}
+
+.panel .value {
+  margin: 0 0 0.25rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* A setting with its explanation; the whole row toggles. */
+.switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+  cursor: pointer;
+}
+
+.switch input {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0.15rem 0 0;
+  accent-color: var(--ink);
+}
+
+.switch span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.switch small {
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+.panel .wide:not([hidden]) {
+  margin-top: 0.75rem;
+}
+
+/* Irreversible actions, set apart as on GitHub. */
+.panel.danger-zone {
+  border-color: rgba(255, 155, 143, 0.55);
+}
+
+.panel.danger-zone .label {
+  color: var(--danger);
+}
+
+.panel.danger-zone .danger-item + .danger-item {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255, 155, 143, 0.25);
+}
+
+/* An action's outcome, focused for screen readers and the keyboard only. */
+.danger-item [role="status"]:focus {
+  outline: none;
+}
+
+/* A confirmation in place of the control that asked for it. */
+.callout.confirm {
+  margin-bottom: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.panel .confirm-actions button.danger.filled {
+  margin-top: 0;
+}
+
+/* Settings' actions sit at their content's width, one below the other. */
+.panel button.panel-action {
+  margin-top: 0.75rem;
+}
+
+.panel button.panel-action:not([hidden]) {
+  display: block;
+}
+
+button.danger.filled {
+  margin-top: 0.75rem;
+  background: #c4382c;
+  border-color: #c4382c;
+  color: #fff;
+  font-weight: 650;
+}
+
+button.danger.filled:hover:not(:disabled) {
+  background: #d8483b;
+  border-color: #d8483b;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* Small uppercase captions, like a drawing's annotations. */
+.label {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.panel h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 650;
+}
+
+.panel p {
+  margin: 0 0 0.75rem;
+  color: var(--ink-2);
+}
+
+.panel p:last-child {
+  margin-bottom: 0;
+}
+
+/* The player's own game's splash picture across the top of the Ready panel,
+   whole, fading into it. */
+.panel.ready {
+  overflow: hidden;
+}
+
+.panel.ready .cover {
+  display: block;
+  width: calc(100% + 2.5rem);
+  height: auto;
+  margin: -1.25rem -1.25rem 1rem;
+  -webkit-mask-image: linear-gradient(#000 55%, transparent);
+  mask-image: linear-gradient(#000 55%, transparent);
+}
+
+/* A warning inside a panel: what happened and what to do. */
+.callout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem 0.9rem;
+  border-left: 3px solid #f5c26b;
+  border-radius: 8px;
+  background: rgba(245, 194, 107, 0.1);
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.callout > strong {
+  color: #f5c26b;
+  font-weight: 650;
+}
+
+.callout.problem {
+  border-left-color: var(--danger);
+  background: rgba(255, 155, 143, 0.1);
+}
+
+.callout.problem > strong {
+  color: var(--danger);
+}
+
+.game-title {
+  margin: 0 0 1rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: rgba(159, 203, 250, 0.08);
+  border: 1px solid var(--panel-edge);
+  border-radius: 12px;
+  min-height: 44px;
+  padding: 0 1.1rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+button:hover:not(:disabled) {
+  background: rgba(159, 203, 250, 0.16);
+  border-color: rgba(159, 203, 250, 0.45);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--line);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* White on navy, like the logo's V. */
+button.primary {
+  background: var(--ink);
+  color: var(--navy-3);
+  border-color: var(--ink);
+  font-weight: 650;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #fff;
+  border-color: #fff;
+}
+
+button.play {
+  display: block;
+  width: 100%;
+  min-height: 64px;
+  font-size: 1.375rem;
+  font-weight: 750;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-indent: 0.22em;
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(159, 203, 250, 0.25);
+}
+
+button.wide {
+  width: 100%;
+}
+
+.panel.warning {
+  border-color: rgba(255, 155, 143, 0.45);
+}
+
+button.danger {
+  color: var(--danger);
+  background: transparent;
+  border-color: rgba(255, 155, 143, 0.35);
+}
+
+button.danger:hover:not(:disabled) {
+  background: rgba(255, 155, 143, 0.1);
+  border-color: rgba(255, 155, 143, 0.6);
+}
+
+.note {
+  margin-top: 0.75rem !important;
+  font-size: 0.875rem;
+  color: var(--ink-3);
+}
+
+.note.error {
+  color: var(--danger);
+}
+
+progress {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin: 1rem 0 0.5rem;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(159, 203, 250, 0.15);
+  overflow: hidden;
+}
+
+progress::-webkit-progress-bar {
+  background: rgba(159, 203, 250, 0.15);
+}
+
+progress::-webkit-progress-value {
+  background: var(--ink);
+  border-radius: 3px;
+}
+
+progress::-moz-progress-bar {
+  background: var(--ink);
+}
+
+/* A stopped import's bar takes its notice's colour. */
+progress.warning::-webkit-progress-value {
+  background: #f5c26b;
+}
+
+progress.problem::-webkit-progress-value {
+  background: var(--danger);
+}
+
+progress.warning::-moz-progress-bar {
+  background: #f5c26b;
+}
+
+progress.problem::-moz-progress-bar {
+  background: var(--danger);
+}
+
+.message {
+  font-size: 0.875rem;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.steps {
+  margin: 0 0 1.25rem;
+  padding-left: 1.25rem;
+  color: var(--ink-2);
+}
+
+.steps li + li {
+  margin-top: 0.4rem;
+}
+
+.panel a {
+  color: var(--line);
+  text-underline-offset: 0.15em;
+}
+
+.panel a:hover {
+  color: var(--ink);
+}
+
+/* A system symbol inline in text (e.g. iOS's Share). */
+.inline-icon svg {
+  width: 0.95em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  color: var(--ink);
+}
+
+code {
+  font: 0.875em var(--mono);
+  color: var(--ink);
+}
+
+/* Wide windows: the logo takes a left column, centred and kept in view, and
+   the content a right one, so controls stay above the fold without
+   shrinking the logo. */
+@media (min-width: 900px) and (min-height: 501px) and (orientation: landscape) {
+  main {
+    max-width: 66rem;
+    display: grid;
+    grid-template-columns: minmax(16rem, 1fr) minmax(0, 34rem);
+    grid-template-rows: 1fr auto;
+    column-gap: 4rem;
+    align-items: center;
+  }
+
+  .brand {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    position: sticky;
+    top: 0;
+    align-self: center;
+    margin: 0;
+  }
+
+  /* As large as the column allows, and never taller than the window. */
+  .brand .logo {
+    width: min(100%, 360px);
+    max-height: 70vh;
+  }
+
+  /* Deeper screens (Settings, Licences): one column under the lockup. */
+  html[data-screen] main {
+    max-width: 34rem;
+    display: flex;
+    /* Full width, however little content: the lockup and the panels share
+       one left edge. */
+    align-items: stretch;
+  }
+
+  html[data-screen] .brand {
+    position: static;
+    align-self: flex-start;
+  }
+
+  html[data-screen] #game {
+    align-self: stretch;
+  }
+
+  #game {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: center;
+  }
+
+  #game .bottom {
+    margin-top: 1rem;
+  }
+
+  footer {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+/* Landscape phones: the same layout as portrait, with the compact lockup
+   to save height. */
+@media (orientation: landscape) and (max-height: 500px) {
+  main {
+    max-width: 40rem;
+    padding-top: calc(env(safe-area-inset-top) + 1rem);
+  }
+
+  .brand .logo {
+    display: none;
+  }
+
+  .brand .lockup {
+    display: flex;
+  }
+}
