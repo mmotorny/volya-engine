@@ -8,11 +8,12 @@
 
 use std::collections::HashMap;
 use std::io::{self, Cursor};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::controls::{Bindings, Controls};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::console::{Console, ConsoleFiles, PRESET_FILES};
+use crate::core::info_portions::Declarations;
 use crate::core::input::Key;
 use crate::core::movement::Settings;
 use crate::core::text::{self, Fonts, Localization, StringTable};
@@ -162,6 +163,9 @@ pub struct GameData {
     pub user_config: Vec<u8>,
     /// `textures\ui\ui_ani_cursor`: the frames of the menu cursor.
     pub cursor: volya_engine_formats::ui::seq::Sequence,
+    /// The information portions, articles and dialogs declared
+    /// ([`GameData::info_portions`]).
+    info_portions: OnceLock<Arc<Declarations>>,
 }
 
 impl GameData {
@@ -280,7 +284,22 @@ impl GameData {
             console_files,
             user_config: user,
             cursor,
+            info_portions: OnceLock::new(),
         })
+    }
+
+    /// The information portions, articles and dialogs declared
+    /// (info-portions.md 1, dialog-files.md 1): read from `tree` the first
+    /// time a game needs them, then kept for the run. The original builds
+    /// the index once at its game data's initialisation, a moment the spec
+    /// leaves unestablished (1.2); reading it with the first New Game keeps
+    /// it off the startup (our choice).
+    pub fn info_portions(&self, tree: &dyn Vfs) -> io::Result<Arc<Declarations>> {
+        if let Some(d) = self.info_portions.get() {
+            return Ok(Arc::clone(d));
+        }
+        let d = Arc::new(Declarations::read(tree, &self.aliases, &self.system)?);
+        Ok(Arc::clone(self.info_portions.get_or_init(|| d)))
     }
 
     /// Replaces the user configuration file read at startup, and what it

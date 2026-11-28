@@ -23,10 +23,11 @@
 //! the cursor, south (A / cross) is the left button; east (B / circle) is
 //! the key bound to `quit`.
 //!
-//! **What waits for other systems**: the information portions are
-//! collected ([`PdaWindow::take_portions`]) until the character can
-//! receive them (#738); the tutorials' `pda_section` (#739); the HUD's
-//! flashing icon and the HUD hidden while open (#740).
+//! The information portions are collected ([`PdaWindow::take_portions`])
+//! for the level to give the character (info-portions.md 7.3).
+//!
+//! **What waits for other systems**: the tutorials' `pda_section` (#739);
+//! the HUD's flashing icon and the HUD hidden while open (#740).
 
 pub mod hint;
 pub mod layout;

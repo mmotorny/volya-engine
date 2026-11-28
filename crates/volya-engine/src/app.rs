@@ -1116,6 +1116,9 @@ impl App {
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
+            for line in level.take_portion_log() {
+                self.console.log_mut().message(&line);
+            }
             let effects = level.effects().and_then(|e| e.fatal()).map(str::to_owned);
             if let Some(error) = level.take_fatal().or(effects) {
                 self.failed.get_or_insert(error);
@@ -1955,8 +1958,7 @@ impl App {
                         self.console.log_mut().message(&line);
                     }
                     level.controls_mut().keys_only = Some(pda.kept(&keys));
-                    // TODO(#738): the character receives them.
-                    pda.take_portions();
+                    level.give_player(&pda.take_portions());
                     level.update(now, input);
                     // The window has the quit key (5), and the page holds
                     // no pointer lock while it shows: a back request or an
@@ -2026,8 +2028,7 @@ impl App {
                     pda.act(tab, input.cursor_ui());
                     let keys = pda_keys(data, level.controls());
                     level.controls_mut().keys_only = Some(pda.kept(&keys));
-                    // TODO(#738): the character receives them.
-                    pda.take_portions();
+                    level.give_player(&pda.take_portions());
                 }
             }
         }
@@ -3616,6 +3617,64 @@ mod tests {
         input.end_frame();
         assert!(!app.inventory_open());
         assert_eq!(logged(&app, start), 1);
+    }
+
+    /// pda-window.md 8, info-portions.md 7.3: the window's portions reach
+    /// the player character by transfers; `ui_pda` and `ui_pda_hide`
+    /// disable each other.
+    #[test]
+    fn the_pda_window_gives_its_portions_to_the_character() {
+        use crate::core::info_portions::Declarations;
+        use volya_engine_formats::xml;
+        let portions = xml::parse(
+            br#"<game_information_portions>
+                <info_portion id="ui_pda"><disable>ui_pda_hide</disable></info_portion>
+                <info_portion id="ui_pda_hide"><disable>ui_pda</disable></info_portion>
+                <info_portion id="ui_pda_contacts"/>
+            </game_information_portions>"#,
+        )
+        .unwrap();
+        let declarations = Declarations::from_documents(
+            &[("info_portions".into(), portions)],
+            &[],
+            &[],
+            &Default::default(),
+        )
+        .unwrap();
+        let (tree, mut app, mut input, mut audio) = in_level_with_inventory();
+        if let Some(Phase::Level { level, .. }) = &mut app.phase {
+            let empty = LevelScreen::empty(app.data.controls.clone(), 0);
+            let old = std::mem::replace(&mut **level, empty);
+            **level = old.with_info_portions(declarations);
+        }
+        let mut t = 32.0;
+        let mut frame = |app: &mut App, input: &mut Input| {
+            app.update(&tree, t, input, &mut audio);
+            input.end_frame();
+            t += 16.0;
+        };
+        let held = |app: &App| -> Vec<String> {
+            let Some(Phase::Level { level, .. }) = &app.phase else {
+                panic!("no level")
+            };
+            let portions = level.info_portions().unwrap();
+            let list = portions.list(portions.player());
+            list.iter().map(|k| k.id.clone()).collect()
+        };
+        press(&mut input, Key::P);
+        frame(&mut app, &mut input);
+        assert!(app.pda_open());
+        assert_eq!(held(&app), ["ui_pda"]);
+        press(&mut input, Key::Escape);
+        frame(&mut app, &mut input);
+        assert!(!app.pda_open());
+        assert_eq!(held(&app), ["ui_pda_hide"]);
+        // The contacts key opens it on tab 3: its portion, then `ui_pda`.
+        press(&mut input, Key::H);
+        frame(&mut app, &mut input);
+        assert_eq!(held(&app), ["ui_pda_contacts", "ui_pda"]);
+        frame(&mut app, &mut input);
+        assert_eq!(held(&app), ["ui_pda_contacts", "ui_pda"], "no fatal error");
     }
 
     /// pda-window.md 4–6: P opens the PDA on the tasks tab over the

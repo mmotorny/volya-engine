@@ -39,6 +39,7 @@ use crate::core::config;
 use crate::core::config::Config;
 use crate::core::detector::DetectorSection;
 use crate::core::file_cache::{self, CachedFile};
+use crate::core::info_portions::InfoPortions;
 use crate::core::input::Input;
 use crate::core::level::{DrawItem, Level};
 use crate::core::lights::LightId;
@@ -399,6 +400,9 @@ pub struct LevelScreen {
     /// The offline simulation (offline-simulation.md); `None` only in the
     /// unit tests' empty level.
     simulation: Option<Simulation>,
+    /// The holders' information portions (info-portions.md); `None` only in
+    /// the unit tests' empty level.
+    info_portions: Option<InfoPortions>,
     /// Where each of the objects' instances is drawn; `None` while it is
     /// not online. Shared with the scenes, replaced when it changes.
     placements: Arc<Vec<Option<Mat4>>>,
@@ -1484,6 +1488,7 @@ pub struct NewGameLoad {
     /// ([`NewGameLoad::set_prefetched`]).
     prefetched: Option<Arc<objects::Prefetched>>,
     simulation: Option<Simulation>,
+    info_portions: Option<InfoPortions>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
     spawned: Option<objects::Spawned>,
@@ -1809,6 +1814,9 @@ impl NewGameLoad {
                     .object(character.owner.id)
                     .and_then(|o| o.record.object.visual())
                     .map(|v| v.model.to_string());
+                // info-portions.md 2: no holder holds a portion yet.
+                let declarations = data.info_portions(tree)?;
+                self.info_portions = Some(InfoPortions::new(declarations, character.owner.id));
                 self.character = Some(character);
                 self.simulation = Some(sim);
                 self.clock = Some(clock);
@@ -2460,6 +2468,7 @@ impl NewGameLoad {
         let character = earlier(self.character, "player character")?;
         let spawned = earlier(self.spawned, "objects")?;
         let simulation = earlier(self.simulation, "simulation")?;
+        let info_portions = earlier(self.info_portions, "information portions")?;
         let footsteps = earlier(self.footsteps, "footsteps")?;
         let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
@@ -2557,6 +2566,7 @@ impl NewGameLoad {
             back: false,
             sun_fade: SunFade::default(),
             simulation: Some(simulation),
+            info_portions: Some(info_portions),
             placements: Arc::new(placements),
             instances,
             effects,
@@ -2744,6 +2754,7 @@ impl LevelScreen {
         self.zones.clear_events();
         self.clock.set_paused(false);
         self.clock.advance(elapsed);
+        self.deliver_portions();
         let player = self.player.state();
         // A tap's ray from the view the tap saw: the latest frame's.
         let view = crate::controls::LevelView {
@@ -3315,6 +3326,58 @@ impl LevelScreen {
         match changes {
             Ok(changes) => self.place_objects(&changes),
             Err(e) => self.record_fatal(e.to_string()),
+        }
+    }
+
+    /// The holders' information portions (info-portions.md).
+    pub fn info_portions(&self) -> Option<&InfoPortions> {
+        self.info_portions.as_ref()
+    }
+
+    /// The holders' information portions, to give, disable and ask.
+    pub fn info_portions_mut(&mut self) -> Option<&mut InfoPortions> {
+        self.info_portions.as_mut()
+    }
+
+    /// Gives the player character each of `ids` by a transfer
+    /// (info-portions.md 3.1) at the clock's game time, as the engine gives
+    /// the interface portions (7.3). An undeclared id is fatal, kept for
+    /// [`LevelScreen::take_fatal`].
+    pub fn give_player(&mut self, ids: &[&str]) {
+        let now = self.clock.time();
+        let Some(portions) = &mut self.info_portions else {
+            return;
+        };
+        let player = portions.player();
+        let given = ids.iter().try_for_each(|id| portions.give(player, id, now));
+        if let Err(e) = given {
+            self.record_fatal(e.to_string());
+        }
+    }
+
+    /// The log lines the information portions wrote since the last call
+    /// (info-portions.md 1.2: an undeclared id's listing of the index).
+    pub fn take_portion_log(&mut self) -> Vec<String> {
+        self.info_portions
+            .as_mut()
+            .map_or_else(Vec::new, InfoPortions::take_log)
+    }
+
+    /// The messages sent to the server return (info-portions.md 3.1,
+    /// believed: on a later update than the transfer). An error is fatal.
+    /// The script part's events have no receiver yet and are dropped
+    /// (TODO(#220): the script interface calls the action functions and
+    /// the callbacks; TODO(#993): the dialogue window takes its rebuild
+    /// mark).
+    fn deliver_portions(&mut self) {
+        let now = self.clock.time();
+        let Some(portions) = &mut self.info_portions else {
+            return;
+        };
+        let delivered = portions.deliver(now);
+        portions.take_events();
+        if let Err(e) = delivered {
+            self.record_fatal(e.to_string());
         }
     }
 
@@ -4208,6 +4271,17 @@ impl LevelScreen {
         self
     }
 
+    /// The level with `declarations` declared and no portion held, its
+    /// player character's id that of its character (0 without one).
+    pub(crate) fn with_info_portions(
+        mut self,
+        declarations: crate::core::info_portions::Declarations,
+    ) -> Self {
+        let player = self.character.as_ref().map_or(0, |c| c.owner.id);
+        self.info_portions = Some(InfoPortions::new(Arc::new(declarations), player));
+        self
+    }
+
     /// A level with nothing in it, its player standing at the origin with
     /// `controls` (unit tests of what runs a level; not drawn).
     pub(crate) fn empty(controls: Controls, now: u64) -> Self {
@@ -4324,6 +4398,7 @@ impl LevelScreen {
             back: false,
             sun_fade: SunFade::default(),
             simulation: None,
+            info_portions: None,
             placements: Arc::new(Vec::new()),
             instances: HashMap::new(),
             effects: None,
