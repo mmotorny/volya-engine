@@ -71,7 +71,7 @@ The probes run on real Direct3D 9 hardware on demand: on the user's Windows PC, 
 On the Windows PC, in PowerShell, with `gh` signed in, from the desktop of the logged-in user (the program opens a small window for its device):
 
 1. The newest runner's tag (or the one the requester named):
-   `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '[.[] | select(.tagName | startswith("d3d9probes-"))][0].tagName'`
+   `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '.[].tagName' | Where-Object { $_ -like 'd3d9probes-*' } | Select-Object -First 1`
 2. Download and unpack it into a fresh folder:
    `$run = "$env:TEMP\$tag"; Remove-Item -Recurse -Force $run -ErrorAction Ignore; gh release download $tag --repo mmotorny/volya-engine --pattern d3d9probes.zip --dir $run; Expand-Archive "$run\d3d9probes.zip" -DestinationPath $run`
    (without `gh`: `Invoke-WebRequest https://github.com/mmotorny/volya-engine/releases/download/$tag/d3d9probes.zip -OutFile "$run\d3d9probes.zip"` into the created folder.)
@@ -96,7 +96,7 @@ Black-box, approved by the user: `tests/odeharness/` drives a physics library th
 
 The shipped library's results are black-box outputs (docs/clean-room.md): local only, never committed; they come to the Mac over the local network like a capture's frames (`frames-receive`), and the comparison runs there. The run itself, in PowerShell:
 
-1. `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '[.[] | select(.tagName | startswith("odeharness-"))][0].tagName'`
+1. `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '.[].tagName' | Where-Object { $_ -like 'odeharness-*' } | Select-Object -First 1`
 2. `$run = "$env:TEMP\$tag"; Remove-Item -Recurse -Force $run -ErrorAction Ignore; gh release download $tag --repo mmotorny/volya-engine --pattern odeharness.zip --dir $run; Expand-Archive "$run\odeharness.zip" -DestinationPath $run`
 3. `Set-Location $run; cmd /c ".\odeharness.exe ""<game folder>\bin"" results > log.txt 2>&1"; $LASTEXITCODE` (seconds; 0, or 1 with the reason in `log.txt`).
 4. `cmd /c ".\odeharness.exe compare ours results > compare.txt 2>&1"`: the comparison, the start of the report.
@@ -122,7 +122,7 @@ The runner zip (`bazel build //tools/wincapture:runner`: the programs and librar
 On the Windows PC, by the Claude Code session there, in PowerShell from the logged-in user's desktop, with `gh` signed in (the game takes the screen in full screen at 1920 × 1080 for the run; nothing else may come to the front meanwhile):
 
 1. The newest runner (or the one the requester named), unpacked into a fresh folder:
-   `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '[.[] | select(.tagName | startswith("wincapture-"))][0].tagName'`
+   `$tag = gh release list --repo mmotorny/volya-engine --json tagName --jq '.[].tagName' | Where-Object { $_ -like 'wincapture-*' } | Select-Object -First 1`
    `$started = Get-Date; $run = "$env:TEMP\$tag"; Remove-Item -Recurse -Force $run -ErrorAction Ignore; gh release download $tag --repo mmotorny/volya-engine --pattern wincapture.zip --dir $run; Expand-Archive -LiteralPath "$run\wincapture.zip" -DestinationPath $run` (`$started`: step 4 brings back only the runs made from here on)
 2. The self-test, then the check: `Set-Location $run; cmd /c ".\volyacapture.exe selftest > selftest.txt 2>&1"; $LASTEXITCODE`, 0 and `selftest passed` before going on (otherwise bring back `selftest.txt`, step 4). The check: two runs to the title menu, compared (the first also copies the install, about 6 GB):
    `Set-Location $run; cmd /c ".\volyacapture.exe check > check.txt 2>&1"; $LASTEXITCODE`
