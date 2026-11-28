@@ -63,6 +63,7 @@ volya_integration_tests(
     common_tags = ["gamedata"],
     crate = ":volya-engine-script",
     compile_data = [
+        "tests/support/campfire.rs",
         "tests/support/shipped_scripts.rs",
         "//crates/volya-engine-formats:tests/support/gog_archives.rs",
     ],

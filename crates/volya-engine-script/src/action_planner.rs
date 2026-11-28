@@ -22,9 +22,9 @@
 //! Each stalker gets its motivation manager as it comes online
 //! ([`Scripts::spawn`]): a planner set up with the stalker, holding the
 //! engine's own actions and evaluators of 12.2, which are the stalker
-//! planner's (CH-17, TODO(#1185)); the engine updates it with
-//! [`Scripts::update_motivation_manager`]. See docs/architecture/scripts.md,
-//! The action planner.
+//! planner's ([`crate::stalker_planner`], CH-17); the engine updates it
+//! with [`Scripts::update_motivation_manager`]. See
+//! docs/architecture/scripts.md, The action planner.
 
 pub mod search;
 pub mod world;
@@ -51,9 +51,6 @@ type Results = Result<Vec<Value>, String>;
 const GAP: &str = "#1222";
 /// The review marks, which leave their statements unestablished.
 const REVIEW: &str = "#1213";
-/// The stalker planner (CH-17), whose own actions and evaluators the
-/// motivation manager holds.
-const STALKER_PLANNER: &str = "#1185";
 
 /// The registry key of the Lua side's entry function.
 const ENTRY: &str = "volya.action_planner";
@@ -184,42 +181,6 @@ pub const STALKER_IDS: [(&str, i32); 119] = [
     ("sound_script", 23),
     // The 32-bit pattern D0001000 as a signed integer (believed, 9).
     ("sound_enemy_killed_or_wounded", -805_302_272),
-];
-
-/// The conditions of the motivation manager's engine evaluators (12.2).
-pub const MOTIVATION_CONDITIONS: [u32; 7] = [0, 2, 4, 6, 7, 8, 42];
-
-/// (condition, value) pairs.
-pub type Pairs = &'static [(u32, bool)];
-
-/// The motivation manager's engine actions (12.2): id, preconditions,
-/// effect.
-pub const MOTIVATION_ACTIONS: [(u32, Pairs, (u32, bool)); 6] = [
-    (
-        2,
-        &[(0, true), (7, false), (42, false), (8, false), (6, true)],
-        (6, false),
-    ),
-    (56, &[(0, false), (2, false)], (2, true)),
-    (
-        57,
-        &[
-            (0, true),
-            (7, false),
-            (42, false),
-            (8, false),
-            (6, false),
-            (4, false),
-        ],
-        (4, true),
-    ),
-    (58, &[(0, true), (42, false), (7, true)], (7, false)),
-    (59, &[(0, true), (42, true)], (42, false)),
-    (
-        60,
-        &[(0, true), (7, false), (42, false), (8, true)],
-        (8, false),
-    ),
 ];
 
 /// The motivation manager's goals (12.2): alive, and dead.
@@ -437,6 +398,13 @@ struct Root {
     planner: EnginePart,
     parts: Vec<EnginePart>,
 }
+
+/// The engine's own parts of a stalker's motivation manager, as the stalker
+/// planner builds them: the planner, then every part made for it.
+pub type RootParts = (EnginePart, Vec<EnginePart>);
+
+/// The game objects and engine services a planner reads.
+pub(crate) type Shared = (Rc<RefCell<GameObjects>>, Rc<RefCell<EngineServices>>);
 
 #[derive(Clone)]
 struct Context {
@@ -1033,8 +1001,14 @@ fn raw(ctx: &Context, maker: &ObjectMaker, args: &[Value]) -> Results {
         "pa_execute" => {
             let w = what("execute");
             let action = part.the_action(&w)?;
-            action.borrow_mut().first_execution = false;
+            let engine = {
+                let mut a = action.borrow_mut();
+                a.first_execution = false;
+                a.engine.clone()
+            };
             call.update(&part.the_planner(&w)?)?;
+            // An engine planner action's own step, after its update.
+            engine.map_or(Ok(()), |f| f(Phase::Execute))?;
             Ok(Vec::new())
         }
         "pa_finalize" => {
@@ -1448,10 +1422,9 @@ impl Scripts {
 
     /// Stalker `id` comes online with handle `handle` (10): its motivation
     /// manager is made, set up with it, holding the engine's own
-    /// evaluators and actions of 12.2. What they do is the stalker
-    /// planner's (TODO(#1185)): until then each raises a script error
-    /// naming it when the engine calls it. Nothing for another object or
-    /// when the planner isn't registered.
+    /// evaluators and actions, the stalker planner's root
+    /// ([`Scripts::build_root`]). Nothing for another object or when the
+    /// planner isn't registered.
     pub(crate) fn motivation_manager_comes_online(
         &mut self,
         id: u16,
@@ -1464,44 +1437,27 @@ impl Scripts {
         if !stalker {
             return Ok(());
         }
-        let mut root = Planner::default();
-        root.setup(Some(handle));
-        let planner = self
-            .lua_mut()
-            .new_engine_object("action_planner", |_| PlanPart::planner(root))?;
-        let mut parts = Vec::new();
-        for condition in MOTIVATION_CONDITIONS {
-            let evaluate: EngineEvaluate = Rc::new(move || {
-                Err(format!(
-                    "the stalker planner's evaluator of condition {condition} isn't implemented yet (TODO({STALKER_PLANNER}))"
-                ))
-            });
-            parts.push(self.add_engine_evaluator(
-                planner,
-                condition,
-                Evaluation::Engine(evaluate),
-            )?);
-        }
-        for (action, preconditions, effect) in MOTIVATION_ACTIONS {
-            let step: EngineStep = Rc::new(move |phase| {
-                Err(format!(
-                    "the stalker planner's action {action} ({phase:?}) isn't implemented yet (TODO({STALKER_PLANNER}))"
-                ))
-            });
-            let preconditions: Vec<WorldProperty> = (preconditions.iter())
-                .map(|&(c, v)| WorldProperty::new(c, v))
-                .collect();
-            let effects = [WorldProperty::new(effect.0, effect.1)];
-            parts.push(self.add_engine_action(
-                planner,
-                action,
-                &WorldState::of(&preconditions),
-                &WorldState::of(&effects),
-                Some(step),
-            )?);
-        }
+        let (planner, parts) = self.build_root(id, handle)?;
         ctx.roots.borrow_mut().insert(id, Root { planner, parts });
         Ok(())
+    }
+
+    /// A new planner engine object set up with `object` (6.2).
+    pub(crate) fn new_engine_planner(
+        &mut self,
+        object: Option<EnginePart>,
+    ) -> Result<EnginePart, Error> {
+        let mut planner = Planner::default();
+        planner.setup(object);
+        self.lua_mut()
+            .new_engine_object("action_planner", |_| PlanPart::planner(planner))
+    }
+
+    /// The game objects and engine services the planner was registered
+    /// with.
+    pub(crate) fn planner_shared(&self) -> Result<Shared, Error> {
+        let ctx = self.planner_context()?;
+        Ok((ctx.objects, ctx.services))
     }
 
     /// Stalker `id` goes offline or is removed: its motivation manager and
@@ -1594,6 +1550,50 @@ impl Scripts {
             .new_engine_object("action_base", |_| PlanPart {
                 action: Some(held),
                 planner: None,
+            })?;
+        let put = self.with_planner(planner, |p| {
+            p.put_action(HeldAction {
+                id,
+                object: part,
+                action,
+            })
+        });
+        put.ok_or_else(|| api("not a planner"))?.map_err(api)?;
+        Ok(part)
+    }
+
+    /// Adds a planner action the engine made itself to planner `planner`
+    /// under `id`, with its conditions (8): its action set up with the
+    /// planner's object and store, its inner planner set up with the
+    /// object, its goal its effects, its own store empty. `engine` runs
+    /// after the default of `initialize` and after the inner planner's
+    /// update in `execute`. Its part.
+    pub fn add_engine_planner_action(
+        &mut self,
+        planner: EnginePart,
+        id: u32,
+        preconditions: &WorldState,
+        effects: &WorldState,
+        engine: Option<EngineStep>,
+    ) -> Result<EnginePart, Error> {
+        let (object, storage) = self
+            .with_planner(planner, |p| (p.object, p.storage.clone()))
+            .ok_or_else(|| api("not a planner"))?;
+        let mut action = Action::new(object);
+        action.storage = Some(storage);
+        action.preconditions = preconditions.clone();
+        action.effects = effects.clone();
+        action.engine = engine;
+        let action = Rc::new(RefCell::new(action));
+        let mut inner = Planner::default();
+        inner.setup(object);
+        inner.set_goal(effects);
+        let held = Rc::clone(&action);
+        let part = self
+            .lua_mut()
+            .new_engine_object("planner_action", |_| PlanPart {
+                action: Some(held),
+                planner: Some(Rc::new(RefCell::new(inner))),
             })?;
         let put = self.with_planner(planner, |p| {
             p.put_action(HeldAction {

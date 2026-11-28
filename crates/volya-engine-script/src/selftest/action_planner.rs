@@ -58,18 +58,18 @@ pub fn check() -> Result<(), String> {
     }
 }
 
-const STALKER: u16 = 10;
+pub(super) const STALKER: u16 = 10;
 const RIFLE: u16 = 20;
 
-struct State {
-    s: Scripts,
-    services: Rc<RefCell<EngineServices>>,
+pub(super) struct State {
+    pub(super) s: Scripts,
+    pub(super) services: Rc<RefCell<EngineServices>>,
 }
 
 /// A state with the game object basics and the action planner
 /// registered, `_G` loaded, a global `obj(id)` giving handles, a stalker
 /// and a rifle online, and the test classes of [`CLASSES`].
-fn state() -> Result<State, String> {
+pub(super) fn state() -> Result<State, String> {
     let tree = Rc::new(Tree(
         [("gamedata/scripts/_g.script", "")]
             .iter()
@@ -571,7 +571,7 @@ m:action(57):add_precondition(world_property(1065, true))
 for _, id in ipairs({0, 2, 4, 6, 7, 8, 42}) do
   eq(m:evaluator(id) ~= nil, true, "evaluator " .. id)
 end
-raises(function() m:evaluator(42):evaluate() end, "#1185", "the engine's evaluator")
+eq(m:evaluator(42):evaluate(), false, "the engine's evaluator: no anomaly")
 m:remove_evaluator(stalker_ids.property_anomaly)
 m:add_evaluator(stalker_ids.property_anomaly, property_evaluator_const(false))
 eq(m:evaluator(42):evaluate(), false, "replaced by a constant")
@@ -676,9 +676,9 @@ taken()
     let result = t.s.update_motivation_manager(STALKER);
     let got = plan(&mut t)?;
     ensure(got == [58, 202, 204, 57], || format!("step 4 plan {got:?}"))?;
-    // The engine's combat planner is the stalker planner's.
+    // The engine's combat planner is CH-18's.
     ensure(
-        matches!(&result, Err(e) if e.kind == ErrorKind::Fatal && e.message.contains("#1185")),
+        matches!(&result, Err(e) if e.kind == ErrorKind::Fatal && e.message.contains("#1227")),
         || format!("step 4: {result:?}"),
     )
 }

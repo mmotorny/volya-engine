@@ -583,7 +583,8 @@ fn apply_level_events(scripts: &mut GameScripts) {
 /// The scheduled updates of a level frame at server time `now` (spec L
 /// 5.2): every object not marked for destruction (talk.md 5.1 for the
 /// characters; our reading for the others), in id
-/// order, gets its binder's `update(delta)`, `delta` the time since its
+/// order, gets its binder's `update(delta)` (a stalker then its think
+/// step, stalker-planner.md 5.1), `delta` the time since its
 /// previous update ([`update_delta`]). The scheduler's own rules are
 /// unestablished (L 5.2): our choice, every object every frame, the
 /// maximum scheduling interval taken as 0 (so at most 1000 ms), and none
@@ -612,12 +613,21 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
         if gone {
             continue;
         }
-        // The engine's own part first: an object under script control runs
+        // A stalker's own update (stalker-planner.md 5.1): its senses
+        // (steps 1, 4; TODO(#1131): none yet), its binder's update, then
+        // its think step, or its action queue under script control.
+        let stalker = scripts.scripts().motivation_manager(id).is_some();
+        // Another object's engine part first: under script control it runs
         // its action queue (script API V 2.4, believed its scheduled
         // update).
-        scripts.scripts().run_action_queue(id)?;
+        if !stalker {
+            scripts.scripts().run_action_queue(id)?;
+        }
         let updated = scripts.scripts().scheduled_update(id, delta);
         updated.map_err(|f| override_fatal(scripts, f))?;
+        if stalker {
+            scripts.scripts().think_step(id)?;
+        }
         // Its sound player's update, right after the object's own
         // (creature-sounds.md 2.1).
         scripts.scripts().update_sound_player(id);

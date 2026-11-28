@@ -429,6 +429,27 @@ pub struct Stalker {
     pub wounded: bool,
     /// Its second current and target headings (believed its head's).
     pub head_heading: (f32, f32),
+    /// Its memory's choices, which its planner reads
+    /// (docs/behavior/stalker-planner.md 1.2): nothing chooses them yet
+    /// (CH-15, TODO(#1131)).
+    pub choices: Choices,
+    /// The objects its touch sense touches (stalker-planner.md 1.2, 5.1
+    /// step 4): nothing touches yet (TODO(#1131)).
+    pub touching: Vec<u16>,
+}
+
+/// A stalker's memory choices (CH-15; script API X 8, 9).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Choices {
+    /// The chosen enemy (`best_enemy`).
+    pub enemy: Option<u16>,
+    /// The clock (`time_global()`) at the last update of the enemy choice
+    /// that had an enemy; `None` before any.
+    pub enemy_chosen_at: Option<u32>,
+    /// Whether the danger choice (`best_danger`) has a danger.
+    pub danger: bool,
+    /// The chosen item.
+    pub item: Option<u16>,
 }
 
 /// An item's part (5.4).
@@ -495,6 +516,8 @@ pub struct GameObject {
     pub section: Option<Vec<u8>>,
     /// `clsid()`: the number of its class id (spec C 2.4).
     pub clsid: usize,
+    /// The class id it spawned with (spec C 2.4's eight-character name).
+    pub class_id: u64,
     pub story_id: i32,
     pub parent: Option<u16>,
     pub class: ObjectClass,
@@ -568,6 +591,7 @@ impl GameObject {
             name: Some(name.clone()),
             section: Some(data.section.clone()),
             clsid,
+            class_id: data.class_id,
             story_id: data.story_id,
             parent: data.parent,
             class,

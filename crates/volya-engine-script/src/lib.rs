@@ -44,6 +44,7 @@ pub mod services;
 pub mod simulation;
 pub mod simulation_objects;
 pub mod sound;
+pub mod stalker_planner;
 pub mod story;
 pub mod time;
 pub mod values;

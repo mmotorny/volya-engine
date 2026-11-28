@@ -1666,3 +1666,26 @@ mod action_planner {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// The stalker planner's checks, one test per section of
+/// docs/behavior/stalker-planner.md (all of them run in [`selftest`] too,
+/// on every target).
+mod stalker_planner {
+    use crate::selftest::stalker_planner::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(
+            failures.is_empty(),
+            "{}",
+            failures.join(
+                "
+"
+            )
+        );
+    }
+}

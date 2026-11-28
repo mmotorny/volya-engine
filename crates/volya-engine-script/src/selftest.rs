@@ -38,6 +38,7 @@ pub mod services;
 pub mod simulation;
 pub mod simulation_objects;
 pub mod sound;
+pub mod stalker_planner;
 pub mod story;
 pub mod time;
 pub mod values;
@@ -132,6 +133,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = action_planner::check() {
+        fail(e);
+    }
+    if let Err(e) = stalker_planner::check() {
         fail(e);
     }
     if failures.is_empty() {
