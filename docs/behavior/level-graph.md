@@ -164,18 +164,16 @@ callers do so).
 
 ### 3.3 The walk to a vertex
 
-Input: a start vertex *k*0, an end point **b** and an end vertex *k*e. Result: true or false [LG-9]. As 3.2, with the
-start point **a** being *k*0's centre and without 3.2's step 1, except that a crossed neighbour that is *k*e itself (by
-number, not by cell) ends the walk: the result is whether *k*e is accessible; every other way the walk of 3.2 gives
-none gives false here.
+Input: a start vertex *k*0, a start point **a** (x–z) and an end vertex *k*e. Result: true or false [LG-9]. As 3.2,
+with the line running from **a** through *k*e's centre (direction: *k*e's centre minus **a**; the cells measured from
+**a** as in 3.1) and with distances measured to *k*e's centre instead of to **b**: the best distance starts as the
+squared x–z distance from *k*0's centre to *k*e's centre, and each crossed neighbour's distance is that of its centre to
+*k*e's centre. There is no off-grid step (3.2's step 1), and a crossed neighbour that is *k*e itself (by number, not by
+cell) ends the walk: the result is whether *k*e is accessible; every other way the walk of 3.2 gives none gives false
+here [LG-9].
 
-**Disputed in review:** the inputs and the line are not as stated. The given point is the line's start, not its end:
-the input is a start vertex *k*0, a start point **a** (x–z) and an end vertex *k*e; the line runs from **a** through
-*k*e's centre (direction: *k*e's centre minus **a**; cells measured from **a** as in 3.1); the best distance starts as
-the squared x–z distance from *k*0's centre to *k*e's centre, and each crossed neighbour's distance is measured to
-*k*e's centre. The rest (no off-grid step, the end by vertex number, the accessibility tests) is as stated. The
-stalker's detail path passes its current point and that point's vertex as **a** and *k*0, and a level path vertex as
-*k*e.
+Its one caller, the stalker's detail path (3.6; CH-10), passes a current point and that point's vertex as **a** and
+*k*0 and a vertex of the level path as *k*e [LG-9].
 
 ### 3.4 The step test in a direction
 
@@ -301,9 +299,11 @@ point's name, position and flags and in every link; the other three (`bar_bar_sq
   there is a game graph [LG-19] (N 4.1). In a single-player game the simulation exists, so `level.game`'s paths are
   never read and the store holds `all.spawn`'s (N 4.1).
 - **The spawn points**: chunk 8192 is read when the game's state is created (each point a `float3` position, a `float3`
-  of angles and four `u8`, **believed**: a team, a kind, a game type and an unused byte) [LG-19]. It is empty in all 18
-  levels, so nothing results from it. That a single-player game's state creation reaches this reading is **believed**
-  (it is the base step the game types' own creation steps call).
+  of angles and four `u8`, **believed**: a team, a kind, a game type and an unused byte) [LG-19]. Each point is a chunk
+  of its own inside chunk 8192, numbered 0, 1, …; the points are looked up by number in that order until the first
+  number that is not found [LG-19]. It is empty in all 18 levels, so nothing results from it. That a single-player
+  game's state creation reaches this reading is **believed** (it is the base step the game types' own creation steps
+  call).
 
 ## 7. Worked example: a novice walking to a campfire seat on `l01_escape`
 
@@ -323,11 +323,10 @@ point's name, position and flags and in every link; the other three (`bar_bar_sq
    and 19 vertices to 47,843, 47,203, 44,626, 43,957, 44,622, 45,941 and 47,199 [LG-23].
 4. **The straight walk** (3.2) from the stalker's position to the seat's centre (−207.2, −137.9) starts at 43,968 and
    reaches 45,947's cell through 12 cells: 43,968, 44,635, 44,634, 44,633, 44,632, 45,294, 45,293, 45,292, 45,291,
-   45,949, 45,948, 45,947; the walk to the vertex (3.3) from 43,968 to 45,947 is true [LG-22]. **Disputed in
-   review:** the check computes 3.3 as stated above, not as the program does (see the dispute in 3.3); computed as the
-   program does, the walk to the vertex 45,947 from 43,968 is true with the stalker's position as the start point (the
-   same 12 cells as the straight walk) and with 43,968's centre as the start point. So the detail path's key
-   points (CH-10 5.2) can join the start directly to the seat although the level path is a staircase.
+   45,949, 45,948, 45,947. The walk to the vertex (3.3) from 43,968 to 45,947 is true with the stalker's position as the
+   start point (through the same 12 cells) and with 43,968's centre as the start point (through 43,968, 43,967, 44,634,
+   44,633, 44,632, 44,631, 45,293, 45,292, 45,291, 45,290, 45,948, 45,947) [LG-22]. So the detail path's key points
+   (CH-10 5.2) can join the start directly to the seat although the level path is a staircase.
 5. As the stalker walks, its vertex follows it cell by cell (2.3): it stays 43,968 until the stalker leaves that 0.7 m
    cell, then becomes the cell vertex of each cell it enters.
 
@@ -358,8 +357,3 @@ point's name, position and flags and in every link; the other three (`bar_bar_sq
 - No leaked source code, derived projects or third-party documentation of the engine were used. Best-first search with
   a length and an estimate is the generic A* scheme (Hart, Nilsson and Raphael, 1968), and the search without an
   estimate Dijkstra's (1959); both names are used here only to describe what the binary computes.
-
-## Gaps found in review
-
-- The layout of chunk 8192 of `level.game` (6.2): each multiplayer spawn point is a chunk of its own inside it,
-  numbered 0, 1, …, read in that order until the first missing number; the spec gives only a point's fields.
