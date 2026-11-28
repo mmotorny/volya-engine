@@ -26,6 +26,7 @@ pub mod loader;
 pub mod object_factory;
 pub mod selftest;
 pub mod services;
+pub mod values;
 
 use std::collections::HashSet;
 use std::ffi::{CString, c_int, c_void};
@@ -49,7 +50,12 @@ pub enum Value {
     String(Vec<u8>),
     /// Key-value pairs, in Lua's traversal order.
     Table(Vec<(Value, Value)>),
-    /// A value that doesn't cross (function, userdata, thread), by type name.
+    /// An object with its engine part ([`classes`]): the object itself when
+    /// it comes from Lua or goes back to it, or a new object for a part
+    /// made for one ([`classes::Objects`]).
+    Object(classes::EnginePart),
+    /// A value that doesn't cross (function, other userdata, thread), by
+    /// type name.
     Other(&'static str),
 }
 
@@ -299,13 +305,16 @@ impl Lua {
         let message = unsafe {
             let message = match ffi::lua_type(l, -1) {
                 ffi::LUA_TTABLE => "(error object is a table value)".to_owned(),
+                ffi::LUA_TUSERDATA => "(error object is a userdata value)".to_owned(),
                 _ => match read_value(l, -1, &mut HashSet::new()) {
                     Ok(Value::String(s)) => String::from_utf8_lossy(&s).into_owned(),
                     Ok(Value::Number(n)) => number_text(n),
                     Ok(Value::Nil) => "(error object is nil)".to_owned(),
                     Ok(Value::Boolean(b)) => format!("(error object is a boolean value: {b})"),
                     Ok(Value::Other(kind)) => format!("(error object is a {kind} value)"),
-                    Ok(Value::Table(_)) | Err(_) => unreachable!("not a table"),
+                    Ok(Value::Table(_) | Value::Object(_)) | Err(_) => {
+                        unreachable!("not a table or userdata")
+                    }
                 },
             };
             ffi::lua_settop(l, -2);
@@ -384,6 +393,10 @@ fn flatten(v: &Value, out: &mut Vec<FlatValue>) -> Result<(), Error> {
                 flatten(v, out)?;
             }
             return Ok(());
+        }
+        Value::Object(part) => {
+            flat.kind = ffi::VOLYA_OBJECT;
+            flat.number = part.value();
         }
         Value::Other(kind) => {
             return Err(api_error(format!("a {kind} value can't be passed to Lua")));
@@ -476,7 +489,15 @@ unsafe fn read_value(
                 Value::Table(pairs)
             }
             ffi::LUA_TFUNCTION => Value::Other("function"),
-            ffi::LUA_TUSERDATA | ffi::LUA_TLIGHTUSERDATA => Value::Other("userdata"),
+            ffi::LUA_TUSERDATA => {
+                let mut part = 0.0;
+                if ffi::volya_object_part(l, idx, &mut part) != 0 {
+                    Value::Object(classes::EnginePart::from_value(part))
+                } else {
+                    Value::Other("userdata")
+                }
+            }
+            ffi::LUA_TLIGHTUSERDATA => Value::Other("userdata"),
             ffi::LUA_TTHREAD => Value::Other("thread"),
             _ => Value::Other("none"),
         })

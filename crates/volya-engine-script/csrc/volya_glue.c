@@ -27,6 +27,7 @@ static const volya_value *push_value(lua_State *L, const volya_value *v)
   case VOLYA_BOOLEAN: lua_pushboolean(L, v->boolean); return v + 1;
   case VOLYA_NUMBER: lua_pushnumber(L, v->number); return v + 1;
   case VOLYA_STRING: lua_pushlstring(L, v->bytes, v->len); return v + 1;
+  case VOLYA_OBJECT: volya_push_object(L, v->number); return v + 1;
   case VOLYA_TABLE: {
     size_t i, pairs = v->len;
     luaL_checkstack(L, 3, "table too deep");

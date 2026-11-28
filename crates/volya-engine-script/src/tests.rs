@@ -141,6 +141,98 @@ mod services {
     }
 }
 
+/// The value types' checks, one test per section of
+/// docs/behavior/script-api-value-types-and-math.md (all of them run in
+/// [`selftest`] too, on every target).
+mod values {
+    use crate::selftest::values as checks;
+    use crate::values::{X, to_bits32, to_flags16, to_flags32};
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn items() {
+        section(checks::items);
+    }
+
+    #[test]
+    fn common_rules() {
+        section(checks::common_rules);
+    }
+
+    #[test]
+    fn vector() {
+        section(checks::vector);
+    }
+
+    #[test]
+    fn matrix() {
+        section(checks::matrix);
+    }
+
+    #[test]
+    fn rectangles_boxes_and_points() {
+        section(checks::rectangles);
+    }
+
+    #[test]
+    fn colours() {
+        section(checks::colours);
+    }
+
+    #[test]
+    fn flags() {
+        section(checks::flags);
+    }
+
+    #[test]
+    fn bit_functions() {
+        section(checks::bit_functions);
+    }
+
+    #[test]
+    fn worked_examples() {
+        section(checks::worked_examples);
+    }
+
+    /// The conversions' edges (2.2, 8).
+    #[test]
+    fn conversions() {
+        assert_eq!(to_flags32(f64::NAN), 0);
+        assert_eq!(to_flags32(-9.3e18), 0);
+        assert_eq!(to_flags32(-(2.0f64.powi(40) + 5.9)), 4_294_967_291);
+        assert_eq!(to_flags16(-2_147_483_648.5), 0);
+        assert_eq!(to_flags16(2_147_483_648.0), 0);
+        assert_eq!(to_flags16(-65_537.0), 0xFFFF);
+        assert_eq!(to_bits32(-2_147_483_649.0), i32::MIN);
+        assert_eq!(to_bits32(f64::INFINITY), i32::MIN);
+    }
+
+    /// The x87 unit's 24-bit rounding (2.5): ties to even, and the wider
+    /// exponent range keeps values f32 would make subnormal.
+    #[test]
+    fn x87_rounding() {
+        let one = X(1.0);
+        assert_eq!((X(1.0 + 2.0f64.powi(-24)) * one).0, 1.0);
+        assert_eq!(
+            (X(1.0 + 3.0 * 2.0f64.powi(-24)) * one).0,
+            1.0 + 2.0f64.powi(-22)
+        );
+        assert_eq!(
+            (X(2.0 - 2.0f64.powi(-25)) * one).0,
+            2.0,
+            "a carry into the exponent"
+        );
+        let tiny = 2.0f64.powi(-140) * (1.0 + 2.0f64.powi(-23));
+        assert_eq!((X(tiny) * one).0, tiny);
+        assert_eq!(X(tiny).store(), tiny as f32);
+    }
+}
+
 #[test]
 fn rust_panics_become_lua_errors() {
     let mut lua = Lua::new().unwrap();

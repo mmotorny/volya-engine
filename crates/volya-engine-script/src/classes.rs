@@ -11,7 +11,7 @@
 //! override with [`Lua::dispatch`]. See docs/architecture/scripts.md,
 //! Script classes.
 
-use std::any::{Any, type_name};
+use std::any::{Any, TypeId, type_name};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_int;
@@ -43,9 +43,9 @@ impl EnginePart {
 }
 
 type Part = Rc<RefCell<Box<dyn Any>>>;
-type PartFn = Rc<dyn Fn(&mut dyn Any, &[Value]) -> Result<Vec<Value>, String>>;
-type GetFn = Rc<dyn Fn(&dyn Any) -> Result<Value, String>>;
-type SetFn = Rc<dyn Fn(&mut dyn Any, &Value) -> Result<(), String>>;
+type PartFn = Rc<dyn Fn(&mut dyn Any, &Objects, &[Value]) -> Result<Vec<Value>, String>>;
+type GetFn = Rc<dyn Fn(&dyn Any, &Objects) -> Result<Value, String>>;
+type SetFn = Rc<dyn Fn(&mut dyn Any, &Objects, &Value) -> Result<(), String>>;
 type ScoreFn = Rc<dyn Fn(&[Value]) -> Option<u32>>;
 type MakeFn = Rc<dyn Fn(EnginePart, &[Value]) -> Result<Box<dyn Any>, String>>;
 
@@ -82,6 +82,7 @@ struct Property {
 pub struct EngineClass {
     name: String,
     base: Option<String>,
+    constructible: bool,
     constructors: Vec<Constructor>,
     methods: Vec<Method>,
     properties: Vec<Property>,
@@ -99,7 +100,79 @@ fn downcast_ref<T: Any>(part: &dyn Any) -> Result<&T, String> {
 }
 
 fn part_fn<T: Any>(f: impl Fn(&mut T, &[Value]) -> Result<Vec<Value>, String> + 'static) -> PartFn {
-    Rc::new(move |part, args| f(downcast_mut(part)?, args))
+    Rc::new(move |part, _, args| f(downcast_mut(part)?, args))
+}
+
+/// An object argument's engine part as a method sees it ([`Objects::get`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Operand<T> {
+    /// The storage of the object the method is called on (the same object,
+    /// or another referring to its storage): read it from the part the
+    /// method has.
+    This,
+    /// A copy of another object's part.
+    Other(T),
+}
+
+/// What a method or property registered `…_with_objects` gets besides its
+/// part: the engine parts of the objects among its arguments, and new
+/// objects for its results.
+pub struct Objects<'a> {
+    state: &'a State,
+    this: u64,
+    part: &'a Part,
+    /// The type of `part`, which the method has borrowed.
+    type_id: TypeId,
+}
+
+impl Objects<'_> {
+    /// The object the method is called on, as a result: the same Lua value.
+    pub fn this(&self) -> Value {
+        Value::Object(EnginePart(self.this))
+    }
+
+    /// The part of object argument `value` if it is a `T`: [`Operand::This`]
+    /// when it is the storage the method has, else a copy. `None` for
+    /// anything else.
+    pub fn get<T: Any + Clone>(&self, value: &Value) -> Option<Operand<T>> {
+        let Value::Object(EnginePart(id)) = value else {
+            return None;
+        };
+        let part = self.state.part(*id).ok()?;
+        if Rc::ptr_eq(&part, self.part) {
+            return (TypeId::of::<T>() == self.type_id).then_some(Operand::This);
+        }
+        let part = part.try_borrow().ok()?;
+        part.downcast_ref::<T>().cloned().map(Operand::Other)
+    }
+
+    /// A new object of engine class `class` holding `part` (a type its
+    /// methods take), owned by the script side and collected like a
+    /// constructed one.
+    pub fn new_object<T: Any>(&self, class: &str, part: T) -> Value {
+        let id = self
+            .state
+            .insert(Rc::from(class), Rc::new(RefCell::new(Box::new(part))));
+        Value::Object(EnginePart(id))
+    }
+
+    /// A new object referring to the storage of the object the method is
+    /// called on, of the same engine class: changing either changes both.
+    /// It keeps the storage alive (our choice: whether it does is
+    /// unestablished where the specs leave it).
+    pub fn reference(&self) -> Value {
+        let class = self
+            .state
+            .parts
+            .borrow()
+            .get(&self.this)
+            .map(|(class, _)| Rc::clone(class));
+        let Some(class) = class else {
+            return Value::Nil;
+        };
+        let id = self.state.insert(class, Rc::clone(self.part));
+        Value::Object(EnginePart(id))
+    }
 }
 
 impl EngineClass {
@@ -107,6 +180,7 @@ impl EngineClass {
         EngineClass {
             name: name.to_owned(),
             base: None,
+            constructible: false,
             constructors: Vec::new(),
             methods: Vec::new(),
             properties: Vec::new(),
@@ -137,6 +211,49 @@ impl EngineClass {
             params,
             score: Rc::new(score),
             make: Rc::new(move |part, args| Ok(Box::new(make(part, args)?))),
+        });
+        self
+    }
+
+    /// Scripts construct this class's objects by calling it (`Class(...)`):
+    /// with the constructor taking as many arguments whose score is best,
+    /// raising when none matches (our wording).
+    pub fn constructible(mut self) -> Self {
+        self.constructible = true;
+        self
+    }
+
+    /// A method that reads the engine parts of object arguments or gives
+    /// objects as results ([`Objects`]), without a separate default.
+    pub fn method_with_objects<T: Any>(
+        mut self,
+        name: &str,
+        call: impl Fn(&mut T, &Objects, &[Value]) -> Result<Vec<Value>, String> + 'static,
+    ) -> Self {
+        self.methods.push(Method {
+            name: name.to_owned(),
+            call: Rc::new(move |part, objects, args| call(downcast_mut(part)?, objects, args)),
+            default: None,
+            object: false,
+        });
+        self
+    }
+
+    /// A property whose value may be an object ([`Objects`]); scripts can
+    /// assign it if `set` is given.
+    #[allow(clippy::type_complexity)]
+    pub fn property_with_objects<T: Any>(
+        mut self,
+        name: &str,
+        get: impl Fn(&T, &Objects) -> Result<Value, String> + 'static,
+        set: Option<Box<dyn Fn(&mut T, &Objects, &Value) -> Result<(), String>>>,
+    ) -> Self {
+        self.properties.push(Property {
+            name: name.to_owned(),
+            get: Rc::new(move |part, objects| get(downcast_ref(part)?, objects)),
+            set: set.map(|set| -> SetFn {
+                Rc::new(move |part, objects, value| set(downcast_mut(part)?, objects, value))
+            }),
         });
         self
     }
@@ -213,7 +330,7 @@ impl EngineClass {
     pub fn property<T: Any>(mut self, name: &str, get: impl Fn(&T) -> Value + 'static) -> Self {
         self.properties.push(Property {
             name: name.to_owned(),
-            get: Rc::new(move |part| Ok(get(downcast_ref(part)?))),
+            get: Rc::new(move |part, _| Ok(get(downcast_ref(part)?))),
             set: None,
         });
         self
@@ -228,8 +345,10 @@ impl EngineClass {
     ) -> Self {
         self.properties.push(Property {
             name: name.to_owned(),
-            get: Rc::new(move |part| Ok(get(downcast_ref(part)?))),
-            set: Some(Rc::new(move |part, value| set(downcast_mut(part)?, value))),
+            get: Rc::new(move |part, _| Ok(get(downcast_ref(part)?))),
+            set: Some(Rc::new(move |part, _, value| {
+                set(downcast_mut(part)?, value)
+            })),
         });
         self
     }
@@ -274,10 +393,10 @@ pub(crate) struct State {
 }
 
 impl State {
-    /// The part whose id is `args[0]`, as C passes it.
-    fn part_of(&self, args: &[Value]) -> Result<Part, String> {
+    /// The id `args[0]`, as C passes it, and its part.
+    fn part_of(&self, args: &[Value]) -> Result<(u64, Part), String> {
         match args.first() {
-            Some(Value::Number(id)) => self.part(*id as u64),
+            Some(Value::Number(id)) => Ok((*id as u64, self.part(*id as u64)?)),
             _ => Err("engine part expected".into()),
         }
     }
@@ -288,6 +407,29 @@ impl State {
             .get(&id)
             .map(|(_, part)| Rc::clone(part))
             .ok_or_else(|| "the engine part was released".into())
+    }
+
+    fn new_id(&self) -> u64 {
+        let id = self.next.get() + 1;
+        self.next.set(id);
+        id
+    }
+
+    /// Keeps `part`, made by engine class `class`, under a new id.
+    fn insert(&self, class: Rc<str>, part: Part) -> u64 {
+        let id = self.new_id();
+        self.parts.borrow_mut().insert(id, (class, part));
+        id
+    }
+
+    /// The method's view of objects, for the part `id` borrowed as `data`.
+    fn objects<'a>(&'a self, id: u64, part: &'a Part, data: &dyn Any) -> Objects<'a> {
+        Objects {
+            state: self,
+            this: id,
+            part,
+            type_id: data.type_id(),
+        }
     }
 }
 
@@ -337,16 +479,29 @@ impl Lua {
     /// registered after it.
     pub fn open_classes(&mut self) -> Result<(), Error> {
         let state = Rc::clone(&self.classes);
-        let mut release = self.keep(move |args| {
+        let release = self.keep(move |args| {
             if let Some(Value::Number(id)) = args.first() {
                 let released = state.parts.borrow_mut().remove(&(*id as u64));
                 drop(released);
             }
             Ok(Vec::new())
         });
-        // SAFETY: the state is open; `release` outlives the call.
-        let status =
-            unsafe { ffi::volya_open_classes_protected(self.state.as_ptr(), &mut release) };
+        // The engine class of a part made for a new object (`Objects`).
+        let state = Rc::clone(&self.classes);
+        let adopt = self.keep(move |args| {
+            let class = match args.first() {
+                Some(Value::Number(id)) => state
+                    .parts
+                    .borrow()
+                    .get(&(*id as u64))
+                    .map(|(class, _)| Value::from(&**class)),
+                _ => None,
+            };
+            Ok(class.into_iter().collect())
+        });
+        let mut hooks = ffi::ClassHooks { release, adopt };
+        // SAFETY: the state is open; `hooks` outlives the call.
+        let status = unsafe { ffi::volya_open_classes_protected(self.state.as_ptr(), &mut hooks) };
         self.check(status)
     }
 
@@ -366,6 +521,7 @@ impl Lua {
         let EngineClass {
             name,
             base,
+            constructible,
             constructors,
             methods,
             properties,
@@ -375,15 +531,16 @@ impl Lua {
         let c_base = base.as_deref().map(cstring).transpose()?;
         let class_name: Rc<str> = Rc::from(name.as_str());
 
+        let constructors = Rc::new(constructors);
         let state = Rc::clone(&self.classes);
         let made_by = Rc::clone(&class_name);
+        let all = Rc::clone(&constructors);
         let construct = self.keep(move |args| {
-            let Some(constructor) = choose(&constructors, args) else {
+            let Some(constructor) = choose(&all, args) else {
                 // No error when none matches (3.1).
                 return Ok(Vec::new());
             };
-            let id = state.next.get() + 1;
-            state.next.set(id);
+            let id = state.new_id();
             let part = (constructor.make)(EnginePart(id), args)?;
             state
                 .parts
@@ -391,6 +548,30 @@ impl Lua {
                 .insert(id, (Rc::clone(&made_by), Rc::new(RefCell::new(part))));
             Ok(vec![Value::Number(EnginePart(id).value())])
         });
+        let script_construct = if constructible {
+            let state = Rc::clone(&self.classes);
+            let made_by = Rc::clone(&class_name);
+            self.keep(move |args| {
+                let constructor = constructors
+                    .iter()
+                    .filter(|c| c.params == args.len())
+                    .filter_map(|c| (c.score)(args).map(|score| (score, c)))
+                    .min_by_key(|(score, _)| *score)
+                    .map(|(_, c)| c)
+                    .ok_or_else(|| {
+                        format!("no constructor of '{made_by}' matches the arguments")
+                    })?;
+                let id = state.new_id();
+                let part = (constructor.make)(EnginePart(id), args)?;
+                state
+                    .parts
+                    .borrow_mut()
+                    .insert(id, (Rc::clone(&made_by), Rc::new(RefCell::new(part))));
+                Ok(vec![Value::Object(EnginePart(id))])
+            })
+        } else {
+            ffi::RustFn::NONE
+        };
 
         let mut names = Vec::new();
         let mut c_methods = Vec::new();
@@ -431,21 +612,23 @@ impl Lua {
             let state = Rc::clone(&self.classes);
             let get_fn = property.get;
             let get = self.keep(move |args| {
-                let part = state.part_of(args)?;
-                let part = part
+                let (id, part) = state.part_of(args)?;
+                let data = part
                     .try_borrow()
                     .map_err(|_| "the engine part is in use".to_owned())?;
-                Ok(vec![get_fn(&**part)?])
+                let objects = state.objects(id, &part, &**data);
+                Ok(vec![get_fn(&**data, &objects)?])
             });
             let set = match property.set {
                 Some(set_fn) => {
                     let state = Rc::clone(&self.classes);
                     self.keep(move |args| {
-                        let part = state.part_of(args)?;
-                        let mut part = part
+                        let (id, part) = state.part_of(args)?;
+                        let mut data = part
                             .try_borrow_mut()
                             .map_err(|_| "the engine part is in use".to_owned())?;
-                        set_fn(&mut **part, args.get(1).unwrap_or(&Value::Nil))?;
+                        let objects = state.objects(id, &part, &**data);
+                        set_fn(&mut **data, &objects, args.get(1).unwrap_or(&Value::Nil))?;
                         Ok(Vec::new())
                     })
                 }
@@ -471,6 +654,7 @@ impl Lua {
             name: c_name.as_ptr(),
             base: c_base.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
             construct,
+            script_construct,
             methods: c_methods.as_ptr(),
             nmethods: c_methods.len(),
             properties: c_properties.as_ptr(),
@@ -544,11 +728,12 @@ impl Lua {
     fn part_function(&mut self, f: PartFn) -> ffi::RustFn {
         let state = Rc::clone(&self.classes);
         self.keep(move |args| {
-            let part = state.part_of(args)?;
-            let mut part = part
+            let (id, part) = state.part_of(args)?;
+            let mut data = part
                 .try_borrow_mut()
                 .map_err(|_| "the engine part is in use".to_owned())?;
-            f(&mut **part, &args[1..])
+            let objects = state.objects(id, &part, &**data);
+            f(&mut **data, &objects, &args[1..])
         })
     }
 
@@ -635,10 +820,11 @@ impl Lua {
             .and_then(|methods| methods.get(method))
             .cloned()
             .ok_or_else(|| api_error(format!("{class}.{method} has no default implementation")))?;
-        let mut data = data
+        let mut borrowed = data
             .try_borrow_mut()
             .map_err(|_| api_error("the engine part is in use"))?;
-        let results = default(&mut **data, args).map_err(api_error)?;
+        let objects = self.classes.objects(part.0, &data, &**borrowed);
+        let results = default(&mut **borrowed, &objects, args).map_err(api_error)?;
         Ok(match conversion {
             Conversion::Nothing => Value::Nil,
             _ => results.into_iter().next().unwrap_or(Value::Nil),

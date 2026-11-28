@@ -49,6 +49,7 @@ pub const VOLYA_BOOLEAN: c_int = 1;
 pub const VOLYA_NUMBER: c_int = 2;
 pub const VOLYA_STRING: c_int = 3;
 pub const VOLYA_TABLE: c_int = 4;
+pub const VOLYA_OBJECT: c_int = 5;
 
 pub type Reader =
     unsafe extern "C" fn(ctx: *mut c_void, l: *mut LuaState, first: c_int, count: c_int);
@@ -144,12 +145,20 @@ pub struct EngineConstant {
     pub value: c_int,
 }
 
+/// `volya_class_hooks` (csrc/volya_class.c).
+#[repr(C)]
+pub struct ClassHooks {
+    pub release: RustFn,
+    pub adopt: RustFn,
+}
+
 /// `volya_engine_class` (csrc/volya_class.c).
 #[repr(C)]
 pub struct EngineClass {
     pub name: *const c_char,
     pub base: *const c_char,
     pub construct: RustFn,
+    pub script_construct: RustFn,
     pub methods: *const EngineMethod,
     pub nmethods: usize,
     pub properties: *const EngineProperty,
@@ -181,7 +190,8 @@ pub struct Dispatch {
 }
 
 unsafe extern "C" {
-    pub fn volya_open_classes_protected(l: *mut LuaState, release: *mut RustFn) -> c_int;
+    pub fn volya_open_classes_protected(l: *mut LuaState, hooks: *mut ClassHooks) -> c_int;
+    pub fn volya_object_part(l: *mut LuaState, idx: c_int, part: *mut f64) -> c_int;
     pub fn volya_register_class_protected(l: *mut LuaState, class: *mut EngineClass) -> c_int;
     pub fn volya_dispatch_protected(l: *mut LuaState, dispatch: *mut Dispatch) -> c_int;
     pub fn volya_open_factory_tools_protected(l: *mut LuaState, name: *const c_char) -> c_int;

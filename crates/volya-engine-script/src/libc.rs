@@ -84,6 +84,18 @@ fn decimal_prefix(s: &[u8]) -> Option<(f64, usize)> {
     Some((text.parse().ok()?, i))
 }
 
+/// The number Lua's conversion reads from string `s` (`luaO_str2d`: the
+/// text up to the first NUL, a number with only white space after it), or
+/// `None`.
+pub(crate) fn string_number(s: &[u8]) -> Option<f64> {
+    let s = s.split(|&c| c == 0).next().unwrap_or_default();
+    let (value, len) = decimal_prefix(s)?;
+    s[len..]
+        .iter()
+        .all(|&c| c == b' ' || (b'\t'..=b'\r').contains(&c))
+        .then_some(value)
+}
+
 /// `strtod` for Lua (`lua_str2number`, patched into luaconf.h by build.rs):
 /// decimal only, correctly rounded, the same on every target.
 ///

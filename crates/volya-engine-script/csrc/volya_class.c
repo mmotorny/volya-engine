@@ -38,6 +38,7 @@ static char operators_key;     /* Operator name -> shared metamethod. */
 static char engine_classes_key; /* Engine class name -> class. */
 static char object_key;        /* In an object's metatable: its class. */
 static char engine_objects_key; /* Engine part id -> engine object (strong). */
+static char adopt_key;         /* Rust: the engine class of a part made for a new object. */
 
 typedef struct volya_object {
   int ok;       /* `__ok` (4.1): false while an awaited engine part is missing. */
@@ -158,6 +159,66 @@ static void release_part(lua_State *L, volya_object *o)
   push_registry(L, &release_key);
   lua_pushnumber(L, o->part);
   if (lua_pcall(L, 1, 0, 0) != 0) lua_pop(L, 1);
+}
+
+/* Whether the value at `idx` is an object with its engine part, whose id
+** is then stored in `part`. Raises nothing and allocates nothing: it is
+** called from Rust while values are read (VOLYA_READ_SLOTS are reserved),
+** and the strings it looks up exist in every class's environment. */
+int volya_object_part(lua_State *L, int idx, double *part)
+{
+  volya_object *o = to_object(L, idx);
+  if (o == NULL) return 0;
+  lua_pop(L, 1);
+  if (!o->has_part) return 0;
+  *part = o->part;
+  return 1;
+}
+
+/* Pushes the object of engine part `id` (VOLYA_OBJECT, csrc/volya_glue.h):
+** its object if it has one; else, for a part Rust made for a new object
+** (`Objects`, src/classes.rs), a new object of the engine class Rust names;
+** else nil. */
+void volya_push_object(lua_State *L, double id)
+{
+  int top = lua_gettop(L);
+  volya_object *o;
+  luaL_checkstack(L, 8, "no stack space for an object");
+  push_registry(L, &objects_key);
+  if (lua_isnil(L, -1)) return; /* The class system isn't open: nil. */
+  lua_pushnumber(L, id);
+  lua_rawget(L, -2);
+  if (!lua_isnil(L, -1)) {
+    lua_replace(L, top + 1);
+    return;
+  }
+  lua_pop(L, 1);
+  push_registry(L, &adopt_key);
+  lua_pushnumber(L, id);
+  lua_call(L, 1, 1);
+  push_registry(L, &engine_classes_key);
+  lua_pushvalue(L, -2);
+  lua_rawget(L, -2);
+  if (!lua_isstring(L, -3) || !is_class(L, -1)) {
+    lua_settop(L, top);
+    lua_pushnil(L);
+    return;
+  }
+  o = (volya_object *)lua_newuserdata(L, sizeof *o);
+  o->ok = 1;
+  o->has_part = 1;
+  o->part = id;
+  lua_getfenv(L, -2);
+  lua_getfield(L, -1, "metatable");
+  lua_setmetatable(L, -3);
+  lua_pop(L, 1);
+  lua_newtable(L);
+  lua_setfenv(L, -2);
+  lua_pushnumber(L, id);
+  lua_pushvalue(L, -2);
+  lua_rawset(L, top + 1);
+  lua_replace(L, top + 1);
+  lua_settop(L, top + 1);
 }
 
 /* Constructs the engine part of object `obj` with engine class `cls`'s
@@ -409,7 +470,8 @@ static int super_call(lua_State *L)
   return 0;
 }
 
-/* `Class(args...)` (2.1). */
+/* `Class(args...)` (2.1). An engine class scripts construct
+** (`EngineClass::constructible`) makes its object in Rust. */
 static int class_call(lua_State *L)
 {
   int n = lua_gettop(L), env, obj, i;
@@ -418,6 +480,14 @@ static int class_call(lua_State *L)
   luaL_checkstack(L, n + 8, "too many arguments");
   lua_getfenv(L, 1);
   env = lua_gettop(L);
+  lua_getfield(L, env, "script_construct");
+  if (!lua_isnil(L, -1)) {
+    lua_replace(L, 1);
+    lua_settop(L, n);
+    lua_call(L, n - 1, 1);
+    return 1;
+  }
+  lua_pop(L, 1);
   lua_getfield(L, env, "base");
   o = (volya_object *)lua_newuserdata(L, sizeof *o);
   obj = lua_gettop(L);
@@ -658,6 +728,7 @@ typedef struct volya_engine_class {
   const char *name;
   const char *base; /* An engine class registered before, or NULL. */
   volya_rust_fn construct;
+  volya_rust_fn script_construct; /* f NULL: scripts don't construct it. */
   const volya_engine_method *methods;
   size_t nmethods;
   const volya_engine_property *properties;
@@ -689,6 +760,10 @@ static int register_class(lua_State *L)
   lua_setfield(L, env, "ancestors");
   push_rust(L, c->construct);
   lua_setfield(L, env, "construct");
+  if (c->script_construct.f != NULL) {
+    push_rust(L, c->script_construct);
+    lua_setfield(L, env, "script_construct");
+  }
   if (c->base != NULL) {
     int benv;
     push_registry(L, &engine_classes_key);
@@ -907,9 +982,15 @@ int volya_dispatch_protected(lua_State *L, volya_dispatch *d)
 
 /* --- Opening ------------------------------------------------------------- */
 
+/* The Rust functions the class system calls. */
+typedef struct volya_class_hooks {
+  volya_rust_fn release; /* Frees an engine part, given its id. */
+  volya_rust_fn adopt;   /* The engine class name of a part without object, or nothing. */
+} volya_class_hooks;
+
 static int open_classes(lua_State *L)
 {
-  volya_rust_fn *release = (volya_rust_fn *)lua_touserdata(L, 1);
+  volya_class_hooks *hooks = (volya_class_hooks *)lua_touserdata(L, 1);
   size_t i;
   lua_pushlightuserdata(L, &class_meta_key);
   lua_createtable(L, 0, 3);
@@ -938,7 +1019,11 @@ static int open_classes(lua_State *L)
   lua_rawset(L, LUA_REGISTRYINDEX);
 
   lua_pushlightuserdata(L, &release_key);
-  push_rust(L, *release);
+  push_rust(L, hooks->release);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+
+  lua_pushlightuserdata(L, &adopt_key);
+  push_rust(L, hooks->adopt);
   lua_rawset(L, LUA_REGISTRYINDEX);
 
   lua_pushlightuserdata(L, &operators_key);
@@ -955,11 +1040,10 @@ static int open_classes(lua_State *L)
   return 0;
 }
 
-/* Opens the class system: the global `class` (1.1); `release` frees an
-** engine part, given its id. */
-int volya_open_classes_protected(lua_State *L, volya_rust_fn *release)
+/* Opens the class system: the global `class` (1.1). */
+int volya_open_classes_protected(lua_State *L, volya_class_hooks *hooks)
 {
-  return lua_cpcall(L, open_classes, release);
+  return lua_cpcall(L, open_classes, hooks);
 }
 
 /* --- The object factory's tools ------------------------------------------ */

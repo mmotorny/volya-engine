@@ -13,14 +13,14 @@
 
 #include "lua.h"
 
-enum { VOLYA_NIL, VOLYA_BOOLEAN, VOLYA_NUMBER, VOLYA_STRING, VOLYA_TABLE };
+enum { VOLYA_NIL, VOLYA_BOOLEAN, VOLYA_NUMBER, VOLYA_STRING, VOLYA_TABLE, VOLYA_OBJECT };
 
 typedef struct volya_value {
   int kind;
   int boolean;
-  double number;
+  double number;     /* VOLYA_NUMBER; VOLYA_OBJECT: the engine part's id */
   const char *bytes; /* VOLYA_STRING */
-  size_t len;        /* VOLYA_STRING: bytes; VOLYA_TABLE: key-value pairs */
+  size_t len;       /* VOLYA_STRING: bytes; VOLYA_TABLE: key-value pairs */
 } volya_value;
 
 /* Stack slots reserved before Rust reads values: 2 per table level, up to
@@ -49,6 +49,9 @@ typedef struct volya_rust_fn {
   volya_function f;
   void *data;
 } volya_rust_fn;
+
+/* Pushes the object of an engine part (csrc/volya_class.c). */
+void volya_push_object(lua_State *L, double id);
 
 /* Pushes `count` flat values. */
 void volya_push_values(lua_State *L, const volya_value *v, size_t count);

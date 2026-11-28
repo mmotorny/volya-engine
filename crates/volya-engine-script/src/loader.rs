@@ -236,6 +236,8 @@ impl Scripts {
         let mut lua = Lua::new()?;
         // The binding library, opened before `_G` loads (classes spec 1.1).
         lua.open_classes()?;
+        // The value types and bit functions (script API E).
+        crate::values::register(&mut lua)?;
         let failures = Rc::new(RefCell::new(Vec::new()));
         let fatal = Rc::new(RefCell::new(None));
         let aliases = aliases.clone();

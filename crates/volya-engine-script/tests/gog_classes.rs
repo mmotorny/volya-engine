@@ -234,7 +234,7 @@ fn shipped_class_declarations() {
         declared.len(),
         missing.len()
     );
-    assert_eq!(declared.len(), 337, "classes the loaded scripts declare");
+    assert_eq!(declared.len(), 343, "classes the loaded scripts declare");
 
     // 2.2 and 3.2, for the classes of scripts that ran to their end: each
     // has its own `__init`; constructing one reaching an engine base calls
@@ -246,7 +246,7 @@ fn shipped_class_declarations() {
         .collect();
     assert_eq!(
         complete.len(),
-        327,
+        334,
         "classes of scripts that ran to their end"
     );
     let mut engine_based = 0;
@@ -276,7 +276,7 @@ fn shipped_class_declarations() {
         }
     }
     eprintln!("{engine_based} of them reach an engine base");
-    assert_eq!(engine_based, 251, "classes reaching an engine base");
+    assert_eq!(engine_based, 255, "classes reaching an engine base");
 
     // 6.3: every engine base call names a default, run on an object of a
     // class deriving from the base; every script base call finds the
