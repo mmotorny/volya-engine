@@ -59,6 +59,8 @@ struct Method {
     name: String,
     call: PartFn,
     default: Option<PartFn>,
+    /// Returns an engine object ([`EngineClass::object_method`]).
+    object: bool,
 }
 
 struct Property {
@@ -149,6 +151,7 @@ impl EngineClass {
             name: name.to_owned(),
             call: part_fn(call),
             default: None,
+            object: false,
         });
         self
     }
@@ -165,6 +168,7 @@ impl EngineClass {
             name: name.to_owned(),
             call: Rc::clone(&f),
             default: Some(f),
+            object: false,
         });
         self
     }
@@ -180,6 +184,27 @@ impl EngineClass {
             name: name.to_owned(),
             call: part_fn(call),
             default: Some(part_fn(default)),
+            object: false,
+        });
+        self
+    }
+
+    /// A method returning an engine object: the object holding the part
+    /// `f` returns (an engine object [`Lua::new_engine_object`] made, or a
+    /// script object), or nil for `None` or a part no object holds. `f` is
+    /// both the member and the default implementation, as for
+    /// [`EngineClass::overridable`]; [`Lua::dispatch`] gets the part's id.
+    pub fn object_method<T: Any>(
+        mut self,
+        name: &str,
+        f: impl Fn(&mut T, &[Value]) -> Result<Option<EnginePart>, String> + 'static,
+    ) -> Self {
+        let f = part_fn(move |part: &mut T, args| Ok(vec![object_value(f(part, args)?)]));
+        self.methods.push(Method {
+            name: name.to_owned(),
+            call: Rc::clone(&f),
+            default: Some(f),
+            object: true,
         });
         self
     }
@@ -214,6 +239,12 @@ impl EngineClass {
         self.constants.push((name.to_owned(), value));
         self
     }
+}
+
+/// An engine part as an object result: its id, which C turns into its
+/// object, or nil.
+fn object_value(part: Option<EnginePart>) -> Value {
+    part.map_or(Value::Nil, |p| Value::Number(p.value()))
 }
 
 /// The constructor `super` uses for `args` (3.1): the only one, or the
@@ -390,6 +421,7 @@ impl Lua {
                 name: m_name.as_ptr(),
                 call,
                 default,
+                object: c_int::from(method.object),
             });
             names.push(m_name);
         }
@@ -453,6 +485,59 @@ impl Lua {
         self.check(status)?;
         self.classes.defaults.borrow_mut().insert(name, defaults);
         Ok(())
+    }
+
+    /// Makes an object of engine class `class` (registered) as the engine
+    /// does, not a script: it holds the part `make` returns from the start
+    /// and lives as long as the state. Functions and methods returning
+    /// engine objects ([`Lua::register_object_function`],
+    /// [`EngineClass::object_method`]) hand it to scripts.
+    pub fn new_engine_object<T: Any>(
+        &mut self,
+        class: &str,
+        make: impl FnOnce(EnginePart) -> T,
+    ) -> Result<EnginePart, Error> {
+        let c_class = cstring(class)?;
+        let id = self.classes.next.get() + 1;
+        self.classes.next.set(id);
+        let part = EnginePart(id);
+        let data: Box<dyn Any> = Box::new(make(part));
+        self.classes
+            .parts
+            .borrow_mut()
+            .insert(id, (Rc::from(class), Rc::new(RefCell::new(data))));
+        let mut object = ffi::EngineObject {
+            class: c_class.as_ptr(),
+            part: part.value(),
+        };
+        // SAFETY: the state is open; `object` outlives the call.
+        let status =
+            unsafe { ffi::volya_new_engine_object_protected(self.state.as_ptr(), &mut object) };
+        if let Err(e) = self.check(status) {
+            self.classes.parts.borrow_mut().remove(&id);
+            return Err(e);
+        }
+        Ok(part)
+    }
+
+    /// Sets the global `name` to a function running `f`, which returns an
+    /// engine object: the object holding the part `f` returns, or nil.
+    pub fn register_object_function(
+        &mut self,
+        name: &str,
+        mut f: impl FnMut(&[Value]) -> Result<Option<EnginePart>, String> + 'static,
+    ) -> Result<(), Error> {
+        let c_name = cstring(name)?;
+        let f = self.keep(move |args| Ok(vec![object_value(f(args)?)]));
+        let mut function = ffi::ObjectFunction {
+            name: c_name.as_ptr(),
+            f,
+        };
+        // SAFETY: the state is open; `function` and the function outlive the call.
+        let status = unsafe {
+            ffi::volya_register_object_function_protected(self.state.as_ptr(), &mut function)
+        };
+        self.check(status)
     }
 
     /// A Rust function C calls with an engine part's id, then arguments.

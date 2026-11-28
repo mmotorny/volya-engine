@@ -37,6 +37,7 @@ static char release_key;       /* Rust: releases an engine part. */
 static char operators_key;     /* Operator name -> shared metamethod. */
 static char engine_classes_key; /* Engine class name -> class. */
 static char object_key;        /* In an object's metatable: its class. */
+static char engine_objects_key; /* Engine part id -> engine object (strong). */
 
 typedef struct volya_object {
   int ok;       /* `__ok` (4.1): false while an awaited engine part is missing. */
@@ -600,6 +601,32 @@ static void push_rust(lua_State *L, volya_rust_fn f)
   lua_pushcclosure(L, rust_closure, 2);
 }
 
+/* Calls upvalue 1 with the arguments; its first result, an engine part's
+** id, becomes that part's object: the engine object made for it, else the
+** script object holding it, else nil (as is any other result). */
+static int object_result(lua_State *L)
+{
+  int n = lua_gettop(L);
+  luaL_checkstack(L, 4, "no stack space for an object result");
+  lua_pushvalue(L, lua_upvalueindex(1));
+  lua_insert(L, 1);
+  lua_call(L, n, 1);
+  if (lua_type(L, -1) != LUA_TNUMBER) {
+    lua_pushnil(L);
+    return 1;
+  }
+  push_registry(L, &engine_objects_key);
+  lua_pushvalue(L, -2);
+  lua_rawget(L, -2);
+  if (lua_isnil(L, -1)) {
+    lua_pop(L, 2);
+    push_registry(L, &objects_key);
+    lua_pushvalue(L, -2);
+    lua_rawget(L, -2);
+  }
+  return 1;
+}
+
 static void push_member(lua_State *L, volya_rust_fn f, int cls, const char *cname, const char *name)
 {
   lua_pushlightuserdata(L, (void *)f.f);
@@ -613,6 +640,7 @@ typedef struct volya_engine_method {
   const char *name;
   volya_rust_fn call;  /* The member objects see. */
   volya_rust_fn dflt;  /* The default implementation; f NULL: none. */
+  int object;          /* Returns an engine object (object_result). */
 } volya_engine_method;
 
 typedef struct volya_engine_property {
@@ -691,9 +719,11 @@ static int register_class(lua_State *L)
   for (i = 0; i < c->nmethods; i++) {
     const volya_engine_method *m = &c->methods[i];
     push_member(L, m->call, cls, c->name, m->name);
+    if (m->object) lua_pushcclosure(L, object_result, 1);
     lua_setfield(L, members, m->name);
     if (m->dflt.f != NULL) {
       push_member(L, m->dflt, cls, c->name, m->name);
+      if (m->object) lua_pushcclosure(L, object_result, 1);
     } else {
       lua_pushcfunction(L, engine_pure);
     }
@@ -724,6 +754,73 @@ static int register_class(lua_State *L)
 int volya_register_class_protected(lua_State *L, volya_engine_class *c)
 {
   return lua_cpcall(L, register_class, c);
+}
+
+/* --- Engine objects ------------------------------------------------------- */
+
+typedef struct volya_engine_object {
+  const char *cls;  /* A registered engine class. */
+  double part;      /* The engine part the object holds. */
+} volya_engine_object;
+
+/* An object of an engine class the engine makes, not a script: it holds its
+** part from the start and lives as long as the state. */
+static int new_engine_object(lua_State *L)
+{
+  const volya_engine_object *e = (const volya_engine_object *)lua_touserdata(L, 1);
+  volya_object *o;
+  int env, obj;
+  push_registry(L, &engine_classes_key);
+  if (lua_isnil(L, -1)) return luaL_error(L, "the class system isn't open");
+  lua_getfield(L, -1, e->cls);
+  if (!is_class(L, -1)) return luaL_error(L, "no engine class '%s'", e->cls);
+  lua_getfenv(L, -1);
+  env = lua_gettop(L);
+  o = (volya_object *)lua_newuserdata(L, sizeof *o);
+  obj = lua_gettop(L);
+  o->ok = 1;
+  o->has_part = 1;
+  o->part = e->part;
+  lua_getfield(L, env, "metatable");
+  lua_setmetatable(L, obj);
+  lua_newtable(L);
+  lua_setfenv(L, obj);
+  push_registry(L, &objects_key);
+  lua_pushnumber(L, e->part);
+  lua_pushvalue(L, obj);
+  lua_rawset(L, -3);
+  push_registry(L, &engine_objects_key);
+  lua_pushnumber(L, e->part);
+  lua_pushvalue(L, obj);
+  lua_rawset(L, -3);
+  return 0;
+}
+
+/* Makes engine object `e`. */
+int volya_new_engine_object_protected(lua_State *L, volya_engine_object *e)
+{
+  return lua_cpcall(L, new_engine_object, e);
+}
+
+typedef struct volya_object_function {
+  const char *name;
+  volya_rust_fn f;
+} volya_object_function;
+
+/* Sets the global `name` to Rust function `f`, whose first result, an engine
+** part's id, becomes that part's object (object_result). */
+static int set_object_function(lua_State *L)
+{
+  const volya_object_function *r = (const volya_object_function *)lua_touserdata(L, 1);
+  push_rust(L, r->f);
+  lua_pushcclosure(L, object_result, 1);
+  lua_setfield(L, LUA_GLOBALSINDEX, r->name);
+  return 0;
+}
+
+int volya_register_object_function_protected(lua_State *L, volya_object_function *r)
+{
+  return lua_cpcall(L, set_object_function, r);
 }
 
 /* --- The engine's calls into overrides (5) -------------------------------- */
@@ -833,6 +930,10 @@ static int open_classes(lua_State *L)
   lua_rawset(L, LUA_REGISTRYINDEX);
 
   lua_pushlightuserdata(L, &engine_classes_key);
+  lua_newtable(L);
+  lua_rawset(L, LUA_REGISTRYINDEX);
+
+  lua_pushlightuserdata(L, &engine_objects_key);
   lua_newtable(L);
   lua_rawset(L, LUA_REGISTRYINDEX);
 

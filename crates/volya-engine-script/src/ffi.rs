@@ -111,6 +111,22 @@ pub struct EngineMethod {
     pub name: *const c_char,
     pub call: RustFn,
     pub default: RustFn,
+    /// Returns an engine object (`object_result`).
+    pub object: c_int,
+}
+
+/// `volya_engine_object` (csrc/volya_class.c).
+#[repr(C)]
+pub struct EngineObject {
+    pub class: *const c_char,
+    pub part: f64,
+}
+
+/// `volya_object_function` (csrc/volya_class.c).
+#[repr(C)]
+pub struct ObjectFunction {
+    pub name: *const c_char,
+    pub f: RustFn,
 }
 
 /// `volya_engine_property` (csrc/volya_class.c).
@@ -169,6 +185,11 @@ unsafe extern "C" {
     pub fn volya_register_class_protected(l: *mut LuaState, class: *mut EngineClass) -> c_int;
     pub fn volya_dispatch_protected(l: *mut LuaState, dispatch: *mut Dispatch) -> c_int;
     pub fn volya_open_factory_tools_protected(l: *mut LuaState, name: *const c_char) -> c_int;
+    pub fn volya_new_engine_object_protected(l: *mut LuaState, object: *mut EngineObject) -> c_int;
+    pub fn volya_register_object_function_protected(
+        l: *mut LuaState,
+        function: *mut ObjectFunction,
+    ) -> c_int;
 }
 
 unsafe extern "C" {
