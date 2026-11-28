@@ -137,7 +137,10 @@ fn step(x: f32, vx: f32) -> WorldStep {
         mass: 80.0,
         material: 0,
         moving: true,
+        direction: [1.0, 0.0, 0.0],
         step_assist: false,
+        replacement: false,
+        blocked: false,
         traction: 1.0,
         climbing: false,
     }
@@ -187,6 +190,11 @@ fn setup(active_leaf: bool) -> Setup {
 }
 
 fn run(s: &mut Setup, step: WorldStep) -> (Vec3, bool) {
+    let r = react(s, step);
+    (r.velocity, r.blocked)
+}
+
+fn react(s: &mut Setup, step: WorldStep) -> Reaction {
     let (p, solver) = s.world.with_solver(s.player);
     let Some(Thing::Player(p)) = p else {
         unreachable!()
@@ -235,6 +243,48 @@ fn the_outer_sphere_only_blocks() {
     assert!(blocked);
     assert_eq!(dv, [0.0; 3]);
     assert!(!s.world.is_active(s.leaf));
+}
+
+/// step-assistance-movable-bodies.md 2.1, 3.3: every contact with the leaf
+/// sets the touch flag, the outer sphere's alone too; only those the rules
+/// handle as made are counted.
+#[test]
+fn contacts_with_the_leaf_set_the_touch_flag() {
+    let mut s = setup(false);
+    let r = react(&mut s, step(-3.0, 1.0));
+    assert!(!r.touch && r.made == 0);
+    let r = react(&mut s, step(0.0, 1.0));
+    assert!(r.touch && r.blocked, "{r:?}");
+    assert_eq!(r.made, 0, "the outer sphere's are not counted");
+    let r = react(&mut s, step(0.16, 1.0));
+    assert!(r.touch && r.made > 0, "{r:?}");
+    let r = react(&mut s, step(-3.0, 1.0));
+    assert!(!r.touch && r.made == 0, "taken: {r:?}");
+}
+
+/// level-cform.md 6.3 with step-assistance-movable-bodies.md 4: the step
+/// replacement acts on a movable body's contacts as on the level's (here
+/// with "blocked" clear so far): the bottom sphere's contact with the
+/// leaf's face, at its centre's height and against the movement, is pushed
+/// straight up; with "blocked" set it is kept.
+#[test]
+fn the_replacement_acts_on_the_leaf() {
+    let assisted = |blocked| WorldStep {
+        replacement: true,
+        blocked,
+        step_assist: true,
+        ..step(0.16, 1.0)
+    };
+    let mut s = setup(false);
+    let r = react(&mut s, assisted(false));
+    assert!(r.made > 0);
+    // The outer sphere's contact sets "blocked" too, which keeps the
+    // contacts handled after it in the step unreplaced; the bottom
+    // sphere's comes first (the player's shapes' order).
+    assert!(r.velocity[1] > 0.1, "pushed up: {r:?}");
+    let mut s = setup(false);
+    let r = react(&mut s, assisted(true));
+    assert!(r.velocity[1].abs() < 0.05 && r.velocity[0] < -0.1, "{r:?}");
 }
 
 /// 1.2: an active leaf later in the active objects is collided in the

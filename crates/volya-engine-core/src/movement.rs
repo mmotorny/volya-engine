@@ -1170,6 +1170,8 @@ impl Player {
             &StepInput {
                 acceleration: a,
                 jump_requested: take_off.is_some(),
+                climbing_state: self.climber.state(),
+                keeps_ladder: self.climber.ladder().is_some(),
             },
         );
         if c.ground.is_some() {
@@ -1191,7 +1193,9 @@ impl Player {
         let climbing = self.climber.state().climbing();
         self.body.set_climbing(climbing);
         let drive = self.climber.drive(ladders, &view);
-        let force = self.forces(&c, airborne, take_off.is_some(), climbing, drive, held);
+        let (force, drive) = self.forces(&c, airborne, take_off.is_some(), climbing, drive, held);
+        // step-assistance-movable-bodies.md 3.3: the next decision's `F`.
+        self.body.set_drive_force(drive);
         let r = self.body.finish_step(force, take_off.is_some());
 
         // 6.3: the speed cap, then the drag.
@@ -1253,7 +1257,9 @@ impl Player {
 
     /// The character's forces of a step (6.2–6.6, climbing.md 3.2), gravity
     /// included unless climbing, within the force limit of 6.1; `held` the
-    /// climbing rules' own forces (climbing.md 2.5).
+    /// climbing rules' own forces (climbing.md 2.5). Also the drive force of
+    /// 6.2 alone (with level-cform.md 6.2's changes during step assistance;
+    /// the climbing drive while climbing, our reading), zero when none acts.
     fn forces(
         &self,
         c: &StepContacts,
@@ -1262,7 +1268,7 @@ impl Player {
         climbing: bool,
         drive: Option<Drive>,
         held: Vec3,
-    ) -> Vec3 {
+    ) -> (Vec3, Vec3) {
         let m = self.config.body.mass;
         // climbing.md 3.1: traction 1 and no gravity while climbing.
         let f = if climbing { 1.0 } else { c.traction };
@@ -1295,9 +1301,11 @@ impl Player {
             }
         };
         let input = normalize(horizontal(c.direction));
+        let mut movement = [0.0; 3];
         if let Some(Drive::Climb(dir)) = drive {
             if c.moving {
-                force = add(force, scale(dir, CLIMB_DRIVE * f * m));
+                movement = scale(dir, CLIMB_DRIVE * f * m);
+                force = add(force, movement);
                 side(&mut force, Some(dir));
             }
         } else if c.moving && !airborne {
@@ -1316,6 +1324,7 @@ impl Player {
             } else {
                 drive
             };
+            movement = drive;
             force = add(force, drive);
             side(&mut force, input);
             if c.ground.is_none() {
@@ -1350,7 +1359,7 @@ impl Player {
         if total > limit {
             force = scale(force, limit / total);
         }
-        force
+        (force, movement)
     }
 
     /// 6.7 and 9.2: the first touch of an airborne phase at impact speed

@@ -6,8 +6,10 @@
 //! docs/behavior/physics-contacts.md 7: the player run at the locked leaf
 //! meets it through the physics world's contacts, kept by the player's
 //! rules, which push the leaf (its motor holding it closed) and stop the
-//! player; walking away, none. Measures the physics step's cost with the
-//! player's body in the world. Skips when `VOLYA_GOG_INSTALLER` is unset.
+//! player; walking away, none; touching it, no step assistance lifts the
+//! player (step-assistance-movable-bodies.md 5). Measures the physics
+//! step's cost with the player's body in the world. Skips when
+//! `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -111,8 +113,24 @@ fn the_leaf_meets_the_players_body() {
     run.level.take_physics_timers();
     let mut closest = f32::INFINITY;
     let mut most = 0.0f32;
-    for _ in 0..150 {
+    // step-assistance-movable-bodies.md 5: while the body touches the
+    // leaf, step assistance stays off (the recorded position's first value
+    // lies beyond the height limit) and the body stays on the floor; the
+    // step of the first touch is decided as not touching (the touch flag
+    // comes a step late) and the run's impact on the sill lifts it once.
+    let (mut low, mut high) = (f32::INFINITY, f32::NEG_INFINITY);
+    let (mut touched, mut assisted) = (0, 0);
+    for frame in 0..150 {
         run.frames(1);
+        let body = run.level.player().body();
+        if body.touching_movable_body() {
+            touched += 1;
+            assisted += u32::from(touched > 2 && body.last_step().step_assist);
+        }
+        if frame >= 75 {
+            low = low.min(run.feet()[1]);
+            high = high.max(run.feet()[1]);
+        }
         closest = closest.min(across(run.feet(), n) - leaf.half_size[k]);
         let angle = run.level.physics().hinge_angle(door, "door").unwrap();
         most = most.max(angle.abs());
@@ -122,6 +140,10 @@ fn the_leaf_meets_the_players_body() {
     let left = across(run.feet(), n) - leaf.half_size[k];
     eprintln!(
         "running 2.4 s at the leaf: {met} contacts kept, closest {closest:.3} m from the face, {left:.3} at the end; the hinge's angle at most {most:.2e} rad"
+    );
+    eprintln!(
+        "touching in {touched} frames, step assistance in {assisted}; the feet's height in the run's second half {low:.3} … {high:.3} (start {:.3})",
+        start[1]
     );
     eprintln!(
         "physics while pushing: {} steps, {:.4} ms each (collider {:.4}, solver {:.4})",
@@ -135,6 +157,11 @@ fn the_leaf_meets_the_players_body() {
     assert!(met > 0);
     assert!(closest > 0.2 && left < 0.5, "{closest} … {left}");
     assert!(most < 0.05, "{most}");
+    assert!(touched > 100 && assisted == 0, "{touched} {assisted}");
+    assert!(
+        high - low < 0.01 && (low - start[1]).abs() < 0.02,
+        "{low} … {high}"
+    );
     // Turned round and walking off: no more contacts.
     run.key(Key::W, false);
     let feet = run.feet();

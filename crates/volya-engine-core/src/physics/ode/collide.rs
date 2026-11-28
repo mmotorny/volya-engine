@@ -78,6 +78,11 @@ pub struct Draft {
     pub materials: (u32, u32),
     /// A contact with the level.
     pub level: bool,
+    /// Both shapes are attached to bodies: a contact with a movable body
+    /// for the player's (step-assistance-movable-bodies.md, conventions).
+    pub bodies: bool,
+    /// Whether each material (first, second) is pass-through.
+    pub pass_through: (bool, bool),
 }
 
 /// What a body's liquid contacts left for its pre-step (2.4): the damping
@@ -224,7 +229,13 @@ impl OdeSolver {
 
     /// 2.2 – 2.3, item 1: a contact's draft with materials `a` (first) and
     /// `b` (second) at step `h`.
-    fn draft(&self, c: &RawContact, materials: (u32, u32), level: bool, h: f32) -> Option<Draft> {
+    fn draft(
+        &self,
+        c: &RawContact,
+        materials: (u32, u32),
+        (level, bodies): (bool, bool),
+        h: f32,
+    ) -> Option<Draft> {
         let (a, b) = (self.material(materials.0)?, self.material(materials.1)?);
         let p: Properties = properties(a, b, h);
         Some(Draft {
@@ -248,6 +259,8 @@ impl OdeSolver {
             made: !(level && a.has(PASS_THROUGH)),
             materials,
             level,
+            bodies,
+            pass_through: (a.has(PASS_THROUGH), b.has(PASS_THROUGH)),
         })
     }
 
@@ -349,7 +362,9 @@ impl OdeSolver {
                 self.pair_contacts(&ea.shape, &eb.shape, MAX_PAIR_CONTACTS - asked, &mut raw);
                 asked += raw.len();
                 for c in &raw {
-                    let Some(mut d) = self.draft(c, (ea.material, eb.material), false, params.step)
+                    let bodies = ea.body.is_some() && eb.body.is_some();
+                    let Some(mut d) =
+                        self.draft(c, (ea.material, eb.material), (false, bodies), params.step)
                     else {
                         continue;
                     };
@@ -410,9 +425,12 @@ impl OdeSolver {
             );
             for lc in &found {
                 let material = world.material_index(lc.triangle);
-                let Some(mut d) =
-                    self.draft(&lc.contact, (material, g.material), true, params.step)
-                else {
+                let Some(mut d) = self.draft(
+                    &lc.contact,
+                    (material, g.material),
+                    (true, false),
+                    params.step,
+                ) else {
                     continue;
                 };
                 let m = world.material(lc.triangle);

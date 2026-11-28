@@ -9,10 +9,13 @@
 //! halves, so a movement layer (`player-movement`) can compute its forces
 //! from the step's collision results:
 //!
-//! 1. [`PlayerBody::begin_step`] takes the requested acceleration, runs the
-//!    step probe (6.3), generates the contacts and applies the player's
-//!    contact rules (4, 5.4, 6.3), and reports ground, obstacle, traction
-//!    and step assistance ([`StepContacts`]).
+//! 1. [`PlayerBody::begin_step`] takes the requested acceleration,
+//!    generates the contacts and applies the player's contact rules (4,
+//!    5.4, 6.3) under the previous step's step assistance, then runs the
+//!    step probe and the step-assistance decision
+//!    (docs/behavior/step-assistance-movable-bodies.md, cited as `assist`;
+//!    its section 3.1), and reports ground, obstacle, traction and step
+//!    assistance ([`StepContacts`]).
 //! 2. [`PlayerBody::finish_step`] takes the total external force (gravity
 //!    included: its value belongs to `player-movement`), solves the
 //!    contacts and moves the body, and reports the airborne state and
@@ -31,6 +34,7 @@ use volya_engine_formats::gamemtl::{ACTOR_OBSTACLE, BOUNCY, PASS_THROUGH};
 
 use super::CollisionWorld;
 use super::geometry::{self, RawContact, Vec3, add, cross, dot, length, normalize, scale, sub};
+use crate::climbing::ClimbState;
 use crate::config::{Section, value};
 
 /// The physics step `h` of `ph_frequency = 100` (section 6.1; the shipped
@@ -88,6 +92,13 @@ pub const LADDER_TRIANGLES: u32 = 0x8000_0000;
 /// centre, in `r` (section 5.1).
 pub const OUTER_RADIUS: f32 = 2.0;
 pub const OUTER_HEIGHT: f32 = 2.5;
+/// The step-assistance decision while touching a movable body (`assist`
+/// 3.2): the height limit, the least lead of the obstacle along the
+/// previous drive and of the plain sum of `Δ`'s horizontal components, and
+/// the least rise of the obstacle point over the ground point.
+pub const STEP_HEIGHT_LIMIT: f32 = 0.5;
+pub const OBSTACLE_LEAD: f32 = 0.05;
+pub const OBSTACLE_RISE: f32 = 0.01;
 /// The constant of the normal-direction softening (5.4): 0.5 for the
 /// level, 5 for a movable body (docs/behavior/trader-door.md 3.3).
 pub const LEVEL_SOFTENING: f32 = 0.5;
@@ -285,6 +296,24 @@ pub struct StepInput {
     pub acceleration: Vec3,
     /// A jump has been requested and not yet started (6.3).
     pub jump_requested: bool,
+    /// The climbing state (climbing.md 2.2) and whether the body keeps a
+    /// ladder, for the step-assistance decision (`assist` 3.2).
+    pub climbing_state: ClimbState,
+    pub keeps_ladder: bool,
+}
+
+/// What the physics world's step left of the player's contacts with
+/// movable bodies ([`PlayerBody::react`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Reaction {
+    /// The change the solving made to the velocity (physics-contacts.md 7).
+    pub velocity: Vec3,
+    /// A contact set the step's "blocked" flag (trader-door.md 3.1, 3.3).
+    pub blocked: bool,
+    /// The touch flag (`assist` 2.1).
+    pub touch: bool,
+    /// The contacts the rules handled as made (`assist` 3.3).
+    pub made: u32,
 }
 
 /// One contact of a step after the player's rules.
@@ -325,8 +354,13 @@ pub struct StepContacts {
     pub obstacle: Option<Vec3>,
     /// The step's traction `T` (5.4): `player-movement`'s friction factor.
     pub traction: f32,
+    /// The step's step-assistance decision (`assist` 3), which its drive
+    /// uses.
     pub step_assist: bool,
-    /// The step's "blocked" flag (6.3).
+    /// The previous decision, which the step's contact rules used (3.1).
+    pub rules_step_assist: bool,
+    /// The step's "blocked" flag (6.3): its head-sphere contacts and the
+    /// probe's upper box.
     pub blocked: bool,
     /// The step's impact speed (4.4).
     pub impact_speed: f32,
@@ -353,11 +387,32 @@ pub struct PlayerBody {
     /// The centre at the end of the previous step (front-side test, 4.1).
     previous: Vec3,
     velocity: Vec3,
-    /// Step assistance of the last probe (6.3). Kept while no movement is
-    /// requested and the probe does not run (our reading), so resting
-    /// friction is ×4 after stopping at a step (5.4).
+    /// The last step-assistance decision (`assist` 3), which the next
+    /// step's contact rules use (3.1).
     step_assist: bool,
     blocked_previous: bool,
+    /// The replacement's conditions of the step and its contacts' "blocked"
+    /// flag, for its contacts with movable bodies ([`WorldStep`]).
+    replacement: bool,
+    contacts_blocked: bool,
+    /// The touch flag and the previous-step flag (`assist` 2.1, 2.2). The
+    /// touch flag is the latest physics world step's, which runs after the
+    /// movement step it meets (docs/architecture/simulation.md), so it
+    /// reaches the decision a step later than the original's: the step of
+    /// the first touch and the one after the last are decided as not
+    /// touching and touching (TODO(#1041)).
+    touch: bool,
+    touch_previous: bool,
+    /// What else the latest world step left for the decision: its
+    /// "blocked" flag and its contacts handled as made (`assist` 3.2, 3.3).
+    world_blocked: bool,
+    world_made: u32,
+    /// The ground point (`assist` 3.3): the last one stored.
+    ground_point: Vec3,
+    /// The recorded position (`assist` 3.2 item 4, 3.3).
+    recorded_position: Vec3,
+    /// The previous step's drive force `F` (`assist` 3.3).
+    drive_force: Vec3,
     had_contact: bool,
     departure: Option<Vec3>,
     airborne: bool,
@@ -401,6 +456,21 @@ impl PlayerBody {
             velocity: [0.0; 3],
             step_assist: false,
             blocked_previous: false,
+            replacement: false,
+            contacts_blocked: false,
+            // `assist` 2.2: cleared at creation; the previous-step flag's
+            // first value is unestablished, clear here (our choice).
+            touch: false,
+            touch_previous: false,
+            world_blocked: false,
+            world_made: 0,
+            // `assist` 3.3: unestablished before the first ground contact
+            // and the first recording; zeros (our choice: the memory held
+            // zeros, the case of `assist` 5 consistent with the original's
+            // player staying on the floor at the trader's door).
+            ground_point: [0.0; 3],
+            recorded_position: [0.0; 3],
+            drive_force: [0.0; 3],
             had_contact: false,
             departure: None,
             airborne: false,
@@ -494,21 +564,51 @@ impl PlayerBody {
             mass: self.config.mass,
             material: self.material,
             moving: self.step.moving,
-            step_assist: self.step.step_assist,
+            direction: self.step.direction,
+            step_assist: self.step.rules_step_assist,
+            replacement: self.replacement,
+            blocked: self.contacts_blocked,
             traction: self.step.traction,
             climbing: self.climbing,
         }
     }
 
     /// The world step's reaction on the body (physics-contacts.md 5, 7):
-    /// the change `dv` its contacts with movable bodies made to the
-    /// velocity, which moves the body for the step too, and whether they set
-    /// the "blocked" flag (trader-door.md 3.1, 3.3), which the next step's
-    /// replacement reads (6.3).
-    pub fn react(&mut self, dv: Vec3, blocked: bool) {
+    /// the change its contacts with movable bodies made to the velocity,
+    /// which moves the body for the step too; whether they set the
+    /// "blocked" flag (trader-door.md 3.1, 3.3), which the next step's
+    /// replacement reads (6.3); the touch flag and the contacts handled as
+    /// made, for the next step-assistance decision (`assist` 2, 3).
+    pub fn react(&mut self, reaction: Reaction) {
+        let dv = reaction.velocity;
         self.velocity = add(self.velocity, dv);
         self.centre = add(self.centre, scale(dv, STEP));
-        self.blocked_previous |= blocked;
+        self.blocked_previous |= reaction.blocked;
+        self.touch |= reaction.touch;
+        self.world_blocked |= reaction.blocked;
+        self.world_made += reaction.made;
+    }
+
+    /// The drive force the movement layer computed for the step begun
+    /// (player-movement.md 6.2, with level-cform.md 6.2's changes during
+    /// step assistance): the next decision's `F` (`assist` 3.3).
+    pub fn set_drive_force(&mut self, force: Vec3) {
+        self.drive_force = force;
+    }
+
+    /// Whether the body counts as touching a movable body (`assist` 2.2).
+    pub fn touching_movable_body(&self) -> bool {
+        self.touch || self.touch_previous
+    }
+
+    /// The collision results of the latest step begun.
+    pub fn last_step(&self) -> StepContacts {
+        self.step
+    }
+
+    /// The recorded position (`assist` 3.2 item 4).
+    pub fn recorded_position(&self) -> Vec3 {
+        self.recorded_position
     }
 
     /// The contacts of the current step, after the player's rules.
@@ -516,7 +616,9 @@ impl PlayerBody {
         &self.contacts
     }
 
-    /// The first half of a step: probe, contacts and rules.
+    /// The first half of a step: the contacts and their rules, under the
+    /// previous step's step assistance, then the probe and the
+    /// step-assistance decision (`assist` 3.1).
     pub fn begin_step(&mut self, world: &CollisionWorld, input: &StepInput) -> StepContacts {
         let a = input.acceleration;
         let moving = length(a) > MOVE_THRESHOLD;
@@ -525,59 +627,117 @@ impl PlayerBody {
         } else {
             [0.0; 3]
         };
-        let mut blocked = false;
-        if moving {
-            let (lower, upper) = self.probe(world, direction);
-            self.step_assist = lower && !upper;
-            blocked = upper;
-        }
+        // `assist` 3.1, 4: the replacement and the ×4 friction follow the
+        // previous step's decision; the replacement is off while climbing
+        // (level-cform.md 6.3's two internal states, climbing up and down).
+        let rules_step_assist = self.step_assist;
+        self.replacement = moving
+            && rules_step_assist
+            && !self.blocked_previous
+            && !self.climbing
+            && !input.jump_requested
+            && !self.jump_in_progress;
         let rules = Rules {
             moving,
             direction,
-            step_assist: self.step_assist,
-            blocked,
-            replacement: moving
-                && self.step_assist
-                && !self.blocked_previous
-                && !input.jump_requested
-                && !self.jump_in_progress,
+            step_assist: rules_step_assist,
+            blocked: false,
+            replacement: self.replacement,
         };
         let mut contacts = std::mem::take(&mut self.contacts);
         let mut scratch = std::mem::take(&mut self.scratch);
         let out = self.collide(world, &self.shapes, rules, &mut contacts, &mut scratch);
         self.contacts = contacts;
         self.scratch = scratch;
+        self.contacts_blocked = out.blocked;
         if let Some(m) = out.material {
             self.ground_material = Some(m);
         }
         // 6.2: ground and obstacle among the contacts with force, by their
         // normals as generated, before the step replacement (our reading;
         // replaced normals all point up).
-        let ground = self
-            .contacts
-            .iter()
-            .map(|c| c.generated_normal)
-            .max_by(|a, b| a[1].total_cmp(&b[1]));
+        let ground = (self.contacts.iter())
+            .max_by(|p, q| p.generated_normal[1].total_cmp(&q.generated_normal[1]))
+            .copied();
         let obstacle = moving
             .then(|| {
-                self.contacts
-                    .iter()
-                    .map(|c| c.generated_normal)
-                    .min_by(|p, q| horizontal_dot(*p, a).total_cmp(&horizontal_dot(*q, a)))
+                self.contacts.iter().min_by(|p, q| {
+                    horizontal_dot(p.generated_normal, a)
+                        .total_cmp(&horizontal_dot(q.generated_normal, a))
+                })
             })
-            .flatten();
+            .flatten()
+            .copied();
+        if let Some(g) = ground {
+            self.ground_point = g.point;
+        }
+        // `assist` 1: the probe's upper box hit sets the step's "blocked".
+        let (probe, upper) = self.probe(world, a);
+        let blocked = out.blocked || upper;
+        let count = self.contacts.len() as u32 + self.world_made;
+        self.step_assist =
+            self.decide(input, probe, obstacle, blocked || self.world_blocked, count);
         self.step = StepContacts {
             moving,
             direction,
-            ground,
-            walkable: ground.is_some_and(|n| n[1] > WALKABLE_NORMAL_Y),
-            obstacle,
+            ground: ground.map(|c| c.generated_normal),
+            walkable: ground.is_some_and(|c| c.generated_normal[1] > WALKABLE_NORMAL_Y),
+            obstacle: obstacle.map(|c| c.generated_normal),
             traction: out.traction,
             step_assist: self.step_assist,
-            blocked: out.blocked,
+            rules_step_assist,
+            blocked,
             impact_speed: out.impact,
         };
         self.step
+    }
+
+    /// The step-assistance decision (`assist` 3.2) from the probe's result,
+    /// the step's obstacle contact, its "blocked" flag and its contact
+    /// count (3.3). The obstacle and ground points are the level's
+    /// contacts': the contacts with movable bodies are the physics world's,
+    /// which take no part in the movement's ground and obstacle (our
+    /// reading, docs/architecture/simulation.md).
+    fn decide(
+        &mut self,
+        input: &StepInput,
+        probe: bool,
+        obstacle: Option<Contact>,
+        blocked: bool,
+        count: u32,
+    ) -> bool {
+        if !self.touching_movable_body() {
+            return probe && input.climbing_state != ClimbState::AtBottom;
+        }
+        // 1. Probe, without the climbing-state exception.
+        let mut on = probe;
+        // 2. Height limit.
+        let centre = self.centre;
+        if on && (centre[1] - self.recorded_position[1]).abs() > STEP_HEIGHT_LIMIT {
+            on = false;
+        }
+        let Some(obstacle) = obstacle.filter(|_| count > 1) else {
+            return on;
+        };
+        let d = sub(obstacle.point, self.ground_point);
+        // 3. Switch-on. TODO(#1042): in the step after the last contact,
+        // touching through the previous-step flag alone, "blocked" can be
+        // clear, so the switch-on and the recording act on the other
+        // contacts (the rules as stated; `assist` 5 leaves that step out).
+        let f = self.drive_force;
+        if (!input.keeps_ladder || input.climbing_state == ClimbState::Near)
+            && obstacle.generated_normal[1] < WALKABLE_NORMAL_Y
+            && !blocked
+            && d[0] * f[0] + d[2] * f[2] > OBSTACLE_LEAD
+            && d[1] > OBSTACLE_RISE
+        {
+            on = true;
+        }
+        // 4. Recording.
+        if on && (d[2] + d[0]).abs() > OBSTACLE_LEAD && d[1] > OBSTACLE_RISE {
+            self.recorded_position = centre;
+        }
+        on
     }
 
     /// The second half of a step: `force` (newtons, gravity included) acts
@@ -597,6 +757,10 @@ impl PlayerBody {
         self.centre = add(self.centre, scale(v, STEP));
         self.velocity = v;
         self.blocked_previous = self.step.blocked;
+        // `assist` 2.2: the post-step work.
+        self.touch_previous = std::mem::take(&mut self.touch);
+        self.world_blocked = false;
+        self.world_made = 0;
         // 6.4: contacts here are those with collision force (our reading of
         // "no contact at all": pass-through contacts do not count).
         let had_contact = !self.contacts.is_empty();
@@ -747,11 +911,17 @@ impl PlayerBody {
         self.shapes = Shapes::of(self.config.boxes[index]);
     }
 
-    /// The step probe (6.3): whether a solid triangle meets the lower and
-    /// the upper box ahead of the feet along `direction` (its horizontal
-    /// part; none when it has none, our choice).
-    fn probe(&mut self, world: &CollisionWorld, direction: Vec3) -> (bool, bool) {
-        let Some(along) = normalize([direction[0], 0.0, direction[2]]) else {
+    /// The step probe (`assist` 1, level-cform.md 6.3) along the stored
+    /// acceleration `a`: whether it reports step assistance on, and whether
+    /// a solid triangle met the upper box (the step's "blocked"). With
+    /// `a` = 0 it reports on without testing; it tests the level's mesh
+    /// only, never a movable body. With no horizontal part of `a` no box is
+    /// placed and it reports off (our choice).
+    fn probe(&mut self, world: &CollisionWorld, a: Vec3) -> (bool, bool) {
+        if a == [0.0; 3] {
+            return (true, false);
+        }
+        let Some(along) = normalize([a[0], 0.0, a[2]]) else {
             return (false, false);
         };
         let across = cross(UP, along);
@@ -774,9 +944,8 @@ impl PlayerBody {
             &mut self.scratch,
         );
         // Half-sizes 0.7·r along â and 0.5·r across it: the spec believes
-        // this assignment (6.3). The step probe is not skipped in the
-        // spec's one unestablished movement state, which is believed not
-        // to occur on foot (our choice).
+        // this assignment (6.3). That state is the climbing state at the
+        // bottom (`assist` 3.2), which the decision reads.
         let axes = [along, UP, across];
         let upper = (
             add(centre, [0.0, PROBE_UPPER_HEIGHT, 0.0]),
@@ -798,7 +967,7 @@ impl PlayerBody {
                 break;
             }
         }
-        (lo, hi)
+        (lo && !hi, hi)
     }
 
     /// Generates the contacts of `shapes` at the current centre and applies
@@ -1021,10 +1190,16 @@ pub struct WorldStep {
     pub shapes: Shapes,
     pub mass: f32,
     pub material: u32,
-    /// The step's rules (6.2, 5.4): movement requested, step assistance,
-    /// the traction `T`, climbing (climbing.md 3.4).
+    /// The step's rules (6.2, 5.4, 6.3): movement requested and `â`, step
+    /// assistance as its contact rules use it (`assist` 3.1), the step
+    /// replacement's conditions but "blocked" so far, the step's level
+    /// contacts' "blocked" flag, the traction `T`, climbing (climbing.md
+    /// 3.4).
     pub moving: bool,
+    pub direction: Vec3,
     pub step_assist: bool,
+    pub replacement: bool,
+    pub blocked: bool,
     pub traction: f32,
     pub climbing: bool,
 }
@@ -1036,27 +1211,52 @@ pub struct MovableContact {
     pub erp: f32,
     pub cfm: f32,
     pub friction: f32,
+    /// The step replacement's normal (towards the player) and depth
+    /// (level-cform.md 6.3).
+    pub replaced: Option<(Vec3, f32)>,
     /// A head contact sets the step's "blocked" flag (5.4, 6.3).
     pub blocked: bool,
 }
 
 /// The player's contact rules for a contact of its `shape` with a movable
-/// body (level-cform.md 5.4 with docs/behavior/trader-door.md 3.3's
-/// differences): `normal` points towards the player's shape, `library_y`
-/// is the y of the library's normal as generated for the pair, and `erp`,
-/// `cfm` and `mu` are the pair's (physics-contacts.md 2.2). `None` when the
-/// rules drop it. The step replacement does not act on these contacts:
-/// step assistance against movable bodies is its own spec (TODO(#898)).
+/// body (level-cform.md 5.4 and 6.3 with docs/behavior/trader-door.md 3.3's
+/// differences): `normal` points towards the player's shape, `point` is the
+/// contact's position, `first` says the player's shape is the pair's first
+/// (the library's normal is `normal` then, else its opposite; the softening
+/// takes the replaced one once replaced, the level's order, our reading),
+/// `erp`, `cfm` and `mu` are the pair's
+/// (physics-contacts.md 2.2), and `blocked` says whether the step's
+/// "blocked" flag is set so far. `None` when the rules drop it. The step
+/// replacement acts on them as on the level's (`assist` 4); which of a
+/// step's contacts come before the outer sphere's sets "blocked" is
+/// unestablished: those the world handles first (our order).
 pub fn movable_contact(
     shape: Shape,
-    normal: Vec3,
-    library_y: f32,
+    (normal, point, first): (Vec3, Vec3, bool),
     (mut erp, mut cfm, mu): (f32, f32, f32),
+    blocked: bool,
     step: &WorldStep,
 ) -> Option<MovableContact> {
-    if shape == Shape::Bottom && normal[1] < 0.0 {
-        return None;
-    }
+    let c = step.centre;
+    let active = step.replacement && !blocked;
+    let against = horizontal_dot(normal, step.direction) <= 0.0;
+    let replace = match shape {
+        Shape::Bottom if active && normal[1] <= 0.0 && against => true,
+        Shape::Bottom if !active && normal[1] < 0.0 => return None,
+        Shape::Torso => active && point[1] < c[1] && against,
+        _ => false,
+    };
+    let replaced = if replace {
+        let depth = step.shapes.r + (point[1] - c[1]);
+        if depth <= 0.0 {
+            return None;
+        }
+        Some((UP, depth))
+    } else {
+        None
+    };
+    let towards_y = replaced.map_or(normal[1], |(n, _)| n[1]);
+    let library_y = if first { towards_y } else { -towards_y };
     if step.climbing && step.moving {
         let (world_erp, world_cfm) = world_erp_cfm();
         (erp, cfm) = (world_erp, 2.0 * world_cfm);
@@ -1086,6 +1286,7 @@ pub fn movable_contact(
         erp,
         cfm,
         friction,
+        replaced,
         blocked: shape == Shape::Head,
     })
 }
@@ -1240,7 +1441,7 @@ mod tests {
         for _ in 0..steps {
             let input = StepInput {
                 acceleration: a,
-                jump_requested: false,
+                ..StepInput::default()
             };
             last = body.step(world, &input, |c| {
                 let mut drive = if c.moving {
@@ -1342,6 +1543,106 @@ mod tests {
         }
     }
 
+    /// docs/behavior/step-assistance-movable-bodies.md 2, 3: the decision
+    /// while touching a movable body, at a 0.2 m step 10 m up (so the
+    /// recorded position's first value, zeros, is beyond the height limit),
+    /// the bottom sphere on the edge.
+    #[test]
+    fn touching_a_movable_body_changes_the_decision() {
+        let mut b = Builder::default();
+        b.floor([-10.0, 1.0], [-10.0, 10.0], 10.0, true);
+        b.wall_x(1.0, [10.0, 10.2], [-10.0, 10.0], true);
+        b.floor([1.0, 10.0], [-10.0, 10.0], 10.2, true);
+        let world = b.world();
+        let at_edge = [0.7, 9.999, 0.0];
+        let mut body = PlayerBody::new(config(), at_edge);
+        let input = StepInput {
+            acceleration: [1.0, 0.0, 0.0],
+            ..StepInput::default()
+        };
+        let decide = |body: &mut PlayerBody, reaction: Reaction, drive: Vec3| {
+            body.set_position(at_edge);
+            body.react(reaction);
+            body.set_drive_force(drive);
+            let c = body.begin_step(&world, &input);
+            assert!(c.obstacle.is_some_and(|n| n[1] < WALKABLE_NORMAL_Y));
+            body.finish_step([0.0; 3], false);
+            c.step_assist
+        };
+        let touch = Reaction {
+            touch: true,
+            ..Reaction::default()
+        };
+        let ahead = [100.0, 0.0, 0.0];
+        // Not touching: the probe's result.
+        assert!(decide(&mut body, Reaction::default(), ahead));
+        // Touching: the height limit turns it off; "blocked" (the outer
+        // sphere) or no lead along the previous drive keeps the switch-on
+        // from acting, and nothing is recorded.
+        let blocked = Reaction {
+            blocked: true,
+            ..touch
+        };
+        assert!(!decide(&mut body, blocked, ahead));
+        assert!(!decide(&mut body, touch, [0.0; 3]));
+        assert!(!decide(&mut body, touch, [-100.0, 0.0, 0.0]));
+        assert_eq!(body.recorded_position(), [0.0; 3]);
+        // The step after the last contact still counts as touching.
+        assert!(body.touching_movable_body());
+        assert!(!decide(&mut body, Reaction::default(), [0.0; 3]));
+        assert!(!body.touching_movable_body());
+        assert!(decide(&mut body, Reaction::default(), [0.0; 3]));
+        // The switch-on: the obstacle ahead along the previous drive, above
+        // the ground point, not blocked, two contacts or more; recorded.
+        assert!(decide(&mut body, touch, ahead));
+        let centre = body.recorded_position();
+        assert!((centre[1] - 10.349).abs() < 1e-4, "{centre:?}");
+        // Now within the height limit: the probe's result, blocked or not.
+        assert!(decide(&mut body, blocked, ahead));
+        // The climbing state at the bottom turns it off only when not
+        // touching; a ladder kept in it skips the switch-on alone.
+        let bottom = StepInput {
+            climbing_state: ClimbState::AtBottom,
+            keeps_ladder: true,
+            ..input
+        };
+        for (reaction, on) in [(touch, true), (Reaction::default(), true)] {
+            body.set_position(at_edge);
+            body.react(reaction);
+            assert_eq!(body.begin_step(&world, &bottom).step_assist, on);
+            body.finish_step([0.0; 3], false);
+        }
+        body.set_position(at_edge);
+        assert!(!body.begin_step(&world, &bottom).step_assist);
+    }
+
+    /// step-assistance-movable-bodies.md 1: with no stored acceleration the
+    /// probe reports on without testing, so resting friction is ×4 (5.4);
+    /// the next step's contact rules use it (3.1).
+    #[test]
+    fn at_rest_the_probe_reports_on() {
+        let mut b = Builder::default();
+        b.floor([-10.0, 10.0], [-10.0, 10.0], 0.0, true);
+        let world = b.world();
+        let mut body = PlayerBody::new(config(), [0.0, -0.001, 0.0]);
+        let c = body.begin_step(&world, &StepInput::default());
+        assert!(c.step_assist && !c.rules_step_assist);
+        let friction = body.contacts()[0].friction;
+        body.finish_step([0.0; 3], false);
+        body.set_position([0.0, -0.001, 0.0]);
+        let c = body.begin_step(&world, &StepInput::default());
+        assert!(c.rules_step_assist);
+        let assisted = body.contacts()[0].friction;
+        assert!((assisted - STEP_ASSIST_FACTOR * friction).abs() < 1e-5);
+        // Moving with nothing ahead: off.
+        body.finish_step([0.0; 3], false);
+        let input = StepInput {
+            acceleration: [1.0, 0.0, 0.0],
+            ..StepInput::default()
+        };
+        assert!(!body.begin_step(&world, &input).step_assist);
+    }
+
     #[test]
     fn stops_at_a_step_above_the_limit() {
         let world = stair(1.0);
@@ -1379,7 +1680,14 @@ mod tests {
 
     #[test]
     fn steep_slopes_are_not_walkable_and_slide() {
-        for (degrees, walkable) in [(30.0f32, true), (60.0, false)] {
+        // At rest the probe reports step assistance on (step-assistance-
+        // movable-bodies.md 1), so friction is ×4 (5.4): μ = 1 holds up to
+        // tan⁻¹ 4 ≈ 76°.
+        for (degrees, walkable, held) in [
+            (30.0f32, true, true),
+            (60.0, false, true),
+            (80.0, false, false),
+        ] {
             let world = slope(degrees);
             // Touching the slope: the centre r along its normal.
             let (sin, cos) = degrees.to_radians().sin_cos();
@@ -1396,8 +1704,7 @@ mod tests {
             let start = body.position();
             let r = walk(&mut body, &world, [0.0; 3], 100);
             let moved = length(sub(r.position, start));
-            if walkable {
-                // Held by friction (tan 30° < μ = 1).
+            if held {
                 assert!(moved < 0.02, "{degrees}: moved {moved}");
             } else {
                 assert!(

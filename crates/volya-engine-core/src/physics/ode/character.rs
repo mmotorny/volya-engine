@@ -7,8 +7,11 @@
 //! level-cform.md 5.1) meeting the movable bodies, the outer sphere's
 //! contacts only setting "blocked" (trader-door.md 3.1), the others under
 //! the player's rules (trader-door.md 3.3) made joints of the player's body
-//! and the movable one. The torso cylinder meets nothing until cylinders
-//! get contacts (TODO(#1010)).
+//! and the movable one; every contact with a movable body reaching the rules
+//! sets the touch flag (step-assistance-movable-bodies.md 2.1). The torso
+//! cylinder meets nothing until cylinders get contacts (TODO(#1010)), so
+//! neither its contacts' touch flag nor their count reaches the
+//! step-assistance decision.
 //!
 //! The player's body is the movement's own solver
 //! (docs/architecture/simulation.md), so in the library it is a stand-in
@@ -21,7 +24,9 @@
 
 use super::collide::{Draft, Geom, bounds_of};
 use super::{BodyId, DMass, DxBody, GroupId, Grouped, OdeSolver, Real, STEPPING};
-use crate::collision::body::{self, OUTER_HEIGHT, OUTER_RADIUS, Shape as Part, WorldStep};
+use crate::collision::body::{
+    self, OUTER_HEIGHT, OUTER_RADIUS, Reaction, Shape as Part, WorldStep,
+};
 use crate::collision::geometry::{Vec3, add, scale, sub};
 use crate::physics::contacts::{Bounds, Class};
 use crate::physics::shell::Shape;
@@ -54,10 +59,10 @@ pub struct OdeCharacter {
     step: Option<WorldStep>,
     geoms: Vec<Geom>,
     bounds: Option<Bounds>,
-    /// The solving's change to the stand-in's velocity and whether a
-    /// contact set "blocked", since last taken.
-    reaction: Vec3,
-    blocked: bool,
+    /// The solving's change to the stand-in's velocity, whether a contact
+    /// set "blocked", the touch flag and the contacts the rules handled as
+    /// made, since last taken.
+    reaction: Reaction,
     /// The contacts its rules kept, since it was made.
     kept: u64,
 }
@@ -90,8 +95,7 @@ impl OdeSolver {
             step: None,
             geoms: Vec::new(),
             bounds: None,
-            reaction: [0.0; 3],
-            blocked: false,
+            reaction: Reaction::default(),
             kept: 0,
         }
     }
@@ -154,19 +158,16 @@ impl OdeCharacter {
         self.step = Some(step);
     }
 
-    /// The change the world's contacts made to the velocity, and whether
-    /// they set "blocked", since last taken.
     /// The contacts with movable bodies its rules kept since it was made
     /// (the group limits may still have left some unmade).
     pub fn kept(&self) -> u64 {
         self.kept
     }
 
-    pub fn take_reaction(&mut self) -> (Vec3, bool) {
-        (
-            std::mem::take(&mut self.reaction),
-            std::mem::take(&mut self.blocked),
-        )
+    /// What the world's contacts left since last taken: the change to the
+    /// velocity, "blocked", the touch flag and the count of contacts made.
+    pub fn take_reaction(&mut self) -> Reaction {
+        std::mem::take(&mut self.reaction)
     }
 }
 
@@ -180,7 +181,7 @@ impl Grouped for OdeCharacter {
             return;
         };
         if let Some(v) = solver.linear_velocity(self.body) {
-            self.reaction = add(self.reaction, sub(v, step.velocity));
+            self.reaction.velocity = add(self.reaction.velocity, sub(v, step.velocity));
         }
         self.geoms.clear();
         self.bounds = None;
@@ -203,15 +204,28 @@ impl Grouped for OdeCharacter {
     fn geometry_contact(&mut self, geom: usize, _: bool, d: &mut Draft) {
         if geom == OUTER {
             d.made = false;
-            self.blocked = true;
+            self.reaction.blocked = true;
         }
     }
 
     /// The player's rules (trader-door.md 3.3; physics-contacts.md 5: the
     /// normal points towards the player's shape when it is the first
-    /// geometry).
+    /// geometry), every contact of its shapes, made or not, reaching them.
     fn object_contact(&mut self, geom: usize, first: bool, d: &mut Draft) {
-        let (Some(step), Some(&part)) = (&self.step, PARTS.get(geom)) else {
+        let Some(step) = &self.step else {
+            return;
+        };
+        // step-assistance-movable-bodies.md 2.1: the touch flag, unless the
+        // other shape's material is pass-through and the contact not made.
+        let other_passes = if first {
+            d.pass_through.1
+        } else {
+            d.pass_through.0
+        };
+        if d.bodies && !(other_passes && !d.made) {
+            self.reaction.touch = true;
+        }
+        let Some(&part) = PARTS.get(geom) else {
             return;
         };
         if !d.made {
@@ -219,8 +233,11 @@ impl Grouped for OdeCharacter {
         }
         let n = d.contact.normal;
         let towards = if first { n } else { scale(n, -1.0) };
+        let blocked = step.blocked || self.reaction.blocked;
         let s = &mut d.contact.surface;
-        match body::movable_contact(part, towards, n[1], (s.soft_erp, s.soft_cfm, s.mu), step) {
+        let pair = (s.soft_erp, s.soft_cfm, s.mu);
+        let at = (towards, d.contact.position, first);
+        match body::movable_contact(part, at, pair, blocked, step) {
             None => d.made = false,
             Some(c) => {
                 s.soft_erp = c.erp;
@@ -228,7 +245,12 @@ impl Grouped for OdeCharacter {
                 if s.mu.is_finite() {
                     s.mu = c.friction;
                 }
-                self.blocked |= c.blocked;
+                if let Some((normal, depth)) = c.replaced {
+                    d.contact.normal = if first { normal } else { scale(normal, -1.0) };
+                    d.contact.depth = depth;
+                }
+                self.reaction.blocked |= c.blocked;
+                self.reaction.made += 1;
                 self.kept += 1;
             }
         }

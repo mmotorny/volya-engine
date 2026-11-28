@@ -278,8 +278,7 @@ impl LevelPhysics {
         if let Some(id) = self.player
             && let Some(LevelBody::Character(c)) = self.world.get_mut(id)
         {
-            let (dv, blocked) = c.take_reaction();
-            body.react(dv, blocked);
+            body.react(c.take_reaction());
         }
     }
 
