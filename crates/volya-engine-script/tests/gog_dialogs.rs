@@ -126,6 +126,7 @@ fn game() -> Option<Game> {
         dialogs: Rc::default(),
         times: Rc::default(),
         sounds: Rc::default(),
+        simulation: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

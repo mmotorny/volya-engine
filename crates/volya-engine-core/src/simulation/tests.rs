@@ -304,7 +304,12 @@ fn smart_terrain(id: u16) -> ObjectRecord {
 
 fn config(online: f32, offline: f32) -> AlifeConfig {
     AlifeConfig {
-        distances: SwitchDistances { online, offline },
+        distances: SwitchDistances {
+            online,
+            offline,
+            distance: (online + offline) / 2.0,
+            factor: 0.1,
+        },
         objects_per_update: 10,
         stay_after_death: 36 * HOUR_MS,
     }
@@ -379,6 +384,8 @@ fn the_switch_rule() {
     let d = SwitchDistances {
         online: 135.0,
         offline: 165.0,
+        distance: 150.0,
+        factor: 0.1,
     };
     // Offline: on and (not off or within 135 m).
     assert!(switched(false, (true, true), 135.0, &d));

@@ -46,6 +46,9 @@ pub struct Travel {
     pub can_choose: bool,
     /// Game time of the last smart-terrain look; 0 at creation.
     pub last_look: u64,
+    /// The stored travel speed: every travel step sets it before using it
+    /// (script API K 12.3); `going_speed` at creation (our choice).
+    pub speed: f32,
 }
 
 impl Travel {
@@ -54,7 +57,6 @@ impl Travel {
     pub fn new(record: &ObjectRecord, config: TravelConfig) -> Self {
         let block = record.object.object_block();
         Self {
-            config,
             path: Vec::new(),
             progress: 0.0,
             target: Target {
@@ -65,6 +67,8 @@ impl Travel {
             clock: 0,
             can_choose: true,
             last_look: 0,
+            speed: config.going_speed,
+            config,
         }
     }
 
@@ -77,7 +81,7 @@ impl Travel {
 
 impl Simulation {
     /// A movement update of `id` at game time `now` (7.5).
-    pub(super) fn movement_update(&mut self, id: u16, now: u64, normal_time_factor: f32) {
+    pub fn movement_update(&mut self, id: u16, now: u64, normal_time_factor: f32) {
         let Some(t) = self.objects.get_mut(&id).and_then(|o| o.travel.as_mut()) else {
             return;
         };
@@ -143,6 +147,8 @@ impl Simulation {
             } else {
                 t.config.going_speed
             };
+            self.travel_mut(id).speed = speed;
+            let t = self.objects[&id].travel.as_ref().expect("travel");
             if speed <= 0.0 || normal_time_factor <= 0.0 || t.path.len() < 2 {
                 return;
             }

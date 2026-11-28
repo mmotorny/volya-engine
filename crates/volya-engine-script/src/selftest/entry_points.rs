@@ -180,7 +180,8 @@ fn started(
         tree.clone(),
         aliases.clone(),
         Rc::new(settings),
-        Rc::new(ltx::Config::default()),
+        // The story-id sections script API K reads (its 4.1).
+        Rc::new(ltx::parse(b"[story_ids]\r\n[spawn_story_ids]\r\n").map_err(|e| e.to_string())?),
     );
     fs.command_line = command_line.to_owned();
     let fs = Rc::new(RefCell::new(fs));
@@ -194,6 +195,7 @@ fn started(
         dialogs: Rc::default(),
         times: Rc::default(),
         sounds: Rc::default(),
+        simulation: Rc::default(),
         files: Rc::clone(&fs),
     })
     .map_err(|e| e.message)?;

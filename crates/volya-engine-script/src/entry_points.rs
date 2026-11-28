@@ -28,6 +28,7 @@ use crate::game_object::GameObjects;
 use crate::loader::{Common, Prefix, Scripts, Trees};
 use crate::object_factory::{CreatedObject, class_id, id_text, keeps_lua};
 use crate::services::EngineServices;
+use crate::simulation::AlifeSimulator;
 use crate::sound::ScriptSounds;
 use crate::story::Story;
 use crate::time::GameTimes;
@@ -116,7 +117,7 @@ pub enum EngineCall {
 
 /// What startup makes and registers a game state from: the game's trees
 /// and path aliases, the namespace prefix, and the engine state the
-/// interface's names read (script APIs B, F, H, M, P, R).
+/// interface's names read (script APIs B, F, H, M, P, R, K).
 pub struct Startup {
     pub trees: Rc<dyn Trees>,
     pub aliases: PathAliases,
@@ -129,6 +130,7 @@ pub struct Startup {
     pub times: Rc<RefCell<GameTimes>>,
     /// The sounds the scripts make (script API T).
     pub sounds: Rc<RefCell<ScriptSounds>>,
+    pub simulation: Rc<RefCell<AlifeSimulator>>,
 }
 
 impl Startup {
@@ -161,7 +163,7 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y; A,
+    /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y, K; A,
     /// C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
@@ -176,7 +178,8 @@ impl Startup {
         scripts.register_story(Rc::clone(&self.story))?;
         scripts.register_dialogs_and_trade(Rc::clone(&self.dialogs))?;
         scripts.register_time(Rc::clone(&self.services), Rc::clone(&self.times))?;
-        scripts.register_sound(Rc::clone(&self.sounds), Rc::clone(&self.trees))
+        scripts.register_sound(Rc::clone(&self.sounds), Rc::clone(&self.trees))?;
+        scripts.register_simulation(Rc::clone(&self.simulation))
     }
 }
 
@@ -357,6 +360,11 @@ impl GameScripts {
     /// The sounds the scripts made and their requests (script API T).
     pub fn sounds(&self) -> &Rc<RefCell<ScriptSounds>> {
         &self.startup.sounds
+    }
+
+    /// The simulation as scripts reach it (script API K).
+    pub fn simulation(&self) -> &Rc<RefCell<AlifeSimulator>> {
+        &self.startup.simulation
     }
 
     /// The engine's calls into scripts so far, oldest first.

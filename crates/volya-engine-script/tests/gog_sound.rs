@@ -198,6 +198,7 @@ fn sound_objects_of_the_games_files() {
         dialogs: Rc::default(),
         times: Rc::default(),
         sounds: Rc::clone(&sounds),
+        simulation: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

@@ -193,6 +193,12 @@ impl SimObject {
         c.position = self.record.header.position;
         c.has_parent = self.record.header.parent_id != NO_ID;
         c.health = self.record.object.creature().map(|c| c.health);
+        // Scripts change the state flags and the rounds left (script API K
+        // 6.2, 7.2).
+        c.state_flags = self.record.object.object_block().state_flags;
+        if let volya_engine_formats::object::Object::Ammunition(a) = &self.record.object {
+            c.rounds_left = Some(a.rounds_left);
+        }
         &self.candidate
     }
 }
@@ -545,7 +551,37 @@ impl Simulation {
         Ok(())
     }
 
-    /// Registers `record` under its id (8.1 step 3.3).
+    /// Registers `record`, created after the New Game's or the load's
+    /// records (script API K 7.1, 7.2), under its id, which it must have
+    /// taken from the pool; `spawn_index` is its spawn file record's.
+    pub fn register_created(
+        &mut self,
+        record: ObjectRecord,
+        spawn_index: Option<u32>,
+        system: &Config,
+    ) -> io::Result<()> {
+        if self.objects.contains_key(&record.header.id) {
+            return Err(invalid(format!("object id {} in use", record.header.id)));
+        }
+        self.register(record, spawn_index, system)
+    }
+
+    /// Whether the actor is registered.
+    pub fn has_actor(&self) -> bool {
+        self.level.is_some()
+    }
+
+    /// Releases `id` (script API K 7.3): the objects it carries first,
+    /// recursively, then it leaves every registry. The released ids, in
+    /// that order.
+    pub fn release(&mut self, id: u16) -> Vec<u16> {
+        let mut changes = Changes::default();
+        self.remove(id, &mut changes);
+        changes.removed
+    }
+
+    /// Registers `record` under its id (8.1 step 3.3); a story id already
+    /// registered is fatal (script API K 4.3).
     fn register(
         &mut self,
         record: ObjectRecord,
@@ -573,6 +609,11 @@ impl Simulation {
         };
         let block = object.record.object.object_block();
         if block.story_id != -1 {
+            if self.story_ids.contains_key(&block.story_id) {
+                return Err(invalid(
+                    "Specified story object is already in the Story registry!",
+                ));
+            }
             self.story_ids.insert(block.story_id, id);
         }
         if object.record.class_id.as_str() == SMART_TERRAIN {
@@ -610,7 +651,7 @@ impl Simulation {
 
     /// Enters `id` in the current level's list if it belongs there (6.1),
     /// takes it out otherwise.
-    fn enter_level_list(&mut self, id: u16) {
+    pub fn enter_level_list(&mut self, id: u16) {
         let Some(level) = &self.level else { return };
         let Some(o) = self.objects.get(&id) else {
             return;
@@ -895,7 +936,7 @@ impl Simulation {
     fn remove_one(&mut self, id: u16, changes: &mut Changes) {
         if let Some(o) = self.objects.remove(&id) {
             let block = o.record.object.object_block();
-            if block.story_id != -1 {
+            if block.story_id != -1 && self.story_ids.get(&block.story_id) == Some(&id) {
                 self.story_ids.remove(&block.story_id);
             }
             self.smart_terrains.remove(&id);
@@ -1083,7 +1124,7 @@ impl Simulation {
     }
 
     /// The smart-terrain id of `id`'s Monster-like block.
-    fn smart_terrain(&self, id: u16) -> Option<u16> {
+    pub fn smart_terrain(&self, id: u16) -> Option<u16> {
         Some(
             self.objects
                 .get(&id)?
@@ -1098,7 +1139,7 @@ impl Simulation {
     /// `smart_terrain_choose_interval` passed since the last look, the
     /// object asks every smart terrain in increasing id and joins the most
     /// suitable that accepts it (of equals the first).
-    fn choose_smart_terrain(&mut self, id: u16, now: u64) {
+    pub fn choose_smart_terrain(&mut self, id: u16, now: u64) {
         if self.smart_terrain(id) != Some(NO_ID) {
             return;
         }
@@ -1127,6 +1168,12 @@ impl Simulation {
             }
             self.scripts.join(terrain, id);
         }
+    }
+
+    /// The patrol path smart terrain `terrain` gives object `id` as its
+    /// task (7.3).
+    pub fn smart_terrain_task(&mut self, terrain: u16, id: u16) -> Option<String> {
+        self.scripts.task(terrain, id)
     }
 
     /// The target of a task naming path `name` (7.3): its point 0. A

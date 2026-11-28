@@ -47,6 +47,10 @@ const ELECTRA_DISTANCE: f32 = 50.0;
 pub struct SwitchDistances {
     pub online: f32,
     pub offline: f32,
+    /// The switch distance *d*.
+    pub distance: f32,
+    /// The switch factor *f*.
+    pub factor: f32,
 }
 
 impl SwitchDistances {
@@ -60,12 +64,18 @@ impl SwitchDistances {
                 .map(value::float)
                 .ok_or_else(|| invalid(format!("[alife] has no {key}")))
         };
-        let d = get("switch_distance")?;
-        let f = get("switch_factor")?;
-        Ok(Self {
+        Ok(Self::of(get("switch_distance")?, get("switch_factor")?))
+    }
+
+    /// The distances of switch distance `d` and factor `f`, in single
+    /// precision.
+    pub fn of(d: f32, f: f32) -> Self {
+        Self {
             online: d * (1.0 - f),
             offline: d * (1.0 + f),
-        })
+            distance: d,
+            factor: f,
+        }
     }
 }
 
@@ -359,6 +369,8 @@ mod tests {
     const DISTANCES: SwitchDistances = SwitchDistances {
         online: 135.0,
         offline: 165.0,
+        distance: 150.0,
+        factor: 0.1,
     };
 
     fn online(c: &Candidate) -> bool {

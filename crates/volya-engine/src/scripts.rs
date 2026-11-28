@@ -99,6 +99,7 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         // ([`client_spawning`], [`level_frame`]).
         times: Rc::default(),
         sounds: Rc::default(),
+        simulation: Rc::default(),
     })
     .map_err(fatal)
 }

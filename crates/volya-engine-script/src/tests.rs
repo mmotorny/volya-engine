@@ -1145,3 +1145,81 @@ mod sound {
         section(checks::worked_examples);
     }
 }
+
+/// The simulation registry's checks, one test per section of
+/// docs/behavior/script-api-simulation-registry-and-game-graph.md (all of
+/// them run in [`selftest`] too, on every target).
+mod simulation {
+    use crate::selftest::simulation as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn alife() {
+        section(checks::alife);
+    }
+
+    #[test]
+    fn finding_objects() {
+        section(checks::finding_objects);
+    }
+
+    #[test]
+    fn story_ids() {
+        section(checks::story_ids);
+    }
+
+    #[test]
+    fn levels() {
+        section(checks::levels);
+    }
+
+    #[test]
+    fn switching() {
+        section(checks::switching);
+    }
+
+    #[test]
+    fn creating_and_releasing() {
+        section(checks::creating_and_releasing);
+    }
+
+    #[test]
+    fn restrictions() {
+        section(checks::restrictions);
+    }
+
+    #[test]
+    fn kill_entity() {
+        section(checks::kill_entity);
+    }
+
+    #[test]
+    fn game_graph() {
+        section(checks::game_graph);
+    }
+
+    #[test]
+    fn smart_terrain_tasks() {
+        section(checks::tasks);
+    }
+
+    #[test]
+    fn brains_and_movement() {
+        section(checks::brains);
+    }
+
+    #[test]
+    fn has_info() {
+        section(checks::has_info);
+    }
+}
