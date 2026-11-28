@@ -1,0 +1,587 @@
+# SPDX-FileCopyrightText: 2026 Maksym Motorny
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# The areas of the tests that run by area before merging
+# (docs/architecture/build.md, Test triggers): each such target and the
+# source paths it covers. A diff that touches one of a target's paths
+# triggers it (`bazel run //tools/xtask -- suites`).
+#
+# Format, one entry per line:
+# - `//package:target` at the start of a line begins a target's paths;
+# - `@set` at the start of a line begins a named set of paths;
+# - an indented line is a path of the entry above: a glob relative to the
+#   repository's root (`*` matches within one path segment, `**` any number
+#   of segments, `{a,b}` is not supported), or `@set` to include a set;
+# - `#` begins a comment line; blank lines are ignored.
+# Every set is defined before it is used.
+
+# Shared by every browser suite: the runner, its page harness and server.
+@runner
+    build/browser.bzl
+    tests/browser/harness.js
+    tools/devserver/**
+    tools/xtask/src/e2e.rs
+    tools/xtask/src/machine.rs
+
+# The iOS Simulator's driver, for the iphone suites.
+@simulator
+    @runner
+    tools/simdriver/**
+
+# The page: the app's static files and how the site is built and served.
+@page
+    build/web.bzl
+    platforms/web/BUILD.bazel
+    platforms/web/Cargo.toml
+    platforms/web/src/engine.rs
+    platforms/web/src/lib.rs
+    platforms/web/static/*
+    tools/site/**
+
+# Page input: the page's listeners and the engine's input state.
+@input
+    crates/volya-engine-core/src/input.rs
+    crates/volya-engine/src/controls.rs
+    crates/volya-engine/src/on_screen_keyboard.rs
+    platforms/web/src/input.rs
+    platforms/web/static/console-touch.js
+    platforms/web/static/direct-touch.js
+    platforms/web/static/fullscreen.js
+    platforms/web/static/input.js
+    platforms/web/static/text-entry.js
+    platforms/web/static/touch-*.js
+    platforms/web/static/zoom.js
+
+# Audio: the mixer, the sound system and the browser's audio output.
+@audio
+    crates/volya-engine-core/src/audio.rs
+    crates/volya-engine-core/src/audio/**
+    crates/volya-engine-core/src/sound.rs
+    crates/volya-engine-core/src/sound/**
+    crates/volya-engine-formats/src/audio.rs
+    crates/volya-engine-formats/src/sound_params.rs
+    crates/volya-engine/src/audio.rs
+    platforms/web/src/audio.rs
+    platforms/web/src/audio_host.rs
+    platforms/web/src/audio_ring.rs
+    platforms/web/static/audio-*.js
+
+# Storage: the import, OPFS and the archives read from it.
+@storage
+    crates/volya-engine-core/src/file_cache.rs
+    crates/volya-engine-core/src/vfs.rs
+    crates/volya-engine-core/src/vfs/**
+    crates/volya-engine-formats/src/db/**
+    crates/volya-engine-installer/**
+    crates/volya-engine/src/saved_games.rs
+    platforms/web/src/game.rs
+    platforms/web/src/import.rs
+    platforms/web/src/opfs.rs
+    platforms/web/static/import-worker.js
+    platforms/web/static/sw.js
+    platforms/web/static/update.js
+    third_party/inno/**
+
+# The WebGL 2 path: the renderer, its programs, the GPU device and the
+# textures as uploaded (ETC2 where there is no BC).
+@webgl2
+    crates/volya-engine-formats/src/dds.rs
+    crates/volya-engine-formats/src/etc2.rs
+    crates/volya-engine-formats/src/etc2/**
+    crates/volya-engine-render/**
+    platforms/web/src/gpu.rs
+    platforms/web/src/gpu/**
+    platforms/web/src/textures.rs
+
+# The render checks on game data (crates/volya-engine/src/selftest).
+@render-game
+    crates/volya-engine/src/selftest/mod.rs
+    tests/browser/render-game.js
+
+# The game's screens drawn: the startup sequence, the title menu and the
+# windows over it and over the level.
+@screens
+    crates/volya-engine-core/src/console.rs
+    crates/volya-engine-core/src/console/**
+    crates/volya-engine-core/src/text.rs
+    crates/volya-engine-core/src/ui.rs
+    crates/volya-engine-formats/src/text/**
+    crates/volya-engine-formats/src/ui/**
+    crates/volya-engine-formats/src/video.rs
+    crates/volya-engine/src/console_window.rs
+    crates/volya-engine/src/draw.rs
+    crates/volya-engine/src/inventory_screen/**
+    crates/volya-engine/src/level_maps.rs
+    crates/volya-engine/src/menu_screens.rs
+    crates/volya-engine/src/on_screen_keyboard.rs
+    crates/volya-engine/src/options/**
+    crates/volya-engine/src/pda_window/**
+    crates/volya-engine/src/present.rs
+    crates/volya-engine/src/save_load.rs
+    crates/volya-engine/src/saved_games.rs
+    crates/volya-engine/src/startup.rs
+    crates/volya-engine/src/statistics_overlay.rs
+    crates/volya-engine/src/talk_window/**
+    crates/volya-engine/src/title_menu.rs
+    crates/volya-engine/src/ui_image.rs
+
+# A level drawn: its geometry, objects, lights, effects, sky and details.
+@level
+    crates/volya-engine-core/src/artefacts.rs
+    crates/volya-engine-core/src/artefacts/**
+    crates/volya-engine-core/src/camera.rs
+    crates/volya-engine-core/src/details.rs
+    crates/volya-engine-core/src/display.rs
+    crates/volya-engine-core/src/glows.rs
+    crates/volya-engine-core/src/level.rs
+    crates/volya-engine-core/src/lights.rs
+    crates/volya-engine-core/src/object_light.rs
+    crates/volya-engine-core/src/occlusion.rs
+    crates/volya-engine-core/src/occlusion/**
+    crates/volya-engine-core/src/particles.rs
+    crates/volya-engine-core/src/particles/**
+    crates/volya-engine-core/src/texture_quality.rs
+    crates/volya-engine-core/src/torch.rs
+    crates/volya-engine-core/src/torch/**
+    crates/volya-engine-core/src/visibility.rs
+    crates/volya-engine-core/src/visibility/**
+    crates/volya-engine-core/src/weather.rs
+    crates/volya-engine-core/src/weather/**
+    crates/volya-engine-core/src/zones.rs
+    crates/volya-engine-core/src/zones/**
+    crates/volya-engine-formats/src/dds.rs
+    crates/volya-engine-formats/src/env_mod.rs
+    crates/volya-engine-formats/src/lanims.rs
+    crates/volya-engine-formats/src/level*.rs
+    crates/volya-engine-formats/src/model.rs
+    crates/volya-engine-formats/src/object/**
+    crates/volya-engine-formats/src/ogf.rs
+    crates/volya-engine-formats/src/particles.rs
+    crates/volya-engine-formats/src/shaders_xr.rs
+    crates/volya-engine/src/characters.rs
+    crates/volya-engine/src/data.rs
+    crates/volya-engine/src/draw.rs
+    crates/volya-engine/src/level*.rs
+    crates/volya-engine/src/loading_screen.rs
+    crates/volya-engine/src/objects.rs
+    crates/volya-engine/src/particle_drawing.rs
+    crates/volya-engine/src/present.rs
+    crates/volya-engine/src/projected_light.rs
+    crates/volya-engine/src/scene.rs
+    crates/volya-engine/src/shading.rs
+    crates/volya-engine/src/sky.rs
+    crates/volya-engine/src/torch.rs
+
+# The settings as the app applies them and the console writes them.
+@settings
+    crates/volya-engine-core/src/config.rs
+    crates/volya-engine-core/src/console.rs
+    crates/volya-engine-core/src/console/**
+    crates/volya-engine-formats/src/ltx/**
+    crates/volya-engine/src/app.rs
+    crates/volya-engine/src/app/**
+    crates/volya-engine/src/options/**
+
+# The native measurements read the game data through one helper.
+@measure
+    crates/volya-engine-formats/tests/support/gog_archives.rs
+
+# Chrome
+
+//tests/browser:smoke_chrome
+    @runner
+    @page
+    tests/browser/smoke.*
+    crates/volya-engine-core/src/diagnostics.rs
+    crates/volya-engine-core/src/diagnostics/**
+    platforms/web/src/diagnostics.rs
+    platforms/web/src/game.rs
+    platforms/web/src/opfs.rs
+    platforms/web/static/ux-audit/**
+    # The toolchains and pins: the app as a whole starts.
+    .bazelrc
+    .bazelversion
+    Cargo.lock
+    MODULE.bazel
+    build/platforms/**
+    build/rust.bzl
+
+//tests/browser:platform_chrome
+    @runner
+    tests/browser/platform.*
+    tests/browser/platform-worker.js
+    platforms/web/src/lib.rs
+    platforms/web/src/opfs.rs
+    crates/volya-engine-core/src/vfs.rs
+    crates/volya-engine-core/src/vfs/**
+    crates/volya-engine-core/src/c_heap.rs
+    crates/volya-engine-core/src/physics.rs
+    crates/volya-engine-core/src/physics/**
+    crates/volya-engine-core/build.rs
+    crates/volya-engine-core/comparison/**
+    crates/volya-engine-core/csrc/**
+    crates/volya-engine-script/**
+    tests/odeharness/**
+    third_party/ode/**
+    build/ode.BUILD.bazel
+    build/wasm_llvm.BUILD.bazel
+    MODULE.bazel
+
+//tests/browser:import_chrome
+    @runner
+    @storage
+    tests/browser/import.*
+
+//tests/browser:input_chrome
+    @runner
+    @input
+    tests/browser/input.*
+
+//tests/browser:audio_chrome
+    @runner
+    @audio
+    tests/browser/audio.*
+    crates/volya-engine-core/src/footsteps.rs
+    crates/volya-engine-core/src/footsteps/**
+    crates/volya-engine-core/src/zones.rs
+    crates/volya-engine-core/src/zones/**
+    crates/volya-engine/src/footsteps.rs
+    crates/volya-engine/src/level_sound.rs
+
+//tests/browser:audio_load_chrome
+    @runner
+    @audio
+    tests/browser/audio-load.*
+    tests/browser/game.js
+    crates/volya-engine-core/src/footsteps.rs
+    crates/volya-engine-core/src/footsteps/**
+    crates/volya-engine/src/footsteps.rs
+    crates/volya-engine/src/level_sound.rs
+
+//tests/browser:render_chrome
+    @runner
+    @webgl2
+    tests/browser/render.*
+    crates/volya-engine/src/particle_drawing.rs
+
+//tests/browser:render_screens_chrome
+    @runner
+    @webgl2
+    @render-game
+    @screens
+    tests/browser/render-screens.*
+    crates/volya-engine/src/selftest/console.rs
+    crates/volya-engine/src/selftest/inventory_screen.rs
+    crates/volya-engine/src/selftest/options.rs
+    crates/volya-engine/src/selftest/pda_window.rs
+    crates/volya-engine/src/selftest/save_load.rs
+    crates/volya-engine/src/selftest/statistics.rs
+    crates/volya-engine/src/selftest/talk_window.rs
+    crates/volya-engine/src/selftest/textures.rs
+    crates/volya-engine/src/selftest/title_menu.rs
+
+//tests/browser:render_level_chrome
+    @runner
+    @webgl2
+    @render-game
+    @level
+    tests/browser/render-level.*
+    crates/volya-engine/src/selftest/artefacts.rs
+    crates/volya-engine/src/selftest/details.rs
+    crates/volya-engine/src/selftest/frame_memory.rs
+    crates/volya-engine/src/selftest/geometry_lod.rs
+    crates/volya-engine/src/selftest/lights.rs
+    crates/volya-engine/src/selftest/new_game.rs
+    crates/volya-engine/src/selftest/objects.rs
+    crates/volya-engine/src/selftest/presentation.rs
+    crates/volya-engine/src/selftest/texture_settings.rs
+    crates/volya-engine/src/selftest/torch.rs
+    crates/volya-engine/src/selftest/visibility.rs
+    crates/volya-engine/src/selftest/zones.rs
+
+//tests/browser:draw_calls_chrome
+    @runner
+    @webgl2
+    @render-game
+    tests/browser/draw-calls.*
+    crates/volya-engine/src/selftest/draw_calls.rs
+    crates/volya-engine/src/draw.rs
+    crates/volya-engine/src/level.rs
+    crates/volya-engine/src/level_details.rs
+    crates/volya-engine/src/level_visibility.rs
+    crates/volya-engine/src/present.rs
+    crates/volya-engine/src/scene.rs
+    crates/volya-engine/src/shading.rs
+    crates/volya-engine/src/sky.rs
+    crates/volya-engine-core/src/visibility.rs
+    crates/volya-engine-core/src/visibility/**
+
+//tests/browser:d3d9probes_chrome
+    @runner
+    tests/browser/d3d9probes.*
+    tests/d3d9probes/**
+    build/d3d9probes.bzl
+    tools/xtask/src/d3d9probes.rs
+    tools/xtask/src/d3d9probes_action.rs
+    crates/volya-engine-render/build.rs
+    crates/volya-engine-render/src/d3d9probes.rs
+    crates/volya-engine-render/src/gl.rs
+    crates/volya-engine-render/src/glsl.rs
+    crates/volya-engine-render/src/probe.wgsl
+    crates/volya-engine-render/src/webgl/**
+    platforms/web/src/gpu.rs
+    platforms/web/src/gpu/**
+
+//tests/browser:fidelity_chrome
+    @runner
+    @webgl2
+    @render-game
+    @level
+    @settings
+    tests/browser/fidelity.*
+    tests/fidelity/**
+    build/original_frames.bzl
+    crates/volya-engine/src/selftest/fidelity.rs
+    crates/volya-engine/src/selftest/title_menu.rs
+    crates/volya-engine/src/title_menu.rs
+    crates/volya-engine-formats/src/ui/**
+    crates/volya-engine-formats/src/video.rs
+
+//tests/browser:audio_fidelity_chrome
+    @runner
+    @render-game
+    @settings
+    tests/browser/audio-fidelity.*
+    tests/fidelity/**
+    crates/volya-engine/src/selftest/audio_fidelity.rs
+    crates/volya-engine/src/selftest/title_menu.rs
+    crates/volya-engine-core/src/audio.rs
+    crates/volya-engine-core/src/audio/**
+    crates/volya-engine-core/src/footsteps.rs
+    crates/volya-engine-core/src/footsteps/**
+    crates/volya-engine-core/src/movement.rs
+    crates/volya-engine-core/src/movement/**
+    crates/volya-engine-core/src/sound.rs
+    crates/volya-engine-core/src/sound/**
+    crates/volya-engine-core/src/zones.rs
+    crates/volya-engine-core/src/zones/**
+    crates/volya-engine-formats/src/audio.rs
+    crates/volya-engine-formats/src/sound_params.rs
+    crates/volya-engine/src/audio.rs
+    crates/volya-engine/src/footsteps.rs
+    crates/volya-engine/src/level_sound.rs
+
+//tests/browser:game_screens_chrome
+    @runner
+    @settings
+    tests/browser/game-screens.*
+    tests/browser/game.js
+    crates/volya-engine-core/src/clock.rs
+    crates/volya-engine-core/src/input.rs
+    crates/volya-engine-core/src/pause.rs
+    crates/volya-engine-formats/src/sav.rs
+    crates/volya-engine-formats/src/ui/options.rs
+    crates/volya-engine/src/controls.rs
+    crates/volya-engine/src/menu_screens.rs
+    crates/volya-engine/src/on_screen_keyboard.rs
+    crates/volya-engine/src/save_load.rs
+    crates/volya-engine/src/saved_games.rs
+    crates/volya-engine/src/title_menu.rs
+    platforms/web/src/engine.rs
+    platforms/web/src/input.rs
+    platforms/web/static/game-ui.js
+    platforms/web/static/touch-controls.js
+
+# iPhone: only the page, input, audio, storage and the WebGL 2 path
+# (AGENTS.md), each suite for those of them it exercises.
+
+//tests/browser:smoke_iphone
+    @simulator
+    @page
+    @storage
+    tests/browser/smoke.*
+    platforms/web/src/diagnostics.rs
+    platforms/web/static/ux-audit/**
+
+//tests/browser:platform_iphone
+    @simulator
+    tests/browser/platform.*
+    tests/browser/platform-worker.js
+    platforms/web/src/lib.rs
+    platforms/web/src/opfs.rs
+    crates/volya-engine-core/src/vfs.rs
+    crates/volya-engine-core/src/vfs/**
+
+//tests/browser:import_iphone
+    @simulator
+    @storage
+    tests/browser/import.*
+
+//tests/browser:input_iphone
+    @simulator
+    @input
+    tests/browser/input.*
+
+//tests/browser:audio_iphone
+    @simulator
+    @audio
+    tests/browser/audio.*
+
+//tests/browser:audio_load_iphone
+    @simulator
+    @audio
+    tests/browser/audio-load.*
+    tests/browser/game.js
+
+//tests/browser:render_iphone
+    @simulator
+    @webgl2
+    tests/browser/render.*
+
+//tests/browser:render_screens_iphone
+    @simulator
+    @webgl2
+    tests/browser/render-game.js
+    tests/browser/render-screens.*
+
+//tests/browser:render_level_iphone
+    @simulator
+    @webgl2
+    tests/browser/render-game.js
+    tests/browser/render-level.*
+
+//tests/browser:draw_calls_iphone
+    @simulator
+    @webgl2
+    tests/browser/draw-calls.*
+    tests/browser/render-game.js
+
+//tests/browser:game_startup_iphone
+    @simulator
+    @page
+    @input
+    @storage
+    tests/browser/game-startup.*
+    tests/browser/game.js
+
+//tests/browser:game_level_iphone
+    @simulator
+    tests/browser/game-level.*
+    tests/browser/game.js
+    platforms/web/src/engine.rs
+    platforms/web/src/textures.rs
+    platforms/web/static/engine-worker.js
+    platforms/web/static/game-ui.js
+    platforms/web/static/main.js
+
+//tests/browser:game_input_iphone
+    @simulator
+    @input
+    tests/browser/game-input.*
+    tests/browser/game.js
+
+//tests/browser:game_screens_iphone
+    @simulator
+    @input
+    @storage
+    tests/browser/game-screens.*
+    tests/browser/game.js
+
+//tests/browser:game_memory_iphone
+    @simulator
+    tests/browser/game-memory.*
+    tests/browser/game.js
+    crates/volya-engine-core/src/file_cache.rs
+    crates/volya-engine-core/src/memory_manager.rs
+    platforms/web/src/diagnostics.rs
+    platforms/web/src/engine.rs
+    platforms/web/static/engine-worker.js
+    platforms/web/static/main.js
+
+# The native measurements and walks (`--config=measure`).
+
+//crates/volya-engine-core:collision_rays
+    @measure
+    crates/volya-engine-core/tests/collision_rays.rs
+    crates/volya-engine-core/src/collision.rs
+    crates/volya-engine-core/src/collision/**
+    crates/volya-engine-core/src/glows.rs
+    crates/volya-engine-core/src/particles/collision.rs
+    crates/volya-engine-core/src/particles/collision/**
+    crates/volya-engine-core/src/sound/occlusion.rs
+    crates/volya-engine-formats/src/gamemtl.rs
+    crates/volya-engine-formats/src/level_cform.rs
+
+//crates/volya-engine-core:particles_cost
+    @measure
+    crates/volya-engine-core/tests/particles_cost.rs
+    crates/volya-engine-core/src/particles.rs
+    crates/volya-engine-core/src/particles/**
+    crates/volya-engine-formats/src/particles.rs
+
+//crates/volya-engine-core:simulation_cost
+    @measure
+    crates/volya-engine-core/tests/simulation_cost.rs
+    crates/volya-engine-core/src/config.rs
+    crates/volya-engine-core/src/navigation.rs
+    crates/volya-engine-core/src/navigation/**
+    crates/volya-engine-core/src/simulation.rs
+    crates/volya-engine-core/src/simulation/**
+    crates/volya-engine-formats/src/cross_table.rs
+    crates/volya-engine-formats/src/game_graph.rs
+    crates/volya-engine-formats/src/level_ai.rs
+    crates/volya-engine-formats/src/patrol_path.rs
+    crates/volya-engine-formats/src/spawn.rs
+
+//crates/volya-engine:level_memory
+    @measure
+    crates/volya-engine/tests/level_memory.rs
+    crates/volya-engine-core/src/collision.rs
+    crates/volya-engine-core/src/collision/**
+    crates/volya-engine-core/src/details.rs
+    crates/volya-engine-core/src/file_cache.rs
+    crates/volya-engine-core/src/memory_manager.rs
+    crates/volya-engine-formats/src/cross_table.rs
+    crates/volya-engine-formats/src/gamemtl.rs
+    crates/volya-engine-formats/src/level*.rs
+    crates/volya-engine/src/data.rs
+    crates/volya-engine/src/level_details.rs
+
+//crates/volya-engine:loading_memory
+    @measure
+    crates/volya-engine/tests/loading_memory.rs
+    crates/volya-engine-core/src/file_cache.rs
+    crates/volya-engine-core/src/level.rs
+    crates/volya-engine-core/src/memory_manager.rs
+    crates/volya-engine-formats/src/game_graph.rs
+    crates/volya-engine-formats/src/level*.rs
+    crates/volya-engine-formats/src/model.rs
+    crates/volya-engine-formats/src/ogf.rs
+    crates/volya-engine-formats/src/spawn.rs
+    crates/volya-engine/src/characters.rs
+    crates/volya-engine/src/data.rs
+    crates/volya-engine/src/level*.rs
+    crates/volya-engine/src/loading_screen.rs
+    crates/volya-engine/src/objects.rs
+    crates/volya-engine/src/scripts.rs
+
+//crates/volya-engine:transcode
+    @measure
+    crates/volya-engine/tests/transcode.rs
+    crates/volya-engine-formats/src/dds.rs
+    crates/volya-engine-formats/src/etc2.rs
+    crates/volya-engine-formats/src/etc2/**
+
+//crates/volya-engine:visuals
+    @measure
+    crates/volya-engine/tests/visuals.rs
+    crates/volya-engine-core/src/level.rs
+    crates/volya-engine-formats/src/chunks.rs
+    crates/volya-engine-formats/src/level.rs
+    crates/volya-engine-formats/src/level_geom.rs
+    crates/volya-engine-formats/src/ogf.rs
+
+# The static checks: every change.
+
+//:checks
+    **

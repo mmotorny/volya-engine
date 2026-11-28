@@ -66,6 +66,25 @@ Both stay as they are, run by `cargo_build_script`:
 
 `//build:default_only` (in `//:checks`) fails when `bazel test //...` would run a test tagged `check`, `gamedata` or `browser`: a genquery over `//:default_tests`, which names every package's `default_tests` (made by `volya_checks()`: the package's tests and test suites not tagged `manual`, named explicitly, as genquery takes no wildcards). Every `test_suite` is `manual` too: one matched by `//...` runs every test it names, manual ones included (measured, Browser suites). `bazel test //...` still builds every non-manual target (the sites among them).
 
+## Test triggers
+
+Every manual test (`bazel query 'attr(tags, manual, tests(//...))'`) has exactly one trigger (decided by the user, 2026-11-28). No test runs after merging just because something merged.
+
+- **Nightly**, not blocking: the orchestrator runs them at least once a day, and each failure becomes an issue that goes first in the next day's work. Only tests whose area is everything, which unrelated changes break.
+- **By area, before merging**, blocking: once green, a test runs again only when a change touches its area, the source paths listed for it in `tests/areas.txt`, which `bazel run //tools/xtask -- suites` reads to print what a diff triggers.
+
+| Tests | Trigger |
+|---|---|
+| `//:gamedata`: every test tagged `gamedata` but the measurements | Nightly |
+| `//tests/browser:game_startup_chrome` (where `smoke_chrome` was), `:game_level_chrome`, `:game_input_chrome`, `:game_memory_chrome` (a report) | Nightly |
+| `//:checks`: every test tagged `check` | By area: every change (`**`) |
+| Chrome: `smoke`, `platform`, `input`, `import`, `audio`, `audio-load`, `render`, `render-screens`, `render-level`, `draw-calls`, `d3d9probes`, `fidelity`, `audio-fidelity`, `game-screens` | By area |
+| iPhone: every suite | By area: the page, input, audio, storage and WebGL 2 path its suite exercises |
+| The measurements and walks: `//crates/volya-engine-core:collision_rays`, `:particles_cost`, `:simulation_cost`, `//crates/volya-engine:level_memory`, `:loading_memory`, `:transcode`, `:visuals` | By area |
+
+- **The areas** are read from what each test exercises: its page and the ops it calls, the render checks it runs (`crates/volya-engine/src/selftest`), the code those drive, its references, and for a browser suite the runner every suite shares. An iPhone suite's area is only the page, input, audio, storage and WebGL 2 parts of its Chrome suite's: the rest is the same wasm, tested on Chrome.
+- **`tests/areas.txt`** is a data file of its own rather than columns of this table: hundreds of globs would bury the triggers audited here. Its line format (a target at the start of a line, its globs indented below; named sets of globs, `@page`, `@webgl2`, shared by several targets; `#` comments) needs no parser crate in xtask (it has none; TOML would add one, JSON takes no comments) and diffs a path at a time. Globs are relative to the repository's root: `*` within a path segment, `**` across segments. A new manual test adds its row here and, by area, its entry there.
+
 ## Static checks
 
 Tests in `//:checks` (a `test_suite`), cached like any test. Every package's `BUILD.bazel` ends with `volya_checks()` (`build/checks.bzl`), which makes its `fmt`, `clippy`, `clippy_wasm` and `all_files` from the Rust targets it declares, and the root's `PACKAGES` lists every package: a new package adds both. Only static checks: nothing that builds the engine or runs a browser (those run in `//...` and by name). Each is tagged `check` and `manual` (`CHECK`, Test sets); a package's suite takes only tests so tagged (an empty `test_suite` would take every non-manual test of the package), and `//build:checks_static` fails on any test of `//:checks` without the tag (a `genquery` of them).
