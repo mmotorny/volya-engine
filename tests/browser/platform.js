@@ -58,11 +58,8 @@ export const tests = {
     await volya.call("vfs_selftest");
   },
 
-  "script runtime passes its self-test in the engine worker": async () => {
-    assertEqual(await volya.call("script_selftest"), "Lua 5.1 (alpha) + LuaJIT 1.0.3");
-  },
-
-  // Before any other world is made: the first scenario reads the values the
+  // Before any other world is made in the engine worker (the script
+  // runtime's self-test makes some): the first scenario reads the values the
   // library loads with.
   "physics comparison's scenarios compute in the engine worker as natively": async () => {
     // Each scenario of tests/odeharness against the native arm64 build's
@@ -91,6 +88,12 @@ export const tests = {
     const y = await volya.call("physics_selftest");
     assert(Math.abs(y - 0.0919) < 1e-4, `y ${y}`);
     assertEqual(Math.fround(y), Math.fround(0.091897085));
+  },
+
+  // After the physics comparison: its physics checks make worlds, which set
+  // the library-wide values.
+  "script runtime passes its self-test in the engine worker": async () => {
+    assertEqual(await volya.call("script_selftest"), "Lua 5.1 (alpha) + LuaJIT 1.0.3");
   },
 
   "OPFS sync access handle works in a worker": async () => {
