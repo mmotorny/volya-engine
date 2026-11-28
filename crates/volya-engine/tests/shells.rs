@@ -254,6 +254,23 @@ fn the_bunkers_shells_and_the_trader_door() {
         rust / 1e3,
         ode / 1e3
     );
+    let name = |id| {
+        let o = objects.iter().find(|o| o.id == id).unwrap();
+        o.record.header.name.as_str().to_owned()
+    };
+    // The shells awake at the start, and where their bodies are.
+    let awake: Vec<u16> = (objects.iter())
+        .filter(|o| own.shell_of(o.id).is_some_and(|(_, a)| a))
+        .map(|o| o.id)
+        .collect();
+    let bodies = |own: &LevelPhysics, id: u16| {
+        let (shell, _) = own.shell_of(id).unwrap();
+        let solver = own.world().solver();
+        (0..shell.elements())
+            .filter_map(|e| shell.body(solver, e))
+            .collect::<Vec<_>>()
+    };
+    let starts: Vec<_> = awake.iter().map(|&id| bodies(&own, id)).collect();
     let cost = |own: &mut LevelPhysics, steps: u32| {
         let t = Instant::now();
         for _ in 0..steps {
@@ -268,21 +285,34 @@ fn the_bunkers_shells_and_the_trader_door() {
         "a step: {first:.4} ms over the first 100 ({active_after} active after), {later:.4} ms over the next 1000 ({} active)",
         own.report().active
     );
-    // The two awake at the start are buckets whose bodies are cylinders,
-    // which get no contacts yet (TODO(#1010)): `vedro_0001` falls out of
-    // the world; `vedro_0007`'s handle, a box on a body of its own, meets
-    // the floor while the bucket falls on, which tears their joint apart
-    // and throws the shell far off, where it meets nothing and stays
-    // active.
-    let name = |id| {
-        let o = objects.iter().find(|o| o.id == id).unwrap();
-        o.record.header.name.as_str().to_owned()
-    };
-    let active: Vec<String> = (objects.iter())
-        .filter(|o| own.shell_of(o.id).is_some_and(|(_, a)| a))
-        .map(|o| name(o.id))
-        .collect();
-    assert_eq!(active, ["vedro_0007"]);
+    // The two awake at the start are buckets: a body of three cylinders
+    // (physics-contacts.md 4.3, 3.3 – 3.4) and a handle, a box on a hinge.
+    // They fall onto the floor, and the buckets' bodies rest there, still
+    // active (a woken shell does not rest again before PH-5, #946); a
+    // handle at its hinge's stop may keep bouncing off it (#1060).
+    let names: Vec<String> = awake.iter().map(|&id| name(id)).collect();
+    assert_eq!(names, ["vedro_0007", "vedro_0001"]);
+    let speed = |w: [f32; 3]| w.iter().map(|x| x * x).sum::<f32>().sqrt();
+    for (&id, start) in awake.iter().zip(&starts) {
+        let now = bodies(&own, id);
+        assert_eq!(now.len(), 2);
+        let moved: Vec<f32> = (start.iter().zip(&now))
+            .map(|(a, b)| speed(std::array::from_fn(|k| b.position[k] - a.position[k])))
+            .collect();
+        let body = &now[0];
+        let handle = &now[1];
+        eprintln!(
+            "{}: the body moved {:.3} m in 11 s, now at {:.1e} m/s and {:.1e} rad/s; the handle moved {:.3} m, now at {:.1e} rad/s",
+            name(id),
+            moved[0],
+            speed(body.linear),
+            speed(body.angular),
+            moved[1],
+            speed(handle.angular)
+        );
+        assert!(moved.iter().all(|&m| m < 0.5), "{moved:?}");
+        assert!(speed(body.linear) < 0.01 && speed(body.angular) < 0.01);
+    }
 }
 
 /// How far the leaf's box the player meets moved from `start`, m.

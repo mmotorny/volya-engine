@@ -9,8 +9,9 @@
 //! a pair merged and a resting object woken (1.2), and the liquid's damping
 //! recorded for the bodies' pre-step (2.4).
 //!
-//! Box and sphere pairs are the library's (`dCollide`, 4.2); cylinders get
-//! no contacts yet (TODO(#1010)).
+//! Box and sphere pairs are the library's (`dCollide`, 4.2); a cylinder's
+//! with boxes and spheres the game's (4.3, `contacts::cylinder`), two
+//! cylinders none (open, TODO(#957)).
 //! Motion rays (1.4) are not cast: only thrown missiles get the ray mark,
 //! and none is in the world.
 
@@ -23,6 +24,7 @@ use super::{
     BodyId, Contact, ContactGeom, ContactKind, DxBody, DxGeom, Grouped, OdeSolver, Real, Surface,
 };
 use crate::collision::geometry::{Vec3, dot, length, scale, sub};
+use crate::physics::contacts::cylinder::{self, Cylinder};
 use crate::physics::contacts::level::{self, LevelContact};
 use crate::physics::contacts::{self, Bounds, Properties, RawContact, overlap, properties};
 use crate::physics::shell::Shape;
@@ -169,11 +171,18 @@ impl OdeSolver {
     /// normals from `b` towards `a` (4.2, 4.3), at most `max`.
     pub fn pair_contacts(&mut self, a: &Shape, b: &Shape, max: usize, out: &mut Vec<RawContact>) {
         out.clear();
-        match (a, b) {
-            (Shape::Cylinder { .. }, _) | (_, Shape::Cylinder { .. }) => {
-                // Cylinders' colliders wait (TODO(#1010)): none.
+        match (contacts::cylinder_of(a), contacts::cylinder_of(b)) {
+            (Some(_), Some(_)) => {}
+            (Some(c), None) => cylinder_contacts(&c, b, max, out),
+            // The library swaps a reversed pair and negates its normals
+            // (`library` 6.1).
+            (None, Some(c)) => {
+                cylinder_contacts(&c, a, max, out);
+                for c in out.iter_mut() {
+                    c.normal = c.normal.map(|x| -x);
+                }
             }
-            _ => {
+            (None, None) => {
                 let probes = &mut self.probes;
                 let (ga, gb) = (probes.pose(0, a), probes.pose(1, b));
                 let asked = ASKED_CONTACTS as c_int;
@@ -545,6 +554,21 @@ impl OdeSolver {
             }
         }
     }
+}
+
+/// 4.3: the contacts of cylinder `c` (first) with a box or sphere `other`
+/// (second), at most `max`.
+fn cylinder_contacts(c: &Cylinder, other: &Shape, max: usize, out: &mut Vec<RawContact>) {
+    match *other {
+        Shape::Sphere { centre, radius } => out.extend(cylinder::sphere(c, centre, radius)),
+        Shape::Box {
+            axes,
+            centre,
+            half_size,
+        } => cylinder::cuboid(c, centre, axes, half_size, out),
+        Shape::Cylinder { .. } => {}
+    }
+    out.truncate(max);
 }
 
 /// The union of geometries' bounds: an object's box (1.1).

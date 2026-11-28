@@ -8,10 +8,9 @@
 //! contacts only setting "blocked" (trader-door.md 3.1), the others under
 //! the player's rules (trader-door.md 3.3) made joints of the player's body
 //! and the movable one; every contact with a movable body reaching the rules
-//! sets the touch flag (step-assistance-movable-bodies.md 2.1). The torso
-//! cylinder meets nothing until cylinders get contacts (TODO(#1010)), so
-//! neither its contacts' touch flag nor their count reaches the
-//! step-assistance decision.
+//! sets the touch flag (step-assistance-movable-bodies.md 2.1); the torso
+//! cylinder's by the game's cylinder–box and cylinder–sphere colliders
+//! (physics-contacts.md 4.3).
 //!
 //! The player's body is the movement's own solver
 //! (docs/architecture/simulation.md), so in the library it is a stand-in

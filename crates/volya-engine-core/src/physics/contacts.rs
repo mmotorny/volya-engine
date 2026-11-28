@@ -5,10 +5,11 @@
 //! (docs/behavior/physics-contacts.md, cited by section): the collision
 //! classes and their filter (1.3), the contact properties of two materials
 //! (2.2), the shapes' bounds (1.1, 4.1) and supports (3.5) and the
-//! contacts with the level's mesh ([`level`], section 3). The solver
-//! gathers them (`ode::collide`). Cylinders get no contacts yet
-//! (TODO(#1010)).
+//! contacts with the level's mesh ([`level`], section 3) and the game's
+//! cylinder colliders ([`cylinder`], 4.3). The solver gathers them
+//! (`ode::collide`).
 
+pub mod cylinder;
 pub mod level;
 #[cfg(test)]
 mod tests;
@@ -186,6 +187,19 @@ pub fn support(shape: &Shape, n: Vec3) -> f32 {
             let c = dot(direction, n).abs().min(1.0);
             0.5 * height * c + radius * (1.0 - c * c).sqrt()
         }
+    }
+}
+
+/// A cylinder shape as the colliders take it (4.3).
+pub fn cylinder_of(shape: &Shape) -> Option<cylinder::Cylinder> {
+    match *shape {
+        Shape::Cylinder {
+            centre,
+            direction,
+            height,
+            radius,
+        } => Some(cylinder::Cylinder::new(centre, direction, height, radius)),
+        _ => None,
     }
 }
 

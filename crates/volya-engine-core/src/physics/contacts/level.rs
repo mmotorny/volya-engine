@@ -4,8 +4,9 @@
 //! Contacts of a shape with the level's static mesh
 //! (docs/behavior/physics-contacts.md section 3): the triangles near it and
 //! their cache (3.2), the front side, the crossed-triangle records and the
-//! push-out contacts (3.3), the ordinary contacts of spheres and boxes
-//! (3.4) and the supports (3.5); cylinders get none yet (TODO(#1010)).
+//! push-out contacts (3.3), the ordinary contacts (3.4) and the supports
+//! (3.5). A cylinder's ordinary contacts and its closer overlap test are
+//! open (TODO(#957)): ours stand in.
 //! Every contact's normal points from the shape towards the surface: the
 //! level is its first geometry (3.1).
 
@@ -15,6 +16,7 @@ use crate::collision::CollisionWorld;
 use crate::collision::geometry::{self, Vec3, add, cross, dot, length, scale, sub};
 use crate::physics::shell::Shape;
 
+use super::cylinder::{self, RIM_LIMIT};
 use super::{Bounds, RawContact, support};
 
 /// A geometry's velocity term per axis (3.2).
@@ -29,8 +31,6 @@ const ORDINARY_ROOM: usize = 10;
 const SECOND_RECORD_DOT: f32 = -0.707_106_77;
 /// Cross axes must be this much better to be chosen (3.4).
 const CROSS_AXIS_FACTOR: f32 = 1.05;
-/// Beyond this a shape meets no level (m).
-const FAR: f32 = 1e6;
 
 /// A crossed-triangle record (3.3): the triangle the centre crossed.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,18 +95,8 @@ pub fn collide(
     room: usize,
     out: &mut Vec<LevelContact>,
 ) {
-    // A cylinder's contacts wait for its colliders (TODO(#1010)).
-    if let Shape::Cylinder { .. } = shape {
-        return;
-    }
     let centre = shape.centre();
     let e = query_reach(shape, velocity);
-    // A shape the solving has thrown out of any sensible place (a body at
-    // 10¹⁷ m, or not finite) would query the whole mesh at every step: it
-    // meets nothing (our guard; the level's extent is far below this).
-    if !(0..3).all(|k| centre[k].abs() < FAR && e[k].is_finite() && e[k] < FAR) {
-        return;
-    }
     let query = (sub(centre, e), add(centre, e));
     // 3.2: fetch again when there is no previous centre, or the query box
     // is not inside the box last fetched.
@@ -213,7 +203,11 @@ fn overlaps(shape: &Shape, t: &[Vec3; 3]) -> bool {
             centre,
             half_size,
         } => geometry::box_intersects(centre, axes, half_size, t),
-        Shape::Cylinder { .. } => false,
+        // Open (TODO(#957)): ours is the box about it in its own frame.
+        Shape::Cylinder { .. } => {
+            let c = super::cylinder_of(shape).expect("a cylinder");
+            geometry::box_intersects(c.p, [c.c0, c.a, c.c2], [c.r, 0.5 * c.l, c.r], t)
+        }
     }
 }
 
@@ -249,7 +243,18 @@ fn push_out(shape: &Shape, f: Vec3, d: f32) -> Vec<RawContact> {
             vertices.sort_by(|a, b| dot(*b, normal).total_cmp(&dot(*a, normal)));
             vertices.into_iter().take(3).map(at).collect()
         }
-        Shape::Cylinder { .. } => Vec::new(),
+        // Up to 3 on its rim: the point furthest along the normal (4.3's
+        // rim point, our reading) and, when `|c| ≤ 0.70710677`, the two
+        // turned ±120° from it (believed, 3.4).
+        Shape::Cylinder { .. } => {
+            let c = super::cylinder_of(shape).expect("a cylinder");
+            let (k, cap, h0, h2) = c.rim(normal);
+            let mut out = vec![at(k)];
+            if cylinder::dot(c.a, normal).abs() <= RIM_LIMIT {
+                out.extend(c.turned(cap, h0, h2).map(|(p, _, _)| at(p)));
+            }
+            out
+        }
     }
 }
 
@@ -279,8 +284,39 @@ fn ordinary(
             centre,
             half_size,
         } => cuboid(centre, axes, half_size, t, f, d),
-        Shape::Cylinder { .. } => Vec::new(),
+        Shape::Cylinder { .. } => cylinder_on(shape, t, f, d),
     }
+}
+
+/// 3.4: a cylinder's ordinary contacts with a triangle, whose rules are
+/// open (TODO(#957)). Ours, as 4.3's box face: the rim point furthest into
+/// the plane and, when the axis lies within 45° of the normal, the two
+/// turned ±120° from it, each where it lies behind the plane over the
+/// triangle, at its own depth, the normal into the mesh.
+fn cylinder_on(shape: &Shape, t: &[Vec3; 3], f: Vec3, d: f32) -> Vec<RawContact> {
+    if support(shape, f) - d < 0.0 {
+        return Vec::new();
+    }
+    let c = super::cylinder_of(shape).expect("a cylinder");
+    let normal = scale(f, -1.0);
+    let (k, cap, h0, h2) = c.rim(normal);
+    let mut points = vec![k];
+    let along = cylinder::dot(c.a, normal);
+    if (1.0 - along * along).max(0.0).sqrt() < RIM_LIMIT {
+        points.extend(c.turned(cap, h0, h2).map(|(p, _, _)| p));
+    }
+    points
+        .into_iter()
+        .filter_map(|p| {
+            let depth = dot(sub(t[0], p), f);
+            let on = sub(p, scale(f, -depth));
+            (depth >= 0.0 && inside_triangle(on, t, f)).then_some(RawContact {
+                position: p,
+                normal,
+                depth,
+            })
+        })
+        .collect()
 }
 
 fn sphere(

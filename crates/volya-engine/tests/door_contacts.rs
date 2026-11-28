@@ -153,7 +153,10 @@ fn the_leaf_meets_the_players_body() {
         timers.solver / f64::from(timers.steps.max(1)),
     );
     // 7: the contacts met it, the player stopped in front of it (the
-    // contacts' softness aside), the motor held it closed.
+    // contacts' softness aside), the motor held it closed. Measured: one
+    // contact kept at the first impact, then "blocked" holds the body
+    // about 0.34 m from the face, out of the torso cylinder's reach (its
+    // contacts with the leaf, 4.3, are the unit tests').
     assert!(met > 0);
     assert!(closest > 0.2 && left < 0.5, "{closest} … {left}");
     assert!(most < 0.05, "{most}");

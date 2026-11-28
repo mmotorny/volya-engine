@@ -156,12 +156,15 @@ struct Setup {
 /// A leaf of 100 kg (half sizes 0.1, 1.3, 0.7) with its near face at
 /// x = 0.5, resting (not active) or not; the player's body active.
 fn setup(active_leaf: bool) -> Setup {
+    setup_leaf(active_leaf, [0.6, 1.3, 0.0], [0.1, 1.3, 0.7])
+}
+
+/// A leaf of 100 kg centred at `at` with half sizes `half`.
+fn setup_leaf(active_leaf: bool, at: Vec3, half: Vec3) -> Setup {
     let mut solver = OdeSolver::new();
     solver.set_materials(materials());
     let group = solver.add_group();
-    let body = solver
-        .add_sphere(group, [0.6, 1.3, 0.0], 100.0, 0.5)
-        .unwrap();
+    let body = solver.add_sphere(group, at, 100.0, 0.5).unwrap();
     solver.set_gravity(body, false);
     let mut world = World::new(solver, 0.01, LIBRARY_ITERATIONS, -100.0);
     let character = world.solver_mut().add_character(80.0);
@@ -170,7 +173,7 @@ fn setup(active_leaf: bool) -> Setup {
     let mut leaf = Leaf {
         group,
         body,
-        half: [0.1, 1.3, 0.7],
+        half,
         woken: false,
     };
     let b = leaf
@@ -228,6 +231,24 @@ fn the_player_pushes_and_wakes_the_leaf() {
     // Momentum passes between the two (the contacts' softness aside).
     let p = 80.0 * dv[0] + 100.0 * v[0];
     assert!(p.abs() < 2.0, "{p}");
+}
+
+/// 4.3, 7 item 3: a thin leaf at the torso's height, which neither sphere
+/// reaches, meets the torso cylinder alone (the game's cylinder–box):
+/// woken, pushed along +x, the player pushed back.
+#[test]
+fn the_torso_meets_the_leaf() {
+    let s = shapes();
+    let (at, _) = s.torso();
+    let y = 0.35 + at;
+    // The bottom sphere's top and the head sphere's bottom are clear of it.
+    assert!(0.7 < y - 0.05 && y + 0.05 < 0.35 + s.h - s.small_radius());
+    let mut s = setup_leaf(false, [0.38, y, 0.0], [0.1, 0.05, 0.7]);
+    let (dv, _) = run(&mut s, step(0.0, 1.0));
+    assert!(s.world.is_active(s.leaf), "woken by the torso's contact");
+    assert!(dv[0] < -0.01, "pushed back: {dv:?}");
+    let v = s.world.solver().linear_velocity(s.body).unwrap();
+    assert!(v[0] > 0.01, "the leaf pushed: {v:?}");
 }
 
 /// 1.1: away from the leaf, no contacts; the outer sphere alone only sets
@@ -299,7 +320,8 @@ fn an_active_leaf_is_met_once() {
 }
 
 /// 4.2: a pair's contacts point from the second geometry towards the
-/// first, either way round; cylinders get none yet (TODO(#1010)).
+/// first, either way round, the game's cylinder colliders' too (4.3); two
+/// cylinders get none (open, TODO(#957)).
 #[test]
 fn pair_normals_point_to_the_first() {
     let mut s = OdeSolver::new();
@@ -319,7 +341,12 @@ fn pair_normals_point_to_the_first() {
         radius: 0.3,
     };
     let mut out = Vec::new();
-    for (a, b, up) in [(&sphere, &floor, 1.0), (&floor, &sphere, -1.0)] {
+    for (a, b, up) in [
+        (&sphere, &floor, 1.0),
+        (&floor, &sphere, -1.0),
+        (&cyl, &floor, 1.0),
+        (&floor, &cyl, -1.0),
+    ] {
         s.pair_contacts(a, b, 809, &mut out);
         assert!(!out.is_empty(), "{a:?} {b:?}");
         for c in &out {
@@ -327,13 +354,14 @@ fn pair_normals_point_to_the_first() {
             assert!(c.depth > 0.0 && c.depth < 0.06, "{c:?}");
         }
     }
-    for (a, b) in [
-        (&cyl, &floor),
-        (&floor, &cyl),
-        (&cyl, &sphere),
-        (&cyl, &cyl),
-    ] {
-        s.pair_contacts(a, b, 809, &mut out);
-        assert!(out.is_empty());
-    }
+    // A sphere beside the cylinder, the sphere first: along +x.
+    let beside = Shape::Sphere {
+        centre: [0.75, 0.48, 0.0],
+        radius: 0.5,
+    };
+    s.pair_contacts(&beside, &cyl, 809, &mut out);
+    assert_eq!(out.len(), 1);
+    assert!((out[0].normal[0] - 1.0).abs() < 1e-5, "{out:?}");
+    s.pair_contacts(&cyl, &cyl, 809, &mut out);
+    assert!(out.is_empty());
 }

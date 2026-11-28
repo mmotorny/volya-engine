@@ -252,3 +252,155 @@ fn a_crossing_is_pushed_out() {
     let c = level_contacts(&world, &below, &mut state);
     assert!(c.is_empty() && !state.inside(), "{c:?}");
 }
+
+fn upright(centre: Vec3, height: f32, radius: f32) -> cylinder::Cylinder {
+    cylinder::Cylinder::new(centre, Y, height, radius)
+}
+
+fn near(a: Vec3, b: Vec3) -> bool {
+    (0..3).all(|k| (a[k] - b[k]).abs() < 1e-5)
+}
+
+/// 4.3, cylinder–sphere: the axis, the side and the rim; the normal from
+/// the sphere towards the cylinder, the point on the sphere's surface.
+#[test]
+fn cylinder_and_sphere() {
+    let c = upright([0.0; 3], 1.0, 0.5);
+    // Above the top: axis 1.
+    let k = cylinder::sphere(&c, [0.1, 0.7, 0.0], 0.25).unwrap();
+    assert!(near(k.normal, [0.0, -1.0, 0.0]), "{k:?}");
+    assert!((k.depth - 0.05).abs() < 1e-6, "{k:?}");
+    assert!(near(k.position, [0.1, 0.45, 0.0]), "{k:?}");
+    // Beside it: axis 2.
+    let k = cylinder::sphere(&c, [0.0, 0.1, -0.7], 0.25).unwrap();
+    assert!(near(k.normal, [0.0, 0.0, 1.0]), "{k:?}");
+    assert!((k.depth - 0.05).abs() < 1e-6, "{k:?}");
+    // Off the rim's edge: axis 3, along the line from the rim point.
+    let k = cylinder::sphere(&c, [0.6, 0.6, 0.0], 0.2).unwrap();
+    let s = std::f32::consts::FRAC_1_SQRT_2;
+    assert!(near(k.normal, [-s, -s, 0.0]), "{k:?}");
+    assert!((k.depth - (0.2 - 0.1 * 2f32.sqrt())).abs() < 1e-5, "{k:?}");
+    // Apart: none.
+    assert!(cylinder::sphere(&c, [0.0, 0.8, 0.0], 0.25).is_none());
+    assert!(cylinder::sphere(&c, [0.7, 0.7, 0.0], 0.2).is_none());
+}
+
+/// 4.3, cylinder–box: an upright cylinder on a box ties the axis with the
+/// face, so the axis (first) gives the box's vertex; tilted a little, the
+/// face's three rim points; a lying one one; the player's torso against a
+/// leaf beside it is pushed off it.
+#[test]
+fn cylinder_and_box() {
+    let floor = ([0.0, -0.5, 0.0], [X, Y, Z], [2.0, 0.5, 2.0]);
+    let mut out = Vec::new();
+    let c = upright([0.0, 0.49, 0.0], 1.0, 0.3);
+    cylinder::cuboid(&c, floor.0, floor.1, floor.2, &mut out);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(near(out[0].normal, Y) && (out[0].depth - 0.01).abs() < 1e-5);
+    assert!(near(out[0].position, [2.0, 0.0, 2.0]), "{out:?}");
+    out.clear();
+    let (sin, cos) = (0.01f32, (1.0f32 - 1e-4).sqrt());
+    let at = 0.5 * cos + 0.483 - 0.5;
+    let c = cylinder::Cylinder::new([0.0, at, 0.0], [sin, cos, 0.0], 1.0, 0.3);
+    cylinder::cuboid(&c, floor.0, floor.1, floor.2, &mut out);
+    assert_eq!(out.len(), 3, "{out:?}");
+    assert!((out[0].depth - 0.02).abs() < 1e-5, "{out:?}");
+    for k in &out[1..] {
+        // 1.5·r·sin θ higher on the rim.
+        assert!((k.depth - (0.02 - 1.5 * 0.3 * sin)).abs() < 1e-5, "{k:?}");
+    }
+    for k in &out {
+        assert!(near(k.normal, Y), "{k:?}");
+        assert!((k.position[1] + k.depth).abs() < 1e-4, "{k:?}");
+    }
+    // Lying along x: one contact, at the rim of a cap.
+    out.clear();
+    let c = cylinder::Cylinder::new([0.0, 0.29, 0.0], X, 1.0, 0.3);
+    cylinder::cuboid(&c, floor.0, floor.1, floor.2, &mut out);
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(near(out[0].normal, Y) && (out[0].depth - 0.01).abs() < 1e-5);
+    assert!((out[0].position[0].abs() - 0.5).abs() < 1e-5, "{out:?}");
+    // Apart: none.
+    out.clear();
+    let c = upright([0.0, 0.51, 0.0], 1.0, 0.3);
+    cylinder::cuboid(&c, floor.0, floor.1, floor.2, &mut out);
+    assert!(out.is_empty());
+    let c = upright([0.0, 1.0, 0.0], 1.0, 0.29);
+    cylinder::cuboid(&c, [0.37, 1.0, 0.0], [X, Y, Z], [0.1, 1.3, 0.7], &mut out);
+    assert!(!out.is_empty());
+    for k in &out {
+        assert!(near(k.normal, [-1.0, 0.0, 0.0]), "{k:?}");
+        assert!((k.depth - 0.02).abs() < 1e-5, "{k:?}");
+    }
+}
+
+/// physics-library.md 3.5: normalisation, the slow path below its least.
+#[test]
+fn normalisation() {
+    assert_eq!(cylinder::normalise([3.0, 0.0, 4.0]), [0.6, 0.0, 0.8]);
+    let v = cylinder::normalise([1e-3, -2e-3, 0.5e-3]);
+    assert!(
+        (crate::collision::geometry::length(v) - 1.0).abs() < 1e-6,
+        "{v:?}"
+    );
+    assert_eq!(cylinder::normalise([0.0; 3]), [1.0, 0.0, 0.0]);
+}
+
+/// A rotation's columns from the axis: orthonormal and right-handed.
+#[test]
+fn cylinder_frames() {
+    for axis in [
+        Y,
+        X,
+        Z,
+        [0.0, -1.0, 0.0],
+        [0.6, 0.0, 0.8],
+        [0.48, 0.6, -0.64],
+    ] {
+        let c = cylinder::Cylinder::new([0.0; 3], axis, 1.0, 1.0);
+        for (u, v) in [(c.c0, c.a), (c.a, c.c2), (c.c2, c.c0)] {
+            assert!(dot(u, v).abs() < 1e-6, "{axis:?}");
+        }
+        let x = crate::collision::geometry::cross(c.c0, c.a);
+        assert!(near(x, c.c2), "{axis:?}: {c:?}");
+    }
+}
+
+/// 3.4 (ours, open): an upright cylinder standing on the floor gets three
+/// contacts over its two triangles; 3.3: a crossing pushes it out.
+#[test]
+fn a_cylinder_on_the_floor() {
+    let world = floor();
+    let cyl = |centre, direction| Shape::Cylinder {
+        centre,
+        direction,
+        height: 1.0,
+        radius: 0.25,
+    };
+    let c = level_contacts(
+        &world,
+        &cyl([0.3, 0.49, 0.2], Y),
+        &mut LevelState::default(),
+    );
+    assert_eq!(c.len(), 3, "{c:?}");
+    for k in &c {
+        assert_eq!(k.contact.normal, [0.0, -1.0, 0.0]);
+        assert!((k.contact.depth - 0.01).abs() < 1e-5, "{k:?}");
+    }
+    // Lying: one, at a cap's rim.
+    let c = level_contacts(
+        &world,
+        &cyl([0.3, 0.24, 0.2], X),
+        &mut LevelState::default(),
+    );
+    assert_eq!(c.len(), 1, "{c:?}");
+    let mut state = LevelState::default();
+    level_contacts(&world, &cyl([0.3, 0.6, 0.2], Y), &mut state);
+    let c = level_contacts(&world, &cyl([0.3, -0.02, 0.2], Y), &mut state);
+    assert!(state.inside());
+    // Upright (|c| = 1): one per record, at depth s(f) − d.
+    assert_eq!(c.len(), 2, "{c:?}");
+    for k in &c {
+        assert!((k.contact.depth - 0.52).abs() < 1e-5, "{k:?}");
+    }
+}
