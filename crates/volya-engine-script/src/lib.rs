@@ -24,6 +24,7 @@
 // FFI to the vendored interpreter and our C library shims.
 #![allow(unsafe_code)]
 
+pub mod action_planner;
 pub mod classes;
 pub mod dialogs;
 pub mod effects_and_weather;

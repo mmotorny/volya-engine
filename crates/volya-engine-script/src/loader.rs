@@ -257,6 +257,8 @@ pub struct Scripts {
     pub(crate) effects_and_weather_state: Option<crate::effects_and_weather::Registered>,
     /// The relations, once registered ([`crate::relations`]).
     pub(crate) relations_state: Option<crate::relations::Registered>,
+    /// The action planner, once registered ([`crate::action_planner`]).
+    pub(crate) action_planner_state: Option<crate::action_planner::Registered>,
 }
 
 impl Scripts {
@@ -336,6 +338,7 @@ impl Scripts {
             level_state: None,
             effects_and_weather_state: None,
             relations_state: None,
+            action_planner_state: None,
         })
     }
 

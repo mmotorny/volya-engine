@@ -1650,3 +1650,19 @@ mod relations {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// Script API W's checks, one test per section of
+/// docs/behavior/script-api-action-planner.md (all of them run in
+/// [`selftest`] too, on every target).
+mod action_planner {
+    use crate::selftest::action_planner::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

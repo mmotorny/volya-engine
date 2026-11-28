@@ -1205,12 +1205,17 @@ impl Scripts {
         let handle = self
             .lua_mut()
             .new_engine_object("game_object", |part| members::Handle { id, part })?;
-        let mut o = objects.borrow_mut();
-        o.handles.insert(handle, id);
-        if let Some(object) = o.get_mut(id) {
-            object.handle = Some(handle);
-            object.spawn_ini = ini;
+        {
+            let mut o = objects.borrow_mut();
+            o.handles.insert(handle, id);
+            if let Some(object) = o.get_mut(id) {
+                object.handle = Some(handle);
+                object.spawn_ini = ini;
+            }
         }
+        // Script API W 10: a stalker's motivation manager, before its
+        // binder's calls.
+        self.motivation_manager_comes_online(id, handle)?;
         Ok(handle)
     }
 
@@ -1234,6 +1239,7 @@ impl Scripts {
         self.forget_callbacks(id, object.kinds)?;
         self.forget_inventory_object(id);
         self.forget_sound_player(id);
+        self.motivation_manager_goes_offline(id)?;
         if let Some(handle) = object.handle {
             objects.borrow_mut().handles.remove(&handle);
             self.lua_mut().release_engine_object(handle)?;

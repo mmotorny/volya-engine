@@ -7,14 +7,15 @@
 //! story state, the engine's entry points, the dialog files' functions, the
 //! dialogs and trade, time, the sound, the simulation registry, the
 //! scripted actions, the window description files, movement, sight
-//! and memory, relations, community and ranking, the level, and effects
-//! and weather,
+//! and memory, relations, community and ranking, the level, effects and
+//! weather, and the action planner,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
 
 use crate::{ErrorKind, Lua, Value};
 
+pub mod action_planner;
 pub mod character_talk_state;
 pub mod classes;
 pub mod dialogs;
@@ -128,6 +129,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = effects_and_weather::check() {
+        fail(e);
+    }
+    if let Err(e) = action_planner::check() {
         fail(e);
     }
     if failures.is_empty() {
