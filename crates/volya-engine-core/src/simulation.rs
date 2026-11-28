@@ -685,6 +685,12 @@ impl Simulation {
         self.level.as_ref()?.navigation.as_ref()
     }
 
+    /// The navigation data, to change (the light bytes taken by the
+    /// scripts).
+    pub fn navigation_mut(&mut self) -> Option<&mut Navigation> {
+        self.level.as_mut()?.navigation.as_mut()
+    }
+
     /// The object with id `id`.
     pub fn object(&self, id: u16) -> Option<&SimObject> {
         self.objects.get(&id)

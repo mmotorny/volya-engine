@@ -38,6 +38,7 @@ use crate::level::{GeometryKeeper, LevelScreen, LevelWorld, NewGameLoad};
 use crate::level_physics::PhysicsSettings;
 use crate::objects::{GeometryChunk, Prefetched, Prefetching};
 use crate::scene::{Scene, Sprite, TextureId};
+use crate::scripts::ClientSpawning;
 use volya_engine_formats::text::font::UiFont;
 use volya_engine_formats::ui::layout::HAlign;
 use volya_engine_formats::ui::picture::Quad;
@@ -591,6 +592,13 @@ impl Loading {
     pub fn runs_work(&self) -> bool {
         matches!(self.hold, Hold::None)
             && !(self.stage() == Stage::PrefetchingObjects && self.prepare)
+    }
+
+    /// The level's client objects online at the start and its level
+    /// vertices' light bytes, once `st_client_spawning` has run
+    /// ([`NewGameLoad::client_objects`]).
+    pub fn client_objects(&mut self) -> io::Result<ClientSpawning<'_>> {
+        self.load.client_objects()
     }
 
     /// The caption shown.

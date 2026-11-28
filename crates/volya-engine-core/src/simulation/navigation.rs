@@ -27,6 +27,10 @@ pub struct Navigation {
     pub level_id: u8,
     pub ai: LevelAi,
     pub cross: CrossTable,
+    /// Byte 11 of each `level.ai` vertex, as [`Navigation::read`] reads
+    /// it, for the scripts (script-api-game-object-basics.md 4); empty
+    /// otherwise, or once taken.
+    pub vertex_lights: Vec<u8>,
     /// Level vertices in increasing packed column and row, when the file
     /// does not store them so; `None` when it does.
     order: Option<Vec<u32>>,
@@ -74,6 +78,7 @@ impl Navigation {
             level_id,
             ai,
             cross,
+            vertex_lights: Vec::new(),
             order,
         })
     }
@@ -88,8 +93,9 @@ impl Navigation {
             |name: &str, e: io::Error| io::Error::new(e.kind(), format!("{dir}\\{name}: {e}"));
         let path = format!("{dir}\\level.ai");
         let f = tree.open(&path).map_err(|e| file("level.ai", e))?;
-        let ai = LevelAi::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
-            .map_err(|e| file("level.ai", e))?;
+        let (ai, vertex_lights) =
+            LevelAi::read_in_with_lights(BufReader::new(f), |len| file_cache::hold(&path, len))
+                .map_err(|e| file("level.ai", e))?;
         let path = format!("{dir}\\level.gct");
         let cross = match tree.open(&path) {
             Ok(f) => CrossTable::read_in(BufReader::new(f), |len| file_cache::hold(&path, len))
@@ -99,7 +105,9 @@ impl Navigation {
             }
             Err(e) => return Err(file("level.gct", e)),
         };
-        Self::new(graph, level_id, ai, cross)
+        let mut navigation = Self::new(graph, level_id, ai, cross)?;
+        navigation.vertex_lights = vertex_lights;
+        Ok(navigation)
     }
 
     /// Whether `k` is a valid level vertex (below *N*).

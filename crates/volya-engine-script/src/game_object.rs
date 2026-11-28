@@ -194,6 +194,11 @@ pub enum ObjectClass {
     Named(&'static str),
     /// The player's object, whose class scripts can't name (2.2).
     Player,
+    /// An object of an engine entry's kind (spec C 2.2, 6.1) other than
+    /// the player's, whose class scripts can't name: its entry's class id.
+    /// Which kinds such an object has is outside the specs: none
+    /// (TODO(#1070)).
+    Unnamed(u64),
 }
 
 impl ObjectClass {
@@ -201,8 +206,10 @@ impl ObjectClass {
     /// classes) are entities with a physics part; a class the table lacks
     /// has none.
     pub fn kinds(self) -> Kinds {
-        let ObjectClass::Named(name) = self else {
-            return Kinds::OF_PLAYER;
+        let name = match self {
+            ObjectClass::Named(name) => name,
+            ObjectClass::Player => return Kinds::OF_PLAYER,
+            ObjectClass::Unnamed(_) => return Kinds::NONE,
         };
         if name == "CAI_Trader" {
             Kinds::TRADER
@@ -653,6 +660,19 @@ pub struct GameObjects {
     /// Spawn data awaiting `net_Spawn`, by token.
     pending: HashMap<u32, (SpawnData, Option<u16>)>,
     next_token: u32,
+    /// The engine's state for objects about to spawn, by id.
+    prepared: HashMap<u16, EngineState>,
+}
+
+/// What the engine gives an object as it spawns beyond its spawn data
+/// ([`GameObjects::prepare`]): its visual (4), its physics part (5.4) and
+/// its restrictor's shape (6.2), the last two kept only where its kinds
+/// have the part.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EngineState {
+    pub visual: Option<Visual>,
+    pub physics: Option<Physics>,
+    pub restrictor: Option<Restrictor>,
 }
 
 impl GameObjects {
@@ -703,6 +723,13 @@ impl GameObjects {
         std::mem::take(&mut self.events)
     }
 
+    /// Gives object `id`, when it next spawns, the engine's `state`: set as
+    /// the object is made, before its binding and binder calls (spec L 5.1
+    /// step 1).
+    pub fn prepare(&mut self, id: u16, state: EngineState) {
+        self.prepared.insert(id, state);
+    }
+
     fn pend(&mut self, data: SpawnData) -> u32 {
         self.next_token = self.next_token.wrapping_add(1);
         self.pending.insert(self.next_token, (data, None));
@@ -729,6 +756,15 @@ impl GameObjects {
             .number(data.class_id);
         let mut object = GameObject::new(class, data, clsid);
         object.client = client;
+        if let Some(state) = self.prepared.remove(&data.id) {
+            object.visual = state.visual;
+            if object.physics.is_some() {
+                object.physics = state.physics.or(object.physics);
+            }
+            if object.restrictor.is_some() {
+                object.restrictor = state.restrictor.or(object.restrictor);
+            }
+        }
         let id = object.id;
         *spawned = Some(id);
         self.objects.insert(id, object);

@@ -121,7 +121,7 @@ impl SaveRelevance {
                 SaveRelevance::Always
             }
             ObjectClass::Named("CHelicopter") => SaveRelevance::BinderOrFurtherPart,
-            ObjectClass::Named(_) => SaveRelevance::Binder,
+            ObjectClass::Named(_) | ObjectClass::Unnamed(_) => SaveRelevance::Binder,
         }
     }
 }

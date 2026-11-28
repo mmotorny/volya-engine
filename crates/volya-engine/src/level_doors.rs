@@ -195,6 +195,16 @@ impl LevelDoors {
         }
     }
 
+    /// Whether object `id` is one of the doors.
+    pub fn holds(&self, id: u16) -> bool {
+        self.objects.contains(&id)
+    }
+
+    /// The object id of the door the crosshair picks.
+    pub fn picked_object(&self) -> Option<u16> {
+        self.picked.map(|(i, _)| self.objects[i])
+    }
+
     pub fn report(&self) -> Vec<DoorReport> {
         (self.doors.iter())
             .map(|d| DoorReport {

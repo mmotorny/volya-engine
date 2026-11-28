@@ -39,7 +39,7 @@ use crate::level::{GeometryKeeper, LevelScreen, LevelState, LevelWorld};
 use crate::level_physics::PhysicsSettings;
 use crate::level_sound::{LevelSounds, SoundRun};
 use crate::loading_screen::{
-    GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME,
+    GAME_TYPE, Loading, LoadingScreen, LoadingScreenState, OVERLAY_FRAMES, SERVER_NEW_GAME, Stage,
     intro_due,
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
@@ -1141,6 +1141,15 @@ impl App {
             self.failed.get_or_insert(why);
         }
         self.run_console_actions(input, audio);
+        // The scripts' objects follow the level's frame (script API M); a
+        // script error ends the game.
+        if let (Some(Phase::Level { level, .. }), Some(scripts)) =
+            (&mut self.phase, &mut self.scripts)
+            && let Err(e) =
+                crate::scripts::level_frame(scripts, level, &self.data.system, self.clock)
+        {
+            self.failed.get_or_insert(e.message);
+        }
         // A fatal error the level met, or a placed effect's group
         // (particle-groups.md 2.3): the game ends with it.
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
@@ -1655,7 +1664,11 @@ impl App {
                     // level is made (texture-quality-filtering.md 8.1).
                     self.samplers.reset(&self.console);
                     self.loads += 1;
-                    if let Some(scripts) = &self.scripts {
+                    if let Some(scripts) = &mut self.scripts {
+                        if let Err(e) = crate::scripts::level_ended(scripts) {
+                            self.failed.get_or_insert(e.message);
+                            return;
+                        }
                         crate::scripts::new_game(scripts);
                     }
                 }
@@ -1707,7 +1720,19 @@ impl App {
                         }
                         let captions = loading.screen().state().captions;
                         loading.set_physics_settings(PhysicsSettings::from_console(&self.console));
+                        let ran = loading.runs_work().then(|| loading.stage());
                         let step = loading.step(tree, data, now);
+                        // The level's client objects in the scripts, after
+                        // the spawning caption's own work.
+                        if step.is_ok()
+                            && ran == Some(Stage::ClientSpawning)
+                            && let Some(scripts) = self.scripts.as_mut()
+                            && let Err(e) =
+                                crate::scripts::client_spawning(scripts, loading, &data.system, now)
+                        {
+                            self.failed.get_or_insert(e.message);
+                            return;
+                        }
                         // Kept for the game type once made, whatever
                         // becomes of this load.
                         if self.prefetched.is_none() {
@@ -1846,6 +1871,11 @@ impl App {
                     // `disconnect`: the game ends; with no level the title
                     // screen's menu opens.
                     diagnostics::end("quit", "quit to the title menu");
+                    if let Some(scripts) = &mut self.scripts
+                        && let Err(e) = crate::scripts::level_ended(scripts)
+                    {
+                        self.failed.get_or_insert(e.message);
+                    }
                     menu.stop(audio);
                     intro.stop(audio);
                     if let Some(o) = overlay.take() {

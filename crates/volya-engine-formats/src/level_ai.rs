@@ -22,6 +22,9 @@ const HEADER_SIZE: usize = 56;
 const VERTEX_SIZE: usize = 21;
 /// Offset of the packed column and row in a vertex.
 const VERTEX_PACKED: usize = 16;
+/// Offset of the byte whose upper 4 bits are the vertex's light
+/// (script-api-game-object-basics.md 4).
+const VERTEX_LIGHT: usize = 11;
 /// Bytes kept of a vertex: the packed column and row (`u24`), the height
 /// (`u16`), as stored.
 pub const KEPT: usize = 5;
@@ -105,8 +108,28 @@ impl LevelAi {
     /// vertex, keeping the positions in the zeroed bytes `alloc` gives for
     /// their size. A version other than 8 is an error.
     pub fn read_in<B: DerefMut<Target = [u8]> + Send + Sync + 'static>(
+        file: impl Read + Seek,
+        alloc: impl FnOnce(usize) -> io::Result<B>,
+    ) -> io::Result<Self> {
+        Self::read_with(file, alloc, None)
+    }
+
+    /// [`Self::read_in`], also giving byte 11 of each vertex in order (the
+    /// light the scripts read, script-api-game-object-basics.md 4,
+    /// `level_vertex_light`), one byte per vertex on the heap.
+    pub fn read_in_with_lights<B: DerefMut<Target = [u8]> + Send + Sync + 'static>(
+        file: impl Read + Seek,
+        alloc: impl FnOnce(usize) -> io::Result<B>,
+    ) -> io::Result<(Self, Vec<u8>)> {
+        let mut lights = Vec::new();
+        let ai = Self::read_with(file, alloc, Some(&mut lights))?;
+        Ok((ai, lights))
+    }
+
+    fn read_with<B: DerefMut<Target = [u8]> + Send + Sync + 'static>(
         mut file: impl Read + Seek,
         alloc: impl FnOnce(usize) -> io::Result<B>,
+        mut lights: Option<&mut Vec<u8>>,
     ) -> io::Result<Self> {
         let length = file.seek(SeekFrom::End(0))?;
         file.seek(SeekFrom::Start(0))?;
@@ -139,6 +162,9 @@ impl LevelAi {
         if kept.len() != n * KEPT {
             return Err(invalid("level.ai: no room for the positions"));
         }
+        if let Some(lights) = lights.as_deref_mut() {
+            lights.reserve_exact(n);
+        }
         // A batch of whole vertices at a time.
         let mut buffer = vec![0u8; VERTEX_SIZE * 4096];
         let mut out = kept.as_chunks_mut::<KEPT>().0.iter_mut();
@@ -149,6 +175,15 @@ impl LevelAi {
             file.read_exact(bytes)?;
             for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut out) {
                 to.copy_from_slice(&v[VERTEX_PACKED..]);
+            }
+            if let Some(lights) = lights.as_deref_mut() {
+                lights.extend(
+                    bytes
+                        .as_chunks::<VERTEX_SIZE>()
+                        .0
+                        .iter()
+                        .map(|v| v[VERTEX_LIGHT]),
+                );
             }
             left -= batch;
         }
@@ -287,5 +322,17 @@ pub(crate) mod tests {
         let mut huge = file.clone();
         huge[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(LevelAi::read(io::Cursor::new(&huge[..])).is_err());
+    }
+
+    #[test]
+    fn gives_each_vertexs_light_byte() {
+        let mut file = level_ai_file(7.0, 3.5, &[(0, 0, 0), (2, 3, 65535)]);
+        file[HEADER_SIZE + VERTEX_LIGHT] = 0xF3;
+        file[HEADER_SIZE + VERTEX_SIZE + VERTEX_LIGHT] = 0x70;
+        let (ai, lights) =
+            LevelAi::read_in_with_lights(io::Cursor::new(&file[..]), |len| Ok(vec![0; len]))
+                .unwrap();
+        assert_eq!(lights, [0xF3, 0x70]);
+        assert_eq!(ai, LevelAi::read(io::Cursor::new(&file[..])).unwrap());
     }
 }

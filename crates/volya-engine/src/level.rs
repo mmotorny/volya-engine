@@ -83,6 +83,7 @@ use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{DetailWindow, Surface};
 use crate::scene::{Scene, WorldScene};
+use crate::scripts::{ClientObject, ClientSpawning};
 use crate::shading::{self, ShaderLibrary};
 use crate::sky::{self, Flares, SkyCamera, SunFade};
 use crate::torch::{PlayerTorchData, PlayerTorches, TorchReport, TorchSound};
@@ -368,6 +369,12 @@ pub struct LevelScreen {
     sound_data: Option<LevelSoundData>,
     /// A fatal error met while the level ran, until the app takes it.
     fatal: Option<String>,
+    /// What switched in the simulation since the scripts last took it
+    /// ([`LevelScreen::take_script_changes`]).
+    script_changes: Changes,
+    /// The object the player's use action targeted since last taken
+    /// ([`LevelScreen::take_used`]).
+    used: Option<u16>,
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
@@ -1765,6 +1772,42 @@ impl NewGameLoad {
         self.prefetched.as_ref()
     }
 
+    /// Once `st_client_spawning` has run: the objects online at the start
+    /// (offline-simulation.md 9.1) as the scripts' spawning takes them, in
+    /// the level list's order, without those inside a container (as the
+    /// level's visuals); and byte 11 of each level vertex, taken from the
+    /// navigation data; at the game clock's time.
+    pub fn client_objects(&mut self) -> io::Result<ClientSpawning<'_>> {
+        let game_time = earlier(self.clock.as_ref(), "game clock")?.time();
+        let sim = earlier(self.simulation.as_mut(), "simulation")?;
+        let lights = (sim.navigation_mut())
+            .map(|n| std::mem::take(&mut n.vertex_lights))
+            .unwrap_or_default();
+        let sim = earlier(self.simulation.as_ref(), "simulation")?;
+        let spawned = earlier(self.spawned.as_ref(), "objects")?;
+        let physics = earlier(self.physics.as_ref(), "physics world")?;
+        let doors = earlier(self.doors.as_ref(), "objects")?;
+        let models: HashMap<u16, usize> = (spawned.instances.iter())
+            .map(|i| (i.id, i.model))
+            .collect();
+        let objects = (sim.level_list())
+            .filter_map(|id| sim.object(id))
+            .filter(|o| o.online && o.record.header.parent_id == crate::core::simulation::NO_ID)
+            .map(|o| ClientObject {
+                id: o.id,
+                record: &o.record,
+                model: (models.get(&o.id)).map(|&m| (&spawned.models[m], &spawned.names)),
+                physics: physics.script_physics(o.id),
+                door: doors.holds(o.id),
+            })
+            .collect();
+        Ok(ClientSpawning {
+            objects,
+            vertex_lights: lights,
+            game_time,
+        })
+    }
+
     /// The level directory name, once the new game is created.
     pub fn level_name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -2584,6 +2627,8 @@ impl NewGameLoad {
             collision,
             sound_data: self.sound,
             fatal: None,
+            script_changes: Changes::default(),
+            used: None,
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
             player_sphere,
@@ -2834,9 +2879,11 @@ impl LevelScreen {
         }
         let view = self.player.view();
         self.doors.pick(view.eye, view.direction, now);
-        // The use action on the picked door (2.5).
+        // The use action on the picked door (2.5), for the scripts too
+        // (script API M 6.3).
         if self.controls.use_pressed(input) {
             self.doors.use_picked();
+            self.used = self.doors.picked_object().or(self.used);
         }
         self.fall_hit();
         if let Some(c) = &mut self.character {
@@ -3439,6 +3486,10 @@ impl LevelScreen {
         if changes.is_empty() {
             return;
         }
+        let script = &mut self.script_changes;
+        script.online.extend(&changes.online);
+        script.offline.extend(&changes.offline);
+        script.removed.extend(&changes.removed);
         for &id in &changes.online {
             self.lights.object_online(id);
         }
@@ -4010,6 +4061,65 @@ impl LevelScreen {
         self.simulation.as_ref()
     }
 
+    /// What switched online or offline, or was removed, since the last
+    /// call: the scripts' objects follow it (script API M 2.1).
+    pub fn take_script_changes(&mut self) -> Changes {
+        std::mem::take(&mut self.script_changes)
+    }
+
+    /// The object the player's use action targeted since the last call
+    /// (script API M 6.3).
+    pub fn take_used(&mut self) -> Option<u16> {
+        self.used.take()
+    }
+
+    /// Object `id` as the scripts' spawning takes it: its record, its
+    /// visual loaded with the level and its shell's physics part.
+    pub fn client_object(&self, id: u16) -> Option<ClientObject<'_>> {
+        let o = self.simulation.as_ref()?.object(id)?;
+        let objects = &self.world.objects;
+        let model = (self.instances.get(&id))
+            .map(|&k| (&objects.models[objects.instances[k].model], &objects.names));
+        Some(ClientObject {
+            id,
+            record: &o.record,
+            model,
+            physics: self.physics.script_physics(id),
+            door: self.doors.holds(id),
+        })
+    }
+
+    /// The player's forced placement (script API M 4,
+    /// `set_actor_position`): its feet at `position`, at rest, the camera
+    /// keeping its angles.
+    pub fn force_player_position(&mut self, position: Vec3) {
+        let angles = self.player.angles();
+        self.player.place(position, angles);
+    }
+
+    /// The player's camera given heading, pitch and roll `angles` (script
+    /// API M 4, `set_actor_direction`), the feet where they are.
+    pub fn set_camera_angles(&mut self, [yaw, pitch, roll]: [f32; 3]) {
+        let position = self.player.state().position;
+        self.player.place(position, Angles { yaw, pitch, roll });
+    }
+
+    /// Object `id`'s instance hidden or shown by the engine's visibility
+    /// switch (script API M 6.5), while it is online.
+    pub fn set_object_hidden(&mut self, id: u16, hidden: bool) {
+        let (Some(&k), Some(o)) = (
+            self.instances.get(&id),
+            self.simulation.as_ref().and_then(|s| s.object(id)),
+        ) else {
+            return;
+        };
+        let h = &o.record.header;
+        let placement = (!hidden && o.online).then(|| model_math::transform(h.position, h.angles));
+        if self.placements[k] != placement {
+            Arc::make_mut(&mut self.placements)[k] = placement;
+        }
+    }
+
     /// An id for an item created in the level: from the simulation's pool;
     /// without a simulation (unit tests), one above every id the player
     /// character holds.
@@ -4420,6 +4530,8 @@ impl LevelScreen {
             ),
             sound_data: None,
             fatal: None,
+            script_changes: Changes::default(),
+            used: None,
             footsteps: None,
             sky_visibility: SkyVisibility::default(),
             player_sphere: ([0.0; 3], 0.0),

@@ -131,6 +131,8 @@ struct LevelShell {
     joints: Vec<(String, JointId)>,
     /// Its boxes in their elements' frames, with their materials.
     boxes: Vec<(usize, Shape, u32)>,
+    /// Its physics part as scripts read it (script API M 5.4, `mass`).
+    physics: crate::script::game_object::Physics,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -461,6 +463,7 @@ impl LevelPhysics {
             id,
             joints,
             boxes,
+            physics: crate::script::game_object::Physics::of_shell(shell),
         });
         Ok(())
     }
@@ -507,6 +510,12 @@ impl LevelPhysics {
             return None;
         };
         Some((body, self.world.is_active(s.id)))
+    }
+
+    /// The physics part of object `object`'s shell as scripts read it
+    /// (script API M 5.4): its elements' masses summed.
+    pub fn script_physics(&self, object: u16) -> Option<crate::script::game_object::Physics> {
+        self.shell(object).map(|s| s.physics)
     }
 
     /// The joint of object `object`'s shell made from bone `bone`.
