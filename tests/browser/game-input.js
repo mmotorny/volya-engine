@@ -1744,6 +1744,11 @@ export const tests = {
       steps.push(s.level.player.position.map((v) => +v.toFixed(3)));
     }
     const traderView = { yaw: s.level.yaw, pitch: s.level.pitch };
+    // His intro moves his body under the line and off it: a while for it.
+    for (let t = performance.now(); s.level.talk.picked === null && performance.now() < t + 10000; ) {
+      await sleep(30);
+      s = await state();
+    }
     // The trader under the crosshair: Use shows (docs/behavior/talk.md
     // 2.1); a tap starts a talk, the controls turn to the cursor's, and
     // their Menu (the key bound to `quit`) ends it (talk-window-input.md
@@ -1758,9 +1763,11 @@ export const tests = {
     assert(!use.hidden, "Use shown for the trader");
     // His talk is off until his scheme reaches mob_trader@new_start_intro3
     // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
-    // logic starts: Use until it opens.
-    const deadline = performance.now() + 45000;
+    // logic starts (measured 35 s after this loop began, #1171): Use, while
+    // his moving body is under the crosshair, until it opens.
+    const deadline = performance.now() + 90000;
     for (;;) {
+      await until((s) => s.level.talk.picked !== null, "the trader under the crosshair to use", 10000);
       tap(use);
       try {
         await until((s) => s.talk, "the touch Use to start a talk", 1500);
@@ -1856,7 +1863,10 @@ export const tests = {
     await until((s) => s.level.yaw < quarter - Math.PI / 2 + 0.08, "the left arrow to turn back", 3000);
     up("ArrowLeft");
     s = await state();
-    await aim(traderView.yaw, traderView.pitch);
+    s = await aim(traderView.yaw, traderView.pitch);
+    // His pose since the talk may leave the view's line beside his body: a
+    // few steps toward him.
+    for (let i = 0; i < 30 && s.level.talk.picked === null; i++) s = await nudge("KeyW");
     await until((s) => s.level.talk.picked !== null, "the trader under the crosshair again");
     return "";
   },

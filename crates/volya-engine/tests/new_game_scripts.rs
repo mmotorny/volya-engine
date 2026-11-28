@@ -23,7 +23,7 @@ use volya_engine::audio::Silent;
 use volya_engine::controls::MoveAction;
 use volya_engine::core::camera::Angles;
 use volya_engine::core::dialogs::conditions::DialogWorld;
-use volya_engine::core::input::{Control, Event, Input, Key};
+use volya_engine::core::input::{Control, Event, Input, Key, TouchButton};
 use volya_engine::core::memory_manager::GAME_SCRIPTS;
 use volya_engine::core::simulation::NO_ID;
 use volya_engine::core::vfs::db::DbVfs;
@@ -348,6 +348,47 @@ end
         scripts.scripts().player_holds("esc_trader_hello_played"),
         "intro1 gave esc_trader_hello_played"
     );
+
+    // #1171: with his talk on, the touch Use aimed at him starts it, as
+    // his use key does (use-action.md 1.2, 6.2; our design, #874).
+    let level = app.level_mut().unwrap();
+    let world = std::sync::Arc::clone(level.world());
+    let instance = (world.objects.instances.iter())
+        .find(|i| i.name == "escape_trader")
+        .expect("the trader drawn");
+    let (sphere, trader_id) = (instance.sphere, instance.id);
+    let start = level.player().state().position;
+    let (dx, dz) = (start[0] - sphere[0], start[2] - sphere[2]);
+    let k = 1.5 / (dx * dx + dz * dz).sqrt();
+    let h = (level.player().config).eye_height(level.player().body().box_index());
+    let eye = [sphere[0] + dx * k, start[1] + h, sphere[2] + dz * k];
+    let to = [sphere[0] - eye[0], sphere[1] - eye[1], sphere[2] - eye[2]];
+    let angles = Angles {
+        yaw: to[0].atan2(to[2]),
+        pitch: -(to[1] / (to[0] * to[0] + to[2] * to[2]).sqrt()).atan(),
+        roll: 0.0,
+    };
+    level.set_camera(eye, angles);
+    step(&mut app, &mut input);
+    step(&mut app, &mut input);
+    let picked = app.level().unwrap().state().talk.picked;
+    assert_eq!(picked, Some(trader_id), "the trader under the crosshair");
+    for pressed in [true, false] {
+        input.handle(Event::TouchButton {
+            button: TouchButton::Use,
+            pressed,
+        });
+    }
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    assert!(app.talk_open(), "the touch Use starts his talk");
+    press(&mut input, Key::Escape);
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    assert!(!app.talk_open(), "the quit key ends it");
+    let scripts = app.game_scripts().unwrap();
 
     // Spec L 5.2, 8: each level frame runs the door's scheduled update,
     // its binder's `update(delta)`, `delta` the frame's 16 ms.
