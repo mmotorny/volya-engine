@@ -1432,3 +1432,81 @@ mod window_files {
         section(checks::translate_string);
     }
 }
+
+/// Script API X's checks, one test per section of
+/// docs/behavior/script-api-movement-sight-and-memory.md (all of them run
+/// in [`selftest`] too, on every target).
+mod movement_sight_and_memory {
+    use crate::selftest::movement_sight_and_memory as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn kinds_and_fallbacks() {
+        section(checks::kinds);
+    }
+
+    #[test]
+    fn stalker_movement() {
+        section(checks::stalker_movement);
+    }
+
+    #[test]
+    fn paths_and_patrol_paths() {
+        section(checks::paths);
+    }
+
+    #[test]
+    fn space_restrictions() {
+        section(checks::restrictions);
+    }
+
+    #[test]
+    fn sight() {
+        section(checks::sight);
+    }
+
+    #[test]
+    fn vision_and_memory() {
+        section(checks::vision_and_memory);
+    }
+
+    #[test]
+    fn enemies_and_dangers() {
+        section(checks::enemies);
+    }
+
+    #[test]
+    fn covers() {
+        section(checks::covers);
+    }
+
+    #[test]
+    fn items_weapons_and_animations() {
+        section(checks::items);
+    }
+
+    #[test]
+    fn monsters() {
+        section(checks::monsters);
+    }
+
+    #[test]
+    fn cef_storage() {
+        section(checks::cef_storage);
+    }
+
+    #[test]
+    fn absent_names() {
+        section(checks::absent);
+    }
+}

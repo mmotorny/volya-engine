@@ -787,6 +787,9 @@ pub fn apply_events(scripts: &mut GameScripts, level: &mut LevelScreen) {
                 }
             }
             Event::Visibility { object, hidden } => level.set_object_hidden(object, hidden),
+            // What the player does with it is unestablished, and it holds
+            // no weapon in hand (TODO(#1134)).
+            Event::HideWeapon { .. } => {}
             _ => {}
         }
     }

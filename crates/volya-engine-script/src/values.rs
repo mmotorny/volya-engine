@@ -786,12 +786,19 @@ fn vector_set_hp(s: &mut Vector, args: &[Arg], _: &[bool]) -> Option<Res> {
     let [Arg::Num(h), Arg::Num(p)] = *args else {
         return None;
     };
-    let (h, p) = (X::of(f(h)), X::of(f(p)));
-    let g = X::of(p.cos().store());
-    s.x = (h.sin() * g).neg().store();
-    s.y = p.sin().store();
-    s.z = (h.cos() * g).store();
+    *s = direction_of(f(h), f(p));
     Some(Res::This)
+}
+
+/// The direction of heading `h` and pitch `p`, as `setHP` makes it (3).
+pub(crate) fn direction_of(h: f32, p: f32) -> Vector {
+    let (h, p) = (X::of(h), X::of(p));
+    let g = X::of(p.cos().store());
+    Vector::new(
+        (h.sin() * g).neg().store(),
+        p.sin().store(),
+        (h.cos() * g).store(),
+    )
 }
 
 fn vector_similar(s: &mut Vector, args: &[Arg], _: &[bool]) -> Option<Res> {

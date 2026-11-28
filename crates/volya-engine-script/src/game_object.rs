@@ -24,8 +24,11 @@
 pub mod callbacks;
 mod engine_classes;
 pub mod members;
+pub mod monsters;
+pub mod movement;
 pub mod object_binder;
 pub mod physics;
+pub mod sight;
 pub mod vehicles;
 
 use std::cell::RefCell;
@@ -72,6 +75,10 @@ impl Kinds {
     /// Script API Y 2: the holder and explosive kinds.
     pub const HOLDER: Kinds = Kinds(1024);
     pub const EXPLOSIVE: Kinds = Kinds(2048);
+    /// Script API X 2: the monster, scripted and weapon kinds.
+    pub const MONSTER: Kinds = Kinds(4096);
+    pub const SCRIPTED: Kinds = Kinds(8192);
+    pub const WEAPON: Kinds = Kinds(16384);
 
     pub const fn with(self, other: Kinds) -> Kinds {
         Kinds(self.0 | other.0)
@@ -214,12 +221,16 @@ impl ObjectClass {
             ObjectClass::Player => return Kinds::OF_PLAYER,
             ObjectClass::Unnamed(_) => return Kinds::NONE,
         };
+        // Script API X 2: every creature class is scripted, the 17 but the
+        // stalker and the trader monsters, the 19 `CWeapon` classes weapons.
         if name == "CAI_Trader" {
-            Kinds::TRADER
+            Kinds::TRADER.with(Kinds::SCRIPTED)
         } else if name == "CAI_Stalker" {
-            Kinds::CREATURE.with(Kinds::STALKER)
+            Kinds::CREATURE.with(Kinds::STALKER).with(Kinds::SCRIPTED)
         } else if CREATURE_CLASSES.contains(&name) {
-            Kinds::CREATURE
+            Kinds::CREATURE.with(Kinds::MONSTER).with(Kinds::SCRIPTED)
+        } else if name.starts_with("CWeapon") && ITEM_CLASSES.contains(&name) {
+            Kinds::ITEM_KINDS.with(Kinds::WEAPON)
         } else if name == "CF1" || name == "CRGD5" {
             // Script API Y 2: the grenade classes are explosive.
             Kinds::ITEM_KINDS.with(Kinds::EXPLOSIVE)
@@ -233,11 +244,13 @@ impl ObjectClass {
             Kinds::PHYSICAL
         } else if name == physics::CAR {
             // Script API Y 2: the car is a holder; it and the helicopter
-            // are explosive, the lamps physical.
+            // are explosive, the lamps physical. Script API X 2: the car is
+            // scripted.
             Kinds::ENTITY
                 .with(Kinds::PHYSICAL)
                 .with(Kinds::HOLDER)
                 .with(Kinds::EXPLOSIVE)
+                .with(Kinds::SCRIPTED)
         } else if name == physics::HELICOPTER {
             Kinds::ENTITY.with(Kinds::PHYSICAL).with(Kinds::EXPLOSIVE)
         } else if name == physics::HANGING_LAMP {
@@ -511,6 +524,8 @@ pub struct GameObject {
     pub physics: Option<Physics>,
     pub anomaly: Option<Anomaly>,
     pub restrictor: Option<Restrictor>,
+    /// Script API X's parts: movement, sight, memory, monster state.
+    pub movement: movement::Parts,
     /// A `ce_script_zone`'s contacts (6.4).
     pub contacts: Option<Vec<u16>>,
     /// A bloodsucker's invisibility flag (6.5).
@@ -575,6 +590,7 @@ impl GameObject {
             physics: kinds.has(Kinds::PHYSICAL).then(Physics::default),
             anomaly: kinds.has(Kinds::ANOMALOUS_ZONE).then(Anomaly::default),
             restrictor: kinds.has(Kinds::RESTRICTOR).then(Restrictor::default),
+            movement: movement::Parts::of(class, kinds),
             contacts: class.is(SCRIPT_ZONE).then(Vec::new),
             invisible: class.is(BLOODSUCKER).then_some(false),
             scripted: is_scripted(class).then(ScriptControl::new),
@@ -645,6 +661,13 @@ pub enum Event {
     /// `explosive:explode()` (10.4).
     Explode {
         object: u16,
+    },
+    /// Script API X 10.4: the game event to the player that hides
+    /// (`hide`) or restores its weapon, with its slot argument.
+    HideWeapon {
+        player: u16,
+        hide: bool,
+        slot: i32,
     },
 }
 
@@ -897,11 +920,15 @@ impl Scripts {
         };
         ctx.physics.borrow_mut().system = Some(Rc::clone(&files.borrow().system));
         self.register_class(members::game_object_class(&ctx))?;
-        for class in engine_classes::classes(&ctx) {
+        for class in engine_classes::classes(&ctx)
+            .into_iter()
+            .chain(movement::classes(&ctx))
+        {
             self.register_class(class)?;
         }
         object_binder::install(self, &ctx)?;
         callbacks::register(self, &ctx)?;
+        sight::install(self, &ctx)?;
         self.game_object_state = Some(Registered {
             objects: ctx.objects,
             services: ctx.services,
@@ -1148,6 +1175,27 @@ impl Scripts {
                 message: format!("no object {id}"),
             });
         };
+        // Script API X: what the object reads from its section as it loads
+        // (our placement: as it spawns), a missing key fatal (11.3).
+        let system = self.physics_state()?.borrow().system.clone();
+        let loaded = (objects.borrow_mut().get_mut(id))
+            .map_or(Ok(()), |o| movement::load(o, system.as_deref()));
+        if let Err(description) = loaded {
+            let services = Rc::clone(&self.registered()?.services);
+            let message = report_fatal(
+                &services,
+                &self.fatal_flag(),
+                Fatal {
+                    function: "CInifile::r_float",
+                    file: file!(),
+                    line: line!(),
+                    expression: "fatal error",
+                    description: &description,
+                    arguments: &[],
+                },
+            );
+            return Err(fatal_error(message));
+        }
         let ini = if custom.is_empty() {
             None
         } else {

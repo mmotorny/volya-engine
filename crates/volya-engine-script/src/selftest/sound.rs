@@ -115,7 +115,7 @@ impl SoundFiles for OurFiles {
 
 const SYSTEM: &str = "[trade]\r\nbuy_price_factor_hostile = 1\r\nbuy_price_factor_friendly = 1\r\n\
 sell_price_factor_hostile = 1\r\nsell_price_factor_friendly = 1\r\n\
-[stalker]\r\nsound_threshold = 0.25\r\n";
+[stalker]\r\nsound_threshold = 0.25\r\n[dog]\r\npanic_threshold = 0.1\r\n";
 
 struct State {
     s: Scripts,

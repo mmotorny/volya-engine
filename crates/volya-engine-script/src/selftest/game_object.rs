@@ -111,7 +111,8 @@ pub(super) fn state() -> Result<State, String> {
         default_controls: Vec::new(),
         presets: Default::default(),
     });
-    let system = ltx::parse(b"[sys]\r\n").map_err(|e| e.to_string())?;
+    let system = ltx::parse(b"[sys]\r\n[bloodsucker_weak]\r\npanic_threshold = 0.1\r\n")
+        .map_err(|e| e.to_string())?;
     let services = Rc::new(RefCell::new(EngineServices::new(console, system.clone())));
     s.register_engine_services(Rc::clone(&services))
         .map_err(|e| e.message)?;

@@ -85,7 +85,7 @@ impl Call<'_> {
             .ok_or_else(|| format!("game object {id} no longer exists"))
     }
 
-    fn arg(&self, i: usize) -> &Value {
+    pub(super) fn arg(&self, i: usize) -> &Value {
         self.args.get(i).unwrap_or(&Value::Nil)
     }
 
@@ -97,14 +97,14 @@ impl Call<'_> {
         }
     }
 
-    fn text(&self, i: usize) -> Result<Vec<u8>, String> {
+    pub(super) fn text(&self, i: usize) -> Result<Vec<u8>, String> {
         match self.arg(i) {
             Value::String(s) => Ok(s.clone()),
             _ => Err(format!("{}: text expected", self.name)),
         }
     }
 
-    fn boolean(&self, i: usize) -> Result<bool, String> {
+    pub(super) fn boolean(&self, i: usize) -> Result<bool, String> {
         match self.arg(i) {
             Value::Boolean(b) => Ok(*b),
             _ => Err(format!("{}: boolean expected", self.name)),
@@ -119,7 +119,7 @@ impl Call<'_> {
     }
 
     /// The object id of handle argument `i`, or `None` for nil.
-    fn handle(&self, i: usize) -> Result<Option<u16>, String> {
+    pub(super) fn handle(&self, i: usize) -> Result<Option<u16>, String> {
         match self.arg(i) {
             Value::Nil => Ok(None),
             v => match self.o.get::<Handle>(v) {
@@ -129,7 +129,7 @@ impl Call<'_> {
         }
     }
 
-    fn new_vector(&self, v: [f32; 3]) -> Value {
+    pub(super) fn new_vector(&self, v: [f32; 3]) -> Value {
         self.o.new_object("vector", Vector::new(v[0], v[1], v[2]))
     }
 
@@ -144,15 +144,15 @@ impl Call<'_> {
     }
 }
 
-fn text_value(text: Option<&[u8]>) -> Value {
+pub(super) fn text_value(text: Option<&[u8]>) -> Value {
     text.map_or(Value::Nil, |t| Value::String(t.to_vec()))
 }
 
-fn number(n: impl Into<f64>) -> Vec<Value> {
+pub(super) fn number(n: impl Into<f64>) -> Vec<Value> {
     vec![Value::Number(n.into())]
 }
 
-fn boolean(b: bool) -> Vec<Value> {
+pub(super) fn boolean(b: bool) -> Vec<Value> {
     vec![Value::Boolean(b)]
 }
 
@@ -190,6 +190,7 @@ pub(crate) fn game_object_class(ctx: &Context) -> EngineClass {
     let class = zones(class, ctx);
     let class = trade(class, ctx);
     let class = super::physics::game_object_members(class, ctx);
+    let class = super::movement::game_object_members(class, ctx);
     CONSTANTS
         .into_iter()
         .fold(class, |class, (name, value)| class.constant(name, value))

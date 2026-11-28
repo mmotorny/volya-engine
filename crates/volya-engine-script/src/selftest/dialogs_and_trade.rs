@@ -74,7 +74,8 @@ const PORTIONS: &str = r#"<game_information_portions>
 </game_information_portions>"#;
 
 const SYSTEM: &str = "[trade]\r\nbuy_price_factor_hostile = 1\r\nbuy_price_factor_friendly = 2\r\n\
-sell_price_factor_hostile = 3\r\nsell_price_factor_friendly = 4\r\n";
+sell_price_factor_hostile = 3\r\nsell_price_factor_friendly = 4\r\n\
+[dog]\r\npanic_threshold = 0.1\r\n";
 
 const SCRIPT: &str = r##"
 calls = {}
