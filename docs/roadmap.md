@@ -12,6 +12,10 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 
 Work that needs a large system not yet built (physics, character motions and AI, dialogs and trade) waits until that system is implemented, rather than being stubbed piecemeal; its scope stays recorded in the specs and its issues are blocked by the system's.
 
+## Fidelity against the original
+
+Every system is built first; comparing the running game with the original (captures on Windows, frame, audio and walk comparisons) starts once they all exist (decided by the user): until then missing systems dominate every comparison, and a missing door or AI keeps a walk from getting anywhere. Until then no comparison runs against captures of the original; the capture tooling is kept working but not extended, and fidelity issues wait, blocked by the systems they need. Specs, unit tests and game-data tests still check each system as it's built.
+
 ## Multiplayer
 
 Multiplayer comes after everything else in this roadmap (decided by the user). Until then the title menu's multiplayer item is disabled, and multiplayer-only settings are only stored.
