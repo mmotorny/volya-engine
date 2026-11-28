@@ -12,8 +12,8 @@
 //! joints with the values a script call stores, kept in [`PhysicsState`]
 //! by object. What the engine's physics world holds (bodies, the library's
 //! joints) the members reach through [`PhysicsWorld`], which the engine
-//! implements (TODO(#1056): the app doesn't yet); a shell is **active** while the world has it (`shells`
-//! 2.1). Level queries (rays, patrol paths) go through [`LevelQueries`].
+//! implements (the app over its level's physics); a shell is **active**
+//! while the world has it (`shells` 2.1). Level queries (rays, patrol paths) go through [`LevelQueries`].
 //!
 //! Shells, elements and joints reach scripts as new values referring to the
 //! engine's objects by object id and index (1.3, believed references): a

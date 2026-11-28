@@ -11,21 +11,26 @@
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::characters::Characters;
 use crate::core::character::hits::{Hit, HitType};
+use crate::core::collision::CollisionWorld;
+use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config};
 use crate::core::simulation::ACTOR_ID;
 use crate::core::vfs::Vfs;
 use crate::core::zones;
 use crate::data::GameData;
 use crate::level::LevelScreen;
+use crate::level_physics::{LevelPhysics, ScriptWorld};
 use crate::loading_screen::{GAME_TYPE, Loading, Stage};
 use crate::objects::{LoadedModel, Names};
 use crate::script::classes::OverrideFailure;
 use crate::script::entry_points::{GameScripts, Startup};
 use crate::script::files::FileSystem;
 use crate::script::game_object::object_binder::update_delta;
+use crate::script::game_object::physics::{LevelQueries, PhysicsEvent, PhysicsShell};
 use crate::script::game_object::{
     EngineState, Event, GameObjects, ObjectClass, Physics, Restrictor, SpawnData, Visual,
 };
@@ -37,6 +42,7 @@ use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::model;
 use volya_engine_formats::object::{Object, ObjectRecord, Shape};
+use volya_engine_formats::patrol_path::PatrolPaths;
 
 /// The server options of a New Game from the menu, `start
 /// server(all/single/alife/new)` (level-loading.md section 2.1).
@@ -150,6 +156,18 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
         let destroyed = scripts.scripts().destroy_object(id);
         destroyed.map_err(|f| override_fatal(scripts, f))?;
     }
+    // Script API Y's world and level go with it: no physics world until
+    // the next level's (2.2).
+    {
+        let physics = scripts.scripts().physics_state()?;
+        let mut p = physics.borrow_mut();
+        p.world = None;
+        p.level = None;
+        p.shells.clear();
+        p.current_holder = None;
+        p.exploding.clear();
+        p.take_events();
+    }
     scripts.scripts().clear_level_calls()
 }
 
@@ -161,23 +179,29 @@ pub fn load_ended(scripts: &GameScripts) {
 
 /// An object of the level as the scripts' spawning takes it (script API M
 /// 3, 4, 5.4, 6.2): its record, its visual loaded with the level (with its
-/// owner's names) and its shell's physics part; whether it is a door under
-/// the door scheme (trader-door.md 1).
+/// owner's names), its shell's physics part and the shell as script API
+/// Y's members see it; whether it is a door under the door scheme
+/// (trader-door.md 1).
 pub struct ClientObject<'a> {
     pub id: u16,
     pub record: &'a ObjectRecord,
     pub model: Option<(&'a LoadedModel, &'a Names)>,
     pub physics: Option<Physics>,
+    pub shell: Option<Rc<PhysicsShell>>,
     pub door: bool,
 }
 
 /// What the level's spawning gives the scripts (3.3 step 11.4): the
-/// objects online at the start, byte 11 of each level vertex (M 4) and the
-/// game time.
+/// objects online at the start, byte 11 of each level vertex (M 4), the
+/// game time, and the level's physics world, collision and patrol paths
+/// (script API Y).
 pub struct ClientSpawning<'a> {
     pub objects: Vec<ClientObject<'a>>,
     pub vertex_lights: Vec<u8>,
     pub game_time: u64,
+    pub physics: Rc<RefCell<LevelPhysics>>,
+    pub collision: Arc<CollisionWorld>,
+    pub paths: PatrolPaths,
 }
 
 /// `st_client_spawning` (3.3 step 11.4), after the caption's own work
@@ -199,6 +223,19 @@ pub fn client_spawning(
         o.level_vertex_lights = spawning.vertex_lights;
         o.server_time = now as u32;
         o.game_time = spawning.game_time;
+    }
+    {
+        // Script API Y's engine side: the level's physics world and its
+        // queries, before the objects spawn. The player is in no vehicle
+        // (TODO(#1057): the vehicles' driving), so it keeps no holder.
+        let physics = scripts.scripts().physics_state()?;
+        let mut p = physics.borrow_mut();
+        p.world = Some(Box::new(ScriptWorld(spawning.physics)));
+        p.level = Some(Box::new(ScriptLevel {
+            collision: spawning.collision,
+            paths: spawning.paths,
+        }));
+        p.current_holder = None;
     }
     for object in spawning.objects {
         spawn_client_object(scripts, &data.system, &mut characters, object)?;
@@ -250,6 +287,10 @@ pub fn level_frame(
     if !queue.is_empty() {
         let released = scripts.scripts().release_destroyed(&queue);
         released.map_err(|f| override_fatal(scripts, f))?;
+        let physics = scripts.scripts().physics_state()?;
+        for id in &queue {
+            physics.borrow_mut().shells.remove(id);
+        }
     }
     for &id in &changes.online {
         if let Some(object) = level.client_object(id) {
@@ -270,6 +311,7 @@ pub fn level_frame(
     }
     scripts.scripts().update_level_calls()?;
     apply_events(scripts, level);
+    apply_physics_events(scripts, level)?;
     Ok(())
 }
 
@@ -331,6 +373,11 @@ pub fn spawn_client_object(
     let data = SpawnData::from_record(object.id, object.record, system).map_err(io_fatal)?;
     let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
+    // Its shell as script API Y sees it, before its binder asks for it.
+    if let Some(shell) = object.shell {
+        let physics = scripts.scripts().physics_state()?;
+        (physics.borrow_mut().shells).insert(object.id, PhysicsShell::clone(&shell));
+    }
     let created = scripts.scripts().create_client_object(data.class_id)?;
     let spawned = match created.object {
         CreatedObject::Script(client) => scripts.scripts().spawn(client, data).map(|_| ()),
@@ -381,7 +428,8 @@ fn binding_runs(system: &Config, object: &ClientObject) -> bool {
 /// forced placement and camera angles (4), hits on the player (5.6,
 /// player-hits.md) and the visibility switch (6.5). A death event's
 /// handling (5.2) is the death's (#248); a stalker's wounded flag has no
-/// behaviour to update, and an explosion is spec Y's (#1056).
+/// behaviour to update, and an explosion is spec Y's
+/// ([`apply_physics_events`]).
 pub fn apply_events(scripts: &mut GameScripts, level: &mut LevelScreen) {
     let events = scripts.objects().borrow_mut().take_events();
     for event in events {
@@ -415,6 +463,91 @@ pub fn apply_events(scripts: &mut GameScripts, level: &mut LevelScreen) {
             Event::Visibility { object, hidden } => level.set_object_hidden(object, hidden),
             _ => {}
         }
+    }
+}
+
+/// Applies what script API Y's members asked of the engine
+/// ([`PhysicsState::take_events`](crate::script::game_object::physics::PhysicsState::take_events)),
+/// in order: a lamp's switching (9, hanging-lamps.md 5.1). What the
+/// explode event does is unestablished (2.1, TODO(#1084)); the car's and
+/// helicopter's effects are the vehicles' (TODO(#1057)).
+pub fn apply_physics_events(
+    scripts: &mut GameScripts,
+    level: &mut LevelScreen,
+) -> Result<(), Error> {
+    let events = scripts
+        .scripts()
+        .physics_state()?
+        .borrow_mut()
+        .take_events();
+    for event in events {
+        if let PhysicsEvent::LampSwitched { object, on } = event {
+            level.switch_lamp(object, on);
+        }
+    }
+    Ok(())
+}
+
+/// The level's queries script API Y's members make, over its collision
+/// mesh (believed the level's static geometry) and the game's patrol paths
+/// (spec N).
+struct ScriptLevel {
+    collision: Arc<CollisionWorld>,
+    paths: PatrolPaths,
+}
+
+/// The explosive's ray down (2.1, believed below it): its length is
+/// unestablished, ours that of `GetRealAltitude` (8.2).
+const EXPLOSION_RAY: f32 = 1000.0;
+
+const DOWN: Vec3 = [0.0, -1.0, 0.0];
+
+impl ScriptLevel {
+    /// The nearest triangle the segment from `from` along the unit `dir`
+    /// for `length` meets, at its distance.
+    fn nearest(&self, from: Vec3, dir: Vec3, length: f32) -> Option<(f32, u32)> {
+        let c = &self.collision;
+        c.ray_nearest(from, dir, length, |t| {
+            geometry::ray_triangle_distance(from, dir, &c.corners(t))
+                .filter(|d| (0.0..=length).contains(d))
+        })
+    }
+}
+
+impl LevelQueries for ScriptLevel {
+    /// The normal of the level's triangle below `position`, turned to face
+    /// it (our choice).
+    fn explosion_normal(&self, position: Vec3) -> Option<Vec3> {
+        let (_, t) = self.nearest(position, DOWN, EXPLOSION_RAY)?;
+        let [a, b, c] = self.collision.corners(t);
+        let n = geometry::normalize(geometry::cross(geometry::sub(b, a), geometry::sub(c, a)))?;
+        Some(if geometry::dot(n, DOWN) > 0.0 {
+            n.map(|v| -v)
+        } else {
+            n
+        })
+    }
+
+    fn ray_blocked(&self, from: Vec3, to: Vec3) -> bool {
+        let d = geometry::sub(to, from);
+        let length = geometry::dot(d, d).sqrt();
+        match geometry::normalize(d) {
+            Some(dir) => self.collision.ray_hits(from, dir, length),
+            None => false,
+        }
+    }
+
+    fn distance_below(&self, from: Vec3, range: f32) -> Option<f32> {
+        self.nearest(from, DOWN, range).map(|(d, _)| d)
+    }
+
+    fn level_box_top(&self) -> f32 {
+        self.collision.bbox_max[1]
+    }
+
+    fn patrol_point(&self, path: &[u8], point: u32) -> Option<Vec3> {
+        let path = self.paths.get(&cp1251::decode(path))?;
+        path.points.get(point as usize).map(|p| p.position)
     }
 }
 
@@ -537,6 +670,77 @@ mod tests {
                 b.iter()
                     .all(|(n, o)| n[0] * p[0] + n[1] * p[1] + n[2] * p[2] + o <= radius)
             })
+    }
+
+    #[test]
+    fn the_level_queries_read_the_collision_mesh_and_patrol_paths() {
+        use crate::core::collision::{Cform, CformTriangle};
+        use volya_engine_formats::gamemtl::GameMaterial;
+        use volya_engine_formats::patrol_path::{PathPoint, PatrolPath};
+
+        // A floor at y = 0 of two triangles, one of them wound downward,
+        // and a wall at x = 5.
+        let cform = Cform {
+            bbox_min: [-10.0, -1.0, -10.0],
+            bbox_max: [10.0, 7.0, 10.0],
+            vertices: vec![
+                [-10.0, 0.0, -10.0],
+                [-10.0, 0.0, 10.0],
+                [10.0, 0.0, 10.0],
+                [10.0, 0.0, -10.0],
+                [5.0, 0.0, -10.0],
+                [5.0, 0.0, 10.0],
+                [5.0, 5.0, 0.0],
+            ],
+            triangles: [[0, 1, 2], [0, 3, 2], [4, 5, 6]]
+                .map(|vertices| CformTriangle {
+                    vertices,
+                    attributes: 0,
+                })
+                .to_vec(),
+        };
+        let collision = CollisionWorld::new(
+            cform,
+            vec![GameMaterial {
+                id: 0,
+                ..GameMaterial::default()
+            }],
+        )
+        .unwrap();
+        let point = |name: &str, position| PathPoint {
+            name: name.into(),
+            position,
+            flags: 0,
+            level_vertex: 0,
+            game_vertex: 0,
+        };
+        let paths = PatrolPaths::from_paths(vec![PatrolPath {
+            name: "heli_path".into(),
+            points: vec![point("p0", [1.0, 30.0, 2.0]), point("p1", [3.0, 30.0, 4.0])],
+            links: Vec::new(),
+        }]);
+        let level = ScriptLevel {
+            collision: Arc::new(collision),
+            paths,
+        };
+        let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-4);
+        assert!(near(level.distance_below([-5.0, 3.0, 5.0], 10.0), 3.0));
+        assert!(near(level.distance_below([0.0, 3.0, -5.0], 10.0), 3.0));
+        assert_eq!(level.distance_below([0.0, 3.0, 0.0], 2.0), None);
+        assert_eq!(level.distance_below([0.0, 3.0, 50.0], 10.0), None);
+        // Both floor triangles' normals face up, toward the ray's origin.
+        for at in [[-5.0, 3.0, 5.0], [0.0, 3.0, -5.0]] {
+            let n = level.explosion_normal(at).unwrap();
+            assert!((n[1] - 1.0).abs() < 1e-6, "{n:?}");
+        }
+        assert_eq!(level.explosion_normal([0.0, 3.0, 50.0]), None);
+        assert!(level.ray_blocked([0.0, 1.0, 0.0], [8.0, 1.0, 0.0]));
+        assert!(!level.ray_blocked([0.0, 1.0, 0.0], [4.0, 1.0, 0.0]));
+        assert!(!level.ray_blocked([0.0, 1.0, 0.0], [0.0, 1.0, 0.0]));
+        assert_eq!(level.level_box_top(), 7.0);
+        assert_eq!(level.patrol_point(b"heli_path", 1), Some([3.0, 30.0, 4.0]));
+        assert_eq!(level.patrol_point(b"heli_path", 2), None);
+        assert_eq!(level.patrol_point(b"other", 0), None);
     }
 
     #[test]

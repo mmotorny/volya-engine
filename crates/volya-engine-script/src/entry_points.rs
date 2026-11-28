@@ -156,8 +156,8 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, M, P, R; A, C and
-    /// E [`Scripts::new`] registers).
+    /// The engine interface of the specs implemented (B, F, M, P, R, Y; A,
+    /// C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -167,6 +167,7 @@ impl Startup {
             Rc::clone(&self.services),
             Rc::clone(&self.files),
         )?;
+        scripts.register_physics_vehicles_and_lamps()?;
         scripts.register_story(Rc::clone(&self.story))?;
         scripts.register_dialogs_and_trade(Rc::clone(&self.dialogs))
     }

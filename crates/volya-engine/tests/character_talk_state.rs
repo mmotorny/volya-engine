@@ -70,6 +70,7 @@ fn the_characters_talk_state_after_a_new_game() {
                 record: &o.record,
                 model: None,
                 physics: None,
+                shell: None,
                 door: false,
             };
             let state = engine_state(&mut characters, &object).unwrap();
@@ -88,6 +89,7 @@ fn the_characters_talk_state_after_a_new_game() {
             record: &trader.record,
             model: None,
             physics: None,
+            shell: None,
             door: false,
         };
         let state = engine_state(&mut characters, &object).unwrap();

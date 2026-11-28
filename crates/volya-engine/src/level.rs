@@ -19,7 +19,9 @@
 //! to the GPU on the first frame drawn, so the CPU never holds them whole.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -507,8 +509,9 @@ pub struct LevelScreen {
     /// (docs/behavior/trader-door.md).
     doors: LevelDoors,
     /// The physics world (physics-world.md), made under
-    /// `st_client_spawning`.
-    physics: LevelPhysics,
+    /// `st_client_spawning`, shared with script API Y's members
+    /// ([`crate::level_physics::ScriptWorld`]).
+    physics: Rc<RefCell<LevelPhysics>>,
 }
 
 /// What the engine interface reports.
@@ -1593,8 +1596,9 @@ pub struct NewGameLoad {
     doors: Option<LevelDoors>,
     /// The console's physics values as the load runs.
     physics_settings: PhysicsSettings,
-    /// The physics world, made under `st_client_spawning`.
-    physics: Option<LevelPhysics>,
+    /// The physics world, made under `st_client_spawning`, shared with
+    /// the scripts.
+    physics: Option<Rc<RefCell<LevelPhysics>>>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -1794,7 +1798,9 @@ impl NewGameLoad {
             .unwrap_or_default();
         let sim = earlier(self.simulation.as_ref(), "simulation")?;
         let spawned = earlier(self.spawned.as_ref(), "objects")?;
-        let physics = earlier(self.physics.as_ref(), "physics world")?;
+        let shared = earlier(self.physics.as_ref(), "physics world")?;
+        let physics = shared.borrow();
+        let collision = earlier(self.collision.as_ref(), "level.cform")?;
         let doors = earlier(self.doors.as_ref(), "objects")?;
         let models: HashMap<u16, usize> = (spawned.instances.iter())
             .map(|i| (i.id, i.model))
@@ -1807,6 +1813,7 @@ impl NewGameLoad {
                 record: &o.record,
                 model: (models.get(&o.id)).map(|&m| (&spawned.models[m], &spawned.names)),
                 physics: physics.script_physics(o.id),
+                shell: physics.script_shell(o.id),
                 door: doors.holds(o.id),
             })
             .collect();
@@ -1814,6 +1821,9 @@ impl NewGameLoad {
             objects,
             vertex_lights: lights,
             game_time,
+            physics: Rc::clone(shared),
+            collision: Arc::clone(collision),
+            paths: sim.paths.clone(),
         })
     }
 
@@ -2075,7 +2085,10 @@ impl NewGameLoad {
                 // receives the level's objects, its floor below the lowest
                 // y of the level's extent (the collision mesh's box).
                 let lowest_y = earlier(self.collision.as_deref(), "level.cform")?.bbox_min[1];
-                self.physics = Some(LevelPhysics::new(self.physics_settings, lowest_y));
+                self.physics = Some(Rc::new(RefCell::new(LevelPhysics::new(
+                    self.physics_settings,
+                    lowest_y,
+                ))));
                 // player-movement.md section 1: the actor's section is the
                 // one its spawn record names.
                 self.movement = Some(MovementConfig::read(&data.system, spawn::ACTOR_SECTION)?);
@@ -2181,13 +2194,9 @@ impl NewGameLoad {
                 // its objects; the doors with them (trader-door.md 2.4),
                 // the sounds their sections play the level's (2.5).
                 let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
-                earlier(self.physics.as_mut(), "physics world")?.load_shells(
-                    tree,
-                    data,
-                    &dir,
-                    &self.level_objects,
-                    materials,
-                )?;
+                earlier(self.physics.as_ref(), "physics world")?
+                    .borrow_mut()
+                    .load_shells(tree, data, &dir, &self.level_objects, materials)?;
                 let doors = LevelDoors::load(tree, data, &self.level_objects)?;
                 sound.doors = doors.sound_names();
                 self.doors = Some(doors);
@@ -2554,7 +2563,7 @@ impl NewGameLoad {
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
         let mut doors = earlier(self.doors, "objects")?;
-        let mut physics = earlier(self.physics, "physics world")?;
+        let physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -2601,9 +2610,12 @@ impl NewGameLoad {
             .position(|m| m.name.eq_ignore_ascii_case(&material_name))
             .ok_or_else(|| invalid(format!("no game material {material_name}")))?;
         player.body_mut().set_material(material as u32);
-        physics.set_level(collision.clone());
-        physics.add_player(player.config.body.mass)?;
-        doors.sync(&mut physics)?;
+        {
+            let mut physics = physics.borrow_mut();
+            physics.set_level(collision.clone());
+            physics.add_player(player.config.body.mass)?;
+            doors.sync(&mut physics)?;
+        }
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
         let environment = Environment::blend(a, b, t, &self.modifiers, eye, VIS_DISTANCE);
@@ -2807,7 +2819,7 @@ impl LevelScreen {
         self.clock.advance(elapsed);
         self.player.paused(now);
         // physics-world.md 2.2: `dt_f` is 0, so no step runs.
-        self.physics.frame(0.0, now);
+        self.physics.borrow_mut().frame(0.0, now);
         // The frame still draws its lights and glows; no time passes.
         self.lights_frame(0.0, details);
     }
@@ -2882,12 +2894,15 @@ impl LevelScreen {
         // movement's display frame time, each with the movement step it
         // meets (the player's body is one of its objects,
         // physics-contacts.md 5; our order, docs/architecture/simulation.md).
+        let mut physics = self.physics.borrow_mut();
         self.player
-            .frame_with(&self.collision, now, &request, &mut self.physics.steps(now));
-        self.physics.end_frame();
-        self.doors.physics_steps(self.player.steps(), &self.physics);
+            .frame_with(&self.collision, now, &request, &mut physics.steps(now));
+        physics.end_frame();
+        self.doors.physics_steps(self.player.steps(), &physics);
         // 2.3: the motors set reach the hinges (physics-shells.md 10).
-        if let Err(e) = self.doors.sync(&mut self.physics) {
+        let synced = self.doors.sync(&mut physics);
+        drop(physics);
+        if let Err(e) = synced {
             self.record_fatal(e.to_string());
         }
         let view = self.player.view();
@@ -3020,7 +3035,8 @@ impl LevelScreen {
         self.lights_frame(elapsed as f32 / 1000.0, true);
         // trader-door.md 5.1: the leaves where their shells now hold them,
         // for the next frame's pick.
-        if let Err(e) = self.doors.sync(&mut self.physics) {
+        let synced = self.doors.sync(&mut self.physics.borrow_mut());
+        if let Err(e) = synced {
             self.record_fatal(e.to_string());
         }
     }
@@ -3180,17 +3196,17 @@ impl LevelScreen {
     /// 2.4), with the display frame time as it stands.
     pub fn set_physics_settings(&mut self, settings: PhysicsSettings) {
         let dt_f = self.player.frame_time();
-        self.physics.follow(settings, dt_f);
+        self.physics.borrow_mut().follow(settings, dt_f);
     }
 
     /// The physics world (physics-world.md).
-    pub fn physics(&self) -> &LevelPhysics {
-        &self.physics
+    pub fn physics(&self) -> std::cell::Ref<'_, LevelPhysics> {
+        self.physics.borrow()
     }
 
     /// The physics timers since last taken (physics-world.md 6).
     pub fn take_physics_timers(&mut self) -> Timers {
-        self.physics.take_timers()
+        self.physics.borrow_mut().take_timers()
     }
 
     pub fn set_difficulty(&mut self, name: &str) {
@@ -4201,7 +4217,8 @@ impl LevelScreen {
     }
 
     /// Object `id` as the scripts' spawning takes it: its record, its
-    /// visual loaded with the level and its shell's physics part.
+    /// visual loaded with the level and its shell's physics part and
+    /// script view.
     pub fn client_object(&self, id: u16) -> Option<ClientObject<'_>> {
         let o = self.simulation.as_ref()?.object(id)?;
         let objects = &self.world.objects;
@@ -4211,9 +4228,17 @@ impl LevelScreen {
             id,
             record: &o.record,
             model,
-            physics: self.physics.script_physics(id),
+            physics: self.physics.borrow().script_physics(id),
+            shell: self.physics.borrow().script_shell(id),
             door: self.doors.holds(id),
         })
+    }
+
+    /// Lamp `id`'s switching on or off by its script member (script API Y
+    /// 9, hanging-lamps.md 5.1); nothing for an object that isn't a lamp
+    /// online.
+    pub fn switch_lamp(&mut self, id: u16, on: bool) {
+        self.lights.switch_lamp(id, on);
     }
 
     /// The player's forced placement (script API M 4,
@@ -4480,7 +4505,7 @@ impl LevelScreen {
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
             detectors: self.detectors.report(&self.zones),
             doors: self.doors.report(),
-            physics: self.physics.report(),
+            physics: self.physics.borrow().report(),
         }
     }
 
@@ -4715,7 +4740,10 @@ impl LevelScreen {
             script_items: None,
             difficulty: None,
             doors: LevelDoors::default(),
-            physics: LevelPhysics::new(PhysicsSettings::default(), 0.0),
+            physics: Rc::new(RefCell::new(LevelPhysics::new(
+                PhysicsSettings::default(),
+                0.0,
+            ))),
         }
     }
 }

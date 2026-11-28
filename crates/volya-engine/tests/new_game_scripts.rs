@@ -398,6 +398,83 @@ end
         "the door's use callback: the binder, the door, the user"
     );
 
+    // Script API Y (11): the door scheme's calls on the door's shell act on
+    // the level's door. Its limits come back as the hinge's, seen from its
+    // fixed frame element; the opening motor of its sections, (2100, −3),
+    // turns the leaf from the pose it was made in.
+    scripts
+        .scripts()
+        .exec(
+            "=door_scheme",
+            br#"
+function door_joint(d)
+  local ph_shell = d:get_physics_shell()
+  local joint = ph_shell:get_joint_by_bone_name("door")
+  local low, hi = 0, 0
+  low, hi = joint:get_limits(low, hi, 0)
+  return joint, low, hi
+end
+function door_scheme(d, force, velocity)
+  local joint, low, hi = door_joint(d)
+  joint:set_max_force_and_velocity(force, velocity, 0)
+  return low, hi, joint:get_axis_angle(90)
+end
+function door_angle(d)
+  return (door_joint(d)):get_axis_angle(90)
+end
+"#,
+        )
+        .unwrap();
+    let before = app
+        .level()
+        .unwrap()
+        .physics()
+        .hinge_angle(door, "door")
+        .unwrap();
+    let scripts = app.game_scripts().unwrap();
+    let handle = scripts.scripts().game_object(door).unwrap();
+    let opened = scripts
+        .scripts()
+        .call(
+            "door_scheme",
+            &[Value::Object(handle), 2100.0.into(), (-3.0).into()],
+        )
+        .unwrap();
+    let number = |v: &Value| match v {
+        Value::Number(n) => *n as f32,
+        other => panic!("not a number: {other:?}"),
+    };
+    let (low, high) = (number(&opened[0]), number(&opened[1]));
+    assert!(
+        low <= 0.0 && high > 1.0,
+        "the door's limits ({low}, {high})"
+    );
+    // The opening motor acts as the level runs.
+    for _ in 0..30 {
+        step(&mut app, &mut input);
+    }
+    let after = app
+        .level()
+        .unwrap()
+        .physics()
+        .hinge_angle(door, "door")
+        .unwrap();
+    let scripts = app.game_scripts().unwrap();
+    let angle = scripts
+        .scripts()
+        .call("door_angle", &[Value::Object(handle)])
+        .unwrap();
+    let angle = number(&angle[0]);
+    eprintln!(
+        "the door scheme: limits ({low}, {high}), the hinge from {before} to {after}, the \
+         script's angle {angle}"
+    );
+    assert!(
+        (after - before).abs() > 0.1,
+        "the scripts' motor turns the door: {before} -> {after}"
+    );
+    assert_eq!(angle, after, "the script reads the level's hinge");
+
     // The services as the load left them: the game type and app_ready().
     let scripts = app.game_scripts().unwrap();
     {

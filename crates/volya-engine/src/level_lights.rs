@@ -391,6 +391,18 @@ impl LevelLights {
         }
     }
 
+    /// Lamp `id` switched on or off (hanging-lamps.md 5.1); nothing for an
+    /// object that isn't a lamp online.
+    pub fn switch_lamp(&mut self, id: u16, on: bool) {
+        if let Some(lamp) = self.lamps.iter_mut().find(|l| l.id == id) {
+            if on {
+                lamp.switch_on(&mut self.lights, &mut self.glows);
+            } else {
+                lamp.switch_off(&mut self.lights, &mut self.glows);
+            }
+        }
+    }
+
     /// The object `id` went offline or was removed: a lamp's lights go.
     pub fn object_offline(&mut self, id: u16) {
         if let Some(i) = self.lamps.iter().position(|l| l.id == id) {

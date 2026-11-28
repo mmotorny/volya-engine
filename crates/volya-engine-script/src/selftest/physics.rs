@@ -69,7 +69,7 @@ pub fn check() -> Result<(), String> {
 }
 
 /// The engine's physics world over shells activated in it: what the
-/// engine's level physics gives the members (TODO(#1056)), for checks.
+/// engine's level physics gives the members, for checks.
 pub struct OdeWorld {
     pub world: World<OdeShell, OdeSolver>,
     pub shells: HashMap<u16, ObjectId>,

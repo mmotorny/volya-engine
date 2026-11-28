@@ -188,6 +188,7 @@ fn the_bunkers_shells_and_the_trader_door() {
         assert!((got - want).abs() < 1e-3, "{:?}", boxes[0].half_size);
     }
     let start = boxes[0].centre;
+    drop(physics);
 
     // The scheme's start wakes it (physics-resting.md 2); held closed after.
     let mut input = Input::new();

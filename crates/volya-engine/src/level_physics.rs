@@ -14,6 +14,7 @@
 //! (TODO(#949): those coming online later), built as the client creates
 //! its objects (`shells` 1, 7).
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
@@ -40,6 +41,7 @@ use crate::core::physics::{
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::objects::{LevelObject, locate_model};
+use crate::script::game_object::physics::{Body, PhysicsShell, PhysicsWorld};
 use volya_engine_formats::gamemtl::GameMaterial;
 use volya_engine_formats::ltx;
 use volya_engine_formats::model::{transform, transform_point};
@@ -133,6 +135,8 @@ struct LevelShell {
     boxes: Vec<(usize, Shape, u32)>,
     /// Its physics part as scripts read it (script API M 5.4, `mass`).
     physics: crate::script::game_object::Physics,
+    /// The shell as script API Y's members see it (`PhysicsShell::of_shell`).
+    script_shell: Rc<PhysicsShell>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -458,12 +462,14 @@ impl LevelPhysics {
                     .map(move |g| (i, g.shape, e.material))
             })
             .collect();
+        let step = self.world.params().step;
         self.shells.push(LevelShell {
             object,
             id,
             joints,
             boxes,
             physics: crate::script::game_object::Physics::of_shell(shell),
+            script_shell: Rc::new(PhysicsShell::of_shell(shell, Some(model), step)),
         });
         Ok(())
     }
@@ -518,6 +524,11 @@ impl LevelPhysics {
         self.shell(object).map(|s| s.physics)
     }
 
+    /// Object `object`'s shell as script API Y's members see it, as built.
+    pub fn script_shell(&self, object: u16) -> Option<Rc<PhysicsShell>> {
+        self.shell(object).map(|s| Rc::clone(&s.script_shell))
+    }
+
     /// The joint of object `object`'s shell made from bone `bone`.
     pub fn joint_of(&self, object: u16, bone: &str) -> Option<JointId> {
         self.joint(object, bone).map(|(_, j)| j)
@@ -562,6 +573,131 @@ impl LevelPhysics {
                 })
             })
             .collect()
+    }
+}
+
+/// The level's physics world as script API Y's members reach it
+/// (docs/architecture/scripts.md, Physics, vehicles and lamps): object
+/// `object`'s shell is the one the level built for it, its elements and
+/// joints by their build indices (`shells` 3).
+pub struct ScriptWorld(pub Rc<RefCell<LevelPhysics>>);
+
+impl LevelPhysics {
+    /// Object `object`'s shell in the world and the world's id of it.
+    fn ode_shell(&self, object: u16) -> Option<(&OdeShell, ObjectId)> {
+        let s = self.shell(object)?;
+        match self.world.get(s.id) {
+            Some(LevelBody::Shell(body)) => Some((body, s.id)),
+            _ => None,
+        }
+    }
+
+    /// Runs `f` on object `object`'s shell in the world; nothing without
+    /// one.
+    fn with_ode_shell(&mut self, object: u16, f: impl FnOnce(&mut OdeShell, &mut OdeSolver)) {
+        let Some(id) = self.shell(object).map(|s| s.id) else {
+            return;
+        };
+        if let (Some(LevelBody::Shell(s)), solver) = self.world.with_solver(id) {
+            f(s, solver);
+        }
+    }
+
+    /// The library joint made for joint `joint` (its build index) of object
+    /// `object`'s shell: only hinges are made (TODO(#750)).
+    fn made_joint(&self, object: u16, joint: usize) -> Option<JointId> {
+        let (s, _) = self.ode_shell(object)?;
+        s.joints().find(|(j, _)| *j == joint).map(|(_, id)| id)
+    }
+}
+
+impl PhysicsWorld for ScriptWorld {
+    fn step(&self) -> f32 {
+        self.0.borrow().world.params().step
+    }
+
+    fn has_shell(&self, object: u16) -> bool {
+        self.0.borrow().ode_shell(object).is_some()
+    }
+
+    fn body(&self, object: u16, element: usize) -> Option<Body> {
+        let p = self.0.borrow();
+        let (s, _) = p.ode_shell(object)?;
+        let solver = p.world.solver();
+        let b = s.body(solver, element)?;
+        Some(Body {
+            linear: b.linear,
+            angular: b.angular,
+            switched_on: b.enabled,
+            frame: s.frame(solver, element)?,
+        })
+    }
+
+    fn apply_force(&mut self, object: u16, force: Vec3) {
+        (self.0.borrow_mut()).with_ode_shell(object, |s, solver| s.apply_force(solver, force));
+    }
+
+    fn apply_element_force(&mut self, object: u16, element: usize, force: Vec3) {
+        (self.0.borrow_mut()).with_ode_shell(object, |s, solver| {
+            s.apply_element_force(solver, element, force)
+        });
+    }
+
+    fn wake(&mut self, object: u16) {
+        let mut p = self.0.borrow_mut();
+        p.with_ode_shell(object, |s, solver| s.wake(solver));
+        if let Some((_, id)) = p.ode_shell(object) {
+            // A shell the level built has geometry (`shells` 2.1: one
+            // without is not made), so activating it can't fail.
+            let _ = p.world.activate(id);
+        }
+    }
+
+    fn fix(&mut self, object: u16, element: usize) {
+        (self.0.borrow_mut()).with_ode_shell(object, |s, solver| s.fix_element(solver, element));
+    }
+
+    fn release_fixed(&mut self, object: u16, element: usize) {
+        (self.0.borrow_mut()).with_ode_shell(object, |s, solver| s.release_fixed(solver, element));
+    }
+
+    fn constant_force(&mut self, object: u16, direction: Vec3, size: f32, ms: u32) {
+        let mut p = self.0.borrow_mut();
+        if let Some((_, id)) = p.ode_shell(object) {
+            p.world.constant_force(id, direction, size, ms);
+        }
+    }
+
+    fn joint_made(&self, object: u16, joint: usize) -> bool {
+        self.0.borrow().made_joint(object, joint).is_some()
+    }
+
+    fn set_joint_param(&mut self, object: u16, joint: usize, parameter: i32, value: f32) {
+        let mut p = self.0.borrow_mut();
+        // Only hinges are made: their one axis's parameters.
+        if let Some(id) = p.made_joint(object, joint).filter(|_| parameter < 256) {
+            p.world.solver_mut().set_hinge_param(id, parameter, value);
+        }
+    }
+
+    fn joint_angle(&self, object: u16, joint: usize, _: i32) -> Option<f32> {
+        let p = self.0.borrow();
+        p.world.solver().hinge_angle(p.made_joint(object, joint)?)
+    }
+
+    fn joint_axis(&self, object: u16, joint: usize, _: i32) -> Option<Vec3> {
+        let p = self.0.borrow();
+        let id = p.made_joint(object, joint)?;
+        p.world.solver().hinge_anchor_axis(id).map(|(_, axis)| axis)
+    }
+
+    fn joint_anchor(&self, object: u16, joint: usize) -> Option<Vec3> {
+        let p = self.0.borrow();
+        let id = p.made_joint(object, joint)?;
+        p.world
+            .solver()
+            .hinge_anchor_axis(id)
+            .map(|(anchor, _)| anchor)
     }
 }
 
