@@ -1144,6 +1144,11 @@ mod sound {
     fn the_worked_examples() {
         section(checks::worked_examples);
     }
+
+    #[test]
+    fn the_sound_players_life() {
+        section(checks::sound_player);
+    }
 }
 
 /// The simulation registry's checks, one test per section of

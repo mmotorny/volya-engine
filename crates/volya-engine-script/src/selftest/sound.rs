@@ -21,7 +21,7 @@ use super::files::{FSGAME, Tree};
 use super::services::run;
 use crate::dialogs::{DialogsAndTrade, Event};
 use crate::files::FileSystem;
-use crate::game_object::{GameObjects, ObjectClass};
+use crate::game_object::{GameObjects, ObjectClass, Visual};
 use crate::loader::{Prefix, Scripts};
 use crate::services::EngineServices;
 use crate::sound::{FILE_TYPE, Request, SND_TYPES, ScriptSounds, SoundFile, SoundFiles};
@@ -54,6 +54,7 @@ pub const SECTIONS: &[(&str, Check)] = &[
     ("6.6 the trader's external sound", external_sound),
     ("7 hearing and remembered sounds", hearing),
     ("9 worked examples", worked_examples),
+    ("CH-25 the sound player's life", sound_player),
 ];
 
 /// Runs every check; `Err` lists the failures.
@@ -122,6 +123,7 @@ struct State {
     sounds: Rc<RefCell<ScriptSounds>>,
     dialogs: Rc<RefCell<DialogsAndTrade>>,
     services: Rc<RefCell<EngineServices>>,
+    objects: Rc<RefCell<GameObjects>>,
 }
 
 fn message(e: Error) -> String {
@@ -207,6 +209,7 @@ fn state() -> Result<State, String> {
         sounds,
         dialogs,
         services,
+        objects,
     })
 }
 
@@ -830,4 +833,115 @@ pub fn worked_examples() -> Result<(), String> {
         .filter(|r| matches!(r, Request::Discard(_)))
         .count();
     ensure(discarded == 1, || format!("the first stopped: {got:?}"))
+}
+
+/// The stalker's head bone at `head` in its model's space.
+fn set_head(t: &State, head: [f32; 3]) {
+    let mut bone = transform([0.0; 3], [0.0; 3]);
+    bone[3] = [head[0], head[1], head[2], 1.0];
+    if let Some(o) = t.objects.borrow_mut().get_mut(STALKER) {
+        o.visual = Some(Visual {
+            part: None,
+            centre: [0.0; 3],
+            bones: vec![(b"bip01_head".to_vec(), bone)],
+            root: 0,
+        });
+    }
+}
+
+/// The stalker's queued sounds.
+fn queued(t: &State) -> Vec<crate::sound::creatures::QueuedSound> {
+    let s = t.sounds.borrow();
+    (s.creatures.players.get(&STALKER)).map_or(Vec::new(), |p| p.queued.clone())
+}
+
+/// The stalker's sound player updated at `ms`; the requests it made.
+fn update_at(t: &mut State, ms: u64) -> Vec<Request> {
+    t.services.borrow_mut().device.frame(ms, 0.0, false);
+    t.s.update_sound_player(STALKER);
+    requests(t)
+}
+
+/// The stalker's two counts (T 6.4) are `all` and `playing`.
+fn counts(t: &mut State, what: &str, all: u32, playing: u32) -> Result<(), String> {
+    let body = format!(
+        "eq(stalker:active_sound_count(), {all}, \"{what}\")\n\
+         eq(stalker:active_sound_count(true), {playing}, \"{what}, playing\")"
+    );
+    check_lua(t, what, &body)
+}
+
+/// docs/behavior/creature-sounds.md (CH-25) 1.3, 2: a delayed sound
+/// started by the update at its bone, following it while sounding,
+/// counted through its pause without being played again, removed once
+/// finished; destruction stops what is queued.
+pub fn sound_player() -> Result<(), String> {
+    let mut t = state()?;
+    set_head(&t, [0.0, 1.5, 0.25]);
+    t.services.borrow_mut().device.frame(100, 0.0, false);
+    // Start delay 500 (the maximum exceeds the minimum by 1, so the draw
+    // is 0), pause 300: start 600, stop 600 + 900 + 300.
+    check_lua(
+        &mut t,
+        "CH-25 queued",
+        r#"
+        stalker:sound_prefix("talk\\")
+        stalker:add_sound("bye", 0, snd_type.talk, 2, 1, 7)
+        stalker:play_sound(7, 501, 500, 301, 300)
+        "#,
+    )?;
+    let q = queued(&t);
+    ensure(
+        q.len() == 1 && (q[0].start, q[0].stop, q[0].started) == (600, 1800, false),
+        || format!("queued {q:?}"),
+    )?;
+    let key = q[0].key;
+    requests(&t);
+    // Delayed.
+    let got = update_at(&mut t, 599);
+    ensure(got.is_empty(), || format!("delayed: {got:?}"))?;
+    counts(&mut t, "delayed", 0, 0)?;
+    // Due: played at the head, the object standing at (1, 2, 3).
+    let got = update_at(&mut t, 600);
+    let play = Request::Play {
+        key,
+        flags: PlayFlags::default(),
+        position: Some([1.0, 3.5, 3.25]),
+        owner: STALKER,
+    };
+    ensure(got == [play], || format!("started: {got:?}"))?;
+    counts(&mut t, "sounding", 1, 1)?;
+    // Sounding: the emitter follows the bone (asked only when it moved).
+    set_head(&t, [0.0, 1.0, 0.0]);
+    let got = update_at(&mut t, 700);
+    ensure(got == [Request::SetPosition(key, [1.0, 3.0, 3.0])], || {
+        format!("followed: {got:?}")
+    })?;
+    let got = update_at(&mut t, 716);
+    ensure(got.is_empty(), || format!("not moved: {got:?}"))?;
+    // The emitter ended: the pause, counted, not played again.
+    t.sounds.borrow_mut().frame_without_system();
+    let got = update_at(&mut t, 1500);
+    ensure(got.is_empty() && queued(&t).len() == 1, || {
+        format!("pause: {got:?}")
+    })?;
+    counts(&mut t, "pause", 1, 0)?;
+    // Finished: removed by the update.
+    let got = update_at(&mut t, 1800);
+    ensure(
+        got == [Request::Discard(key)] && queued(&t).is_empty(),
+        || format!("removed: {got:?}"),
+    )?;
+    counts(&mut t, "removed", 0, 0)?;
+    // Destruction stops what is queued and the player goes.
+    check_lua(&mut t, "CH-25 destroyed", "stalker:play_sound(7, 501, 500)")?;
+    let key = queued(&t).first().map(|q| q.key);
+    requests(&t);
+    t.s.destroy_object(STALKER).map_err(|e| e.error.message)?;
+    let got = requests(&t);
+    let gone = !t.sounds.borrow().creatures.players.contains_key(&STALKER);
+    ensure(
+        key.is_some_and(|k| got.contains(&Request::Discard(k))) && gone,
+        || format!("destroyed: {got:?}"),
+    )
 }

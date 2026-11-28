@@ -594,6 +594,9 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
         scripts.scripts().run_action_queue(id)?;
         let updated = scripts.scripts().scheduled_update(id, delta);
         updated.map_err(|f| override_fatal(scripts, f))?;
+        // Its sound player's update, right after the object's own
+        // (creature-sounds.md 2.1).
+        scripts.scripts().update_sound_player(id);
     }
     Ok(())
 }
@@ -819,14 +822,21 @@ pub fn spawn_client_object(
     data.server = Some(server.map_err(|f| override_fatal(scripts, f))?);
     let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
-    // The character's voice prefix (script API T 6.5).
+    // The character's voice prefix (script API T 6.5). Its sound player
+    // as the engine's reload of its section leaves it, cleared
+    // (creature-sounds.md 1.2 step 1); a stalker's sound prefix then its
+    // voice prefix, the empty text without one (step 2).
+    // TODO(#1216): the stalkers' and monsters' own collections (4, 5).
     let voice = characters.voice_prefix(&object.record).map_err(io_fatal)?;
     {
         let mut sounds = scripts.sounds().borrow_mut();
+        sounds.forget_creature(object.id);
+        let voice = cp1251::encode(&voice).unwrap_or_else(|| voice.into_bytes());
         let creatures = &mut sounds.creatures;
-        creatures.forget(object.id);
+        if object.record.kind() == Kind::Stalker {
+            creatures.players.entry(object.id).or_default().prefix = Some(voice.clone());
+        }
         if !voice.is_empty() {
-            let voice = cp1251::encode(&voice).unwrap_or_else(|| voice.into_bytes());
             creatures.voice_prefixes.insert(object.id, voice);
         }
     }

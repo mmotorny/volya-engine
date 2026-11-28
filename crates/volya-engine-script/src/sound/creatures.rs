@@ -5,8 +5,11 @@
 //! sections 6 and 7): each fighter's sound player (its collections, mask,
 //! queued sounds and sound prefix), its hearing thresholds, the
 //! characters' voice prefixes, the trader's external sound and the
-//! remembered sounds. What these do over time is the creatures' own
-//! (CH-25, CH-14, CH-15); here is what each call does at once.
+//! remembered sounds. What these do at once is T's; what the sound player
+//! does over time (starting, following the bone, ending) is the creatures'
+//! (docs/behavior/creature-sounds.md, CH-25: [`update`] and
+//! [`ScriptSounds::forget_creature`](super::ScriptSounds::forget_creature));
+//! hearing is CH-14's, the remembered sounds CH-15's.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -17,7 +20,7 @@ use crate::Value;
 use crate::classes::ObjectMaker;
 use crate::dialogs::Event as DialogEvent;
 use crate::game_object::members::Handle;
-use crate::game_object::{GameObject, Kinds, ObjectClass};
+use crate::game_object::{GameObject, GameObjects, Kinds, ObjectClass};
 use crate::values::to_f32;
 
 /// The bone a collection plays at when `add_sound` names none (6.2).
@@ -83,6 +86,9 @@ pub struct QueuedSound {
     /// Start and stop time, ms of `time_global()`.
     pub start: u32,
     pub stop: u32,
+    /// Whether the player has asked for it to be played (CH-25: once, even
+    /// when the request makes no emitter).
+    pub started: bool,
 }
 
 /// A fighter's sound player (6).
@@ -127,9 +133,10 @@ fn is_trader(o: &GameObject) -> bool {
     matches!(o.class, ObjectClass::Named("CAI_Trader"))
 }
 
-/// The world position of bone `bone` on `o`'s model; the object's own
-/// position when its visual lacks the bone (unestablished which bone, 6.3:
-/// our choice).
+/// The world position of bone `bone` on `o`'s model (CH-25 2.3: the
+/// object's world transform applied to the translation of the bone's
+/// current transform); the object's own position when its visual lacks the
+/// bone (unestablished, T 6.3 and CH-25 2.3: our choice).
 pub(crate) fn bone_position(o: &GameObject, bone: &[u8]) -> [f32; 3] {
     let local = (o.visual.as_ref())
         .and_then(|v| v.bone(bone).and_then(|b| v.bones.get(b)))
@@ -163,6 +170,40 @@ fn remove_queued(s: &mut super::ScriptSounds, id: u16, mask: u32, now: u32) {
     }
     for q in gone {
         s.discard(q.key);
+    }
+}
+
+/// Object `id`'s sound player updated at `now` (CH-25 2.2), right after
+/// the object's own per-frame update (2.1, believed to reproduce the job
+/// the original runs later in the same frame): first the removal (6.3 step
+/// 3 with the player's mask: the queued sounds sharing a bit with it and
+/// the finished ones, each stopped at once), then a pass over the rest in
+/// order: a sounding one's emitter moved to its bone's world position
+/// (2.3), one due and not started played there (flags 0, delay 0) and
+/// marked started, whether or not the play makes an emitter.
+pub(crate) fn update(s: &mut super::ScriptSounds, objects: &GameObjects, id: u16, now: u32) {
+    let Some(mask) = s.creatures.players.get(&id).map(|p| p.mask) else {
+        return;
+    };
+    remove_queued(s, id, mask, now);
+    let Some(o) = objects.get(id) else {
+        return;
+    };
+    let Some(player) = s.creatures.players.get_mut(&id) else {
+        return;
+    };
+    let mut queued = std::mem::take(&mut player.queued);
+    for q in &mut queued {
+        if s.emitter(q.key).is_some() {
+            s.follow(q.key, bone_position(o, &q.bone));
+        } else if now >= q.start && !q.started {
+            let position = bone_position(o, &q.bone);
+            s.play(q.key, super::play_flags(0, 0.0), Some(position), id);
+            q.started = true;
+        }
+    }
+    if let Some(player) = s.creatures.players.get_mut(&id) {
+        player.queued = queued;
     }
 }
 
@@ -321,11 +362,10 @@ pub(crate) fn member(ctx: &Context, maker: &ObjectMaker, op: &str, args: &[Value
                     key,
                     start,
                     stop,
+                    started: d1 == 0,
                 });
             }
-            // TODO(#975): a queued sound whose start time comes later is
-            // started, follows its bone and ends by the creature's own
-            // sound update (CH-25).
+            // A later start time is the player's update's ([`update`]).
             if d1 == 0 {
                 let objects = ctx.objects.borrow();
                 let position = objects

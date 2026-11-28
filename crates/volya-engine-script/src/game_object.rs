@@ -1216,7 +1216,9 @@ impl Scripts {
 
     /// Destroys engine object `id` (it goes offline or is removed, 2.1):
     /// its attached binder gets `net_destroy()` and is deleted (spec L
-    /// 5.6), then its handle and its `spawn_ini()` object are released, so
+    /// 5.6), its queued sounds are stopped and its sound player goes
+    /// (CH-25 1.3), then its handle and its `spawn_ini()` object are
+    /// released, so
     /// members called on a handle scripts still hold fail (our choice: the
     /// spec has it unestablished), and its `CGameObject` no longer stands
     /// for it. `false` if there is no such object.
@@ -1231,6 +1233,7 @@ impl Scripts {
         };
         self.forget_callbacks(id, object.kinds)?;
         self.forget_inventory_object(id);
+        self.forget_sound_player(id);
         if let Some(handle) = object.handle {
             objects.borrow_mut().handles.remove(&handle);
             self.lua_mut().release_engine_object(handle)?;

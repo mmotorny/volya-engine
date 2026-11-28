@@ -406,6 +406,33 @@ impl ScriptSounds {
         self.requests.push(request);
     }
 
+    /// The emitter of `key` moved to `position` (S2 3.3), nothing else of
+    /// it changed: a queued sound following its bone (CH-25 2.2). A
+    /// position it already has asks nothing of the sound system.
+    fn follow(&mut self, key: SoundKey, position: [f32; 3]) {
+        if let Some(e) = self.emitter_mut(key)
+            && e.position != position
+        {
+            e.position = position;
+            self.requests.push(Request::SetPosition(key, position));
+        }
+    }
+
+    /// Creature `id`'s sound player cleared, as when it is destroyed or
+    /// spawns again (CH-25 1.2 step 1, 1.3): every queued sound removed and
+    /// stopped at once whatever the mask (its sound discarded), its
+    /// collections gone, the mask 0, the prefix none; its hearing and
+    /// voice prefix go too.
+    pub fn forget_creature(&mut self, id: u16) {
+        let queued = (self.creatures.players.get_mut(&id))
+            .map(|p| std::mem::take(&mut p.queued))
+            .unwrap_or_default();
+        for q in queued {
+            self.discard(q.key);
+        }
+        self.creatures.forget(id);
+    }
+
     /// The emitter stopped at once (2.5).
     pub fn stop(&mut self, key: SoundKey) {
         if let Some(sound) = self.sounds.get_mut(&key)
@@ -1231,6 +1258,25 @@ impl Scripts {
         register(self, &ctx)?;
         self.sound_state = Some(Registered { ctx });
         Ok(())
+    }
+
+    /// Object `id`'s sound player updated (CH-25 2.1, 2.2,
+    /// [`creatures::update`]) at the device's now; the engine calls it
+    /// right after the object's own per-frame update.
+    pub fn update_sound_player(&self, id: u16) {
+        if let Some(r) = &self.sound_state {
+            let now = r.ctx.now();
+            let objects = r.ctx.objects.borrow();
+            creatures::update(&mut r.ctx.state.borrow_mut(), &objects, id, now);
+        }
+    }
+
+    /// Object `id` destroyed (CH-25 1.3): its queued sounds stopped and its
+    /// sound player gone ([`ScriptSounds::forget_creature`]).
+    pub(crate) fn forget_sound_player(&self, id: u16) {
+        if let Some(r) = &self.sound_state {
+            r.ctx.state.borrow_mut().forget_creature(id);
+        }
     }
 
     /// The sounds the scripts made, once registered.
