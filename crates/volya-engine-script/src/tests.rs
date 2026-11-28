@@ -1281,3 +1281,86 @@ mod simulation_objects {
         section(checks::spawn_data);
     }
 }
+
+/// The scripted actions' checks, one test per section of
+/// docs/behavior/script-api-scripted-actions.md (all of them run in
+/// [`selftest`] too, on every target).
+mod scripted_actions {
+    use crate::selftest::scripted_actions as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn scripted_objects() {
+        section(checks::scripted_objects);
+    }
+
+    #[test]
+    fn script_control() {
+        section(checks::script_control);
+    }
+
+    #[test]
+    fn the_queue() {
+        section(checks::queue);
+    }
+
+    #[test]
+    fn running_the_queue() {
+        section(checks::running);
+    }
+
+    #[test]
+    fn entity_action() {
+        section(checks::entity_action);
+    }
+
+    #[test]
+    fn completeness() {
+        section(checks::completeness);
+    }
+
+    #[test]
+    fn move_parts() {
+        section(checks::movement);
+    }
+
+    #[test]
+    fn look_parts() {
+        section(checks::look);
+    }
+
+    #[test]
+    fn anim_parts() {
+        section(checks::anim);
+    }
+
+    #[test]
+    fn sound_parts() {
+        section(checks::sound);
+    }
+
+    #[test]
+    fn particle_parts() {
+        section(checks::particle);
+    }
+
+    #[test]
+    fn object_parts() {
+        section(checks::object);
+    }
+
+    #[test]
+    fn act_parts() {
+        section(checks::act);
+    }
+}

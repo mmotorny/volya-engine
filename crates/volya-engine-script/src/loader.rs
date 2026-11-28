@@ -247,6 +247,8 @@ pub struct Scripts {
     /// The simulation objects, once registered
     /// ([`crate::simulation_objects`]).
     pub(crate) simulation_objects_state: Option<crate::simulation_objects::Registered>,
+    /// The scripted actions, once registered ([`crate::scripted_actions`]).
+    pub(crate) scripted_actions_state: Option<crate::scripted_actions::Registered>,
 }
 
 impl Scripts {
@@ -321,6 +323,7 @@ impl Scripts {
             sound_state: None,
             simulation_state: None,
             simulation_objects_state: None,
+            scripted_actions_state: None,
         })
     }
 

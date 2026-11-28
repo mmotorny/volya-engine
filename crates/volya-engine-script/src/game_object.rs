@@ -46,6 +46,7 @@ use crate::dialogs::trade::TradeParameters;
 use crate::files::{FileSystem, IniFile, config_from_text};
 use crate::loader::Scripts;
 use crate::object_factory::{ObjectFactory, class_id};
+use crate::scripted_actions::{ScriptControl, is_scripted};
 use crate::services::{EngineServices, Fatal, report_fatal};
 use crate::{Error, ErrorKind, Value};
 
@@ -514,6 +515,8 @@ pub struct GameObject {
     pub contacts: Option<Vec<u16>>,
     /// A bloodsucker's invisibility flag (6.5).
     pub invisible: Option<bool>,
+    /// A scripted object's script control (script API V 2.1).
+    pub scripted: Option<ScriptControl>,
     /// Its handle, made at spawn ([`Scripts::spawn`]).
     handle: Option<EnginePart>,
     /// `spawn_ini()`'s configuration object, made at spawn.
@@ -574,6 +577,7 @@ impl GameObject {
             restrictor: kinds.has(Kinds::RESTRICTOR).then(Restrictor::default),
             contacts: class.is(SCRIPT_ZONE).then(Vec::new),
             invisible: class.is(BLOODSUCKER).then_some(false),
+            scripted: is_scripted(class).then(ScriptControl::new),
             handle: None,
             spawn_ini: None,
             client: None,

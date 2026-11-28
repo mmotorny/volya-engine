@@ -130,7 +130,7 @@ fn is_trader(o: &GameObject) -> bool {
 /// The world position of bone `bone` on `o`'s model; the object's own
 /// position when its visual lacks the bone (unestablished which bone, 6.3:
 /// our choice).
-fn bone_position(o: &GameObject, bone: &[u8]) -> [f32; 3] {
+pub(crate) fn bone_position(o: &GameObject, bone: &[u8]) -> [f32; 3] {
     let local = (o.visual.as_ref())
         .and_then(|v| v.bone(bone).and_then(|b| v.bones.get(b)))
         .map(|(_, t)| [t[3][0], t[3][1], t[3][2]]);

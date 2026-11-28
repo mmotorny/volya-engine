@@ -5,7 +5,8 @@
 //! object factory, the engine services, the value types, configuration
 //! and files, game objects, object binders, object event callbacks, the
 //! story state, the engine's entry points, the dialog files' functions, the
-//! dialogs and trade, time, the sound and the simulation registry,
+//! dialogs and trade, time, the sound, the simulation registry and the
+//! scripted actions,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -24,6 +25,7 @@ pub mod object_binder;
 pub mod object_callbacks;
 pub mod object_factory;
 pub mod physics;
+pub mod scripted_actions;
 pub mod services;
 pub mod simulation;
 pub mod simulation_objects;
@@ -97,6 +99,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = simulation_objects::check() {
+        fail(e);
+    }
+    if let Err(e) = scripted_actions::check() {
         fail(e);
     }
     if failures.is_empty() {

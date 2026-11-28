@@ -420,11 +420,23 @@ pub(super) fn raise_within(
     event: &ObjectEvent,
 ) -> Result<(), String> {
     ctx.stopped()?;
-    let Some(args) = event_args(&ctx.objects.borrow(), receiver, event) else {
+    raise_inside(&ctx.objects, &ctx.services, &ctx.fatal, receiver, event)
+}
+
+/// Raises `event` on `receiver` from inside a member over the game
+/// objects `objects` (not borrowed), as [`raise_within`].
+pub(crate) fn raise_inside(
+    objects: &RefCell<GameObjects>,
+    services: &RefCell<EngineServices>,
+    fatal: &RefCell<Option<String>>,
+    receiver: u16,
+    event: &ObjectEvent,
+) -> Result<(), String> {
+    let Some(args) = event_args(&objects.borrow(), receiver, event) else {
         return Ok(());
     };
     let results = call_kept_within(ENTRY, &args).map_err(|e| e.message)?;
-    outcome(&ctx.services, &ctx.fatal, results)
+    outcome(services, fatal, results)
         .map(drop)
         .map_err(|e| e.message)
 }

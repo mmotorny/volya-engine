@@ -164,7 +164,7 @@ impl Startup {
     }
 
     /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y,
-    /// K, J; A, C and E [`Scripts::new`] registers).
+    /// K, J, V; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -180,7 +180,8 @@ impl Startup {
         scripts.register_time(Rc::clone(&self.services), Rc::clone(&self.times))?;
         scripts.register_sound(Rc::clone(&self.sounds), Rc::clone(&self.trees))?;
         scripts.register_simulation(Rc::clone(&self.simulation))?;
-        scripts.register_simulation_objects()
+        scripts.register_simulation_objects()?;
+        scripts.register_scripted_actions()
     }
 }
 

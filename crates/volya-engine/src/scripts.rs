@@ -432,6 +432,10 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
         if gone {
             continue;
         }
+        // The engine's own part first: an object under script control runs
+        // its action queue (script API V 2.4, believed its scheduled
+        // update).
+        scripts.scripts().run_action_queue(id)?;
         let updated = scripts.scripts().scheduled_update(id, delta);
         updated.map_err(|f| override_fatal(scripts, f))?;
     }

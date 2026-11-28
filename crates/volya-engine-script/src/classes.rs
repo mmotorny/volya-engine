@@ -46,8 +46,8 @@ type Part = Rc<RefCell<Box<dyn Any>>>;
 type PartFn = Rc<dyn Fn(&mut dyn Any, &Objects, &[Value]) -> Result<Vec<Value>, String>>;
 type GetFn = Rc<dyn Fn(&dyn Any, &Objects) -> Result<Value, String>>;
 type SetFn = Rc<dyn Fn(&mut dyn Any, &Objects, &Value) -> Result<(), String>>;
-type ScoreFn = Rc<dyn Fn(&[Value]) -> Option<u32>>;
-type MakeFn = Rc<dyn Fn(EnginePart, &[Value]) -> Result<Box<dyn Any>, String>>;
+type ScoreFn = Rc<dyn Fn(&ObjectMaker, &[Value]) -> Option<u32>>;
+type MakeFn = Rc<dyn Fn(EnginePart, &ObjectMaker, &[Value]) -> Result<Box<dyn Any>, String>>;
 
 struct Constructor {
     params: usize,
@@ -218,6 +218,18 @@ impl ObjectMaker {
         part.downcast_ref::<T>().cloned()
     }
 
+    /// Whether object argument `value`'s part is a `T` (a type that isn't
+    /// `Clone` too).
+    pub fn is<T: Any>(&self, value: &Value) -> bool {
+        let Value::Object(EnginePart(id)) = value else {
+            return false;
+        };
+        let Ok(part) = self.state.part(*id) else {
+            return false;
+        };
+        part.try_borrow().is_ok_and(|p| (**p).is::<T>())
+    }
+
     /// A new object of engine class `class` holding `part`, owned by the
     /// script side and collected like a constructed one
     /// ([`Objects::new_object`]).
@@ -263,8 +275,25 @@ impl EngineClass {
     ) -> Self {
         self.constructors.push(Constructor {
             params,
+            score: Rc::new(move |_, args| score(args)),
+            make: Rc::new(move |part, _, args| Ok(Box::new(make(part, args)?))),
+        });
+        self
+    }
+
+    /// A constructor reading the engine parts of object arguments
+    /// ([`ObjectMaker::get`]) for its score and its part, as
+    /// [`EngineClass::constructor`].
+    pub fn constructor_with_objects<T: Any>(
+        mut self,
+        params: usize,
+        score: impl Fn(&ObjectMaker, &[Value]) -> Option<u32> + 'static,
+        make: impl Fn(EnginePart, &ObjectMaker, &[Value]) -> Result<T, String> + 'static,
+    ) -> Self {
+        self.constructors.push(Constructor {
+            params,
             score: Rc::new(score),
-            make: Rc::new(move |part, args| Ok(Box::new(make(part, args)?))),
+            make: Rc::new(move |part, objects, args| Ok(Box::new(make(part, objects, args)?))),
         });
         self
     }
@@ -442,14 +471,18 @@ fn object_value(part: Option<EnginePart>) -> Value {
 /// The constructor `super` uses for `args` (3.1): the only one, or the
 /// best-scoring of those taking as many arguments; `None` when none
 /// matches.
-fn choose<'a>(constructors: &'a [Constructor], args: &[Value]) -> Option<&'a Constructor> {
+fn choose<'a>(
+    constructors: &'a [Constructor],
+    objects: &ObjectMaker,
+    args: &[Value],
+) -> Option<&'a Constructor> {
     if let [only] = constructors {
         return Some(only);
     }
     constructors
         .iter()
         .filter(|c| c.params == args.len())
-        .filter_map(|c| (c.score)(args).map(|score| (score, c)))
+        .filter_map(|c| (c.score)(objects, args).map(|score| (score, c)))
         .min_by_key(|(score, _)| *score)
         .map(|(_, c)| c)
 }
@@ -609,12 +642,15 @@ impl Lua {
         let made_by = Rc::clone(&class_name);
         let all = Rc::clone(&constructors);
         let construct = self.keep(move |args| {
-            let Some(constructor) = choose(&all, args) else {
+            let objects = ObjectMaker {
+                state: Rc::clone(&state),
+            };
+            let Some(constructor) = choose(&all, &objects, args) else {
                 // No error when none matches (3.1).
                 return Ok(Vec::new());
             };
             let id = state.new_id();
-            let part = (constructor.make)(EnginePart(id), args)?;
+            let part = (constructor.make)(EnginePart(id), &objects, args)?;
             state
                 .parts
                 .borrow_mut()
@@ -625,17 +661,20 @@ impl Lua {
             let state = Rc::clone(&self.classes);
             let made_by = Rc::clone(&class_name);
             self.keep(move |args| {
+                let objects = ObjectMaker {
+                    state: Rc::clone(&state),
+                };
                 let constructor = constructors
                     .iter()
                     .filter(|c| c.params == args.len())
-                    .filter_map(|c| (c.score)(args).map(|score| (score, c)))
+                    .filter_map(|c| (c.score)(&objects, args).map(|score| (score, c)))
                     .min_by_key(|(score, _)| *score)
                     .map(|(_, c)| c)
                     .ok_or_else(|| {
                         format!("no constructor of '{made_by}' matches the arguments")
                     })?;
                 let id = state.new_id();
-                let part = (constructor.make)(EnginePart(id), args)?;
+                let part = (constructor.make)(EnginePart(id), &objects, args)?;
                 state
                     .parts
                     .borrow_mut()
