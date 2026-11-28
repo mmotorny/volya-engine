@@ -51,6 +51,12 @@ struct Draw {
 const DRAW_TEXELS: u32 = 9u;
 const DRAWS_PER_ROW: u32 = 64u;
 
+// The objects' render matrices (model_point).
+@group(0) @binding(2) var bone_texels: texture_2d<f32>;
+
+const BONE_TEXELS: u32 = 3u;
+const BONES_PER_ROW: u32 = 64u;
+
 fn record(i: u32) -> Draw {
     let x = i32((i % DRAWS_PER_ROW) * DRAW_TEXELS);
     let y = i32(i / DRAWS_PER_ROW);
@@ -422,8 +428,9 @@ fn fs_lplanes(in: Out) -> @location(0) vec4<f32> {
 }
 
 // The objects' models (docs/behavior/model-shading.md 1, 2, 4 – 7),
-// element 1 for every object. A vertex arrives quantized and is
-// drawn at its stored position, transformed by the object's X (`transform`);
+// element 1 for every object. A vertex arrives quantized and is drawn at
+// its stored position (at rest) or skinned (posed), transformed by the
+// object's X (`transform`);
 // `c_scale` holds L_dynamic_props, `sphere` the model's world sphere, so
 // very small objects are skipped by the static meshes' size test
 // (model-shading.md 3, object-detail-level.md 3).
@@ -441,13 +448,44 @@ struct ModelPoint {
     uv: vec2<f32>,
 }
 
-// q · 12 / 32768, 2c/255 − 1 and q · 16 / 32768 (section 4.7); the normal
-// turned by X's rotation and normalised (section 5.5).
+// The render matrix K[i] (model-shading.md 2) as its columns 0 – 2,
+// BONE_TEXELS texels each, BONES_PER_ROW to a row (world.rs).
+fn bone_columns(i: u32) -> array<vec4<f32>, 3> {
+    let x = i32((i % BONES_PER_ROW) * BONE_TEXELS);
+    let y = i32(i / BONES_PER_ROW);
+    return array<vec4<f32>, 3>(
+        textureLoad(bone_texels, vec2(x, y), 0),
+        textureLoad(bone_texels, vec2(x + 1, y), 0),
+        textureLoad(bone_texels, vec2(x + 2, y), 0),
+    );
+}
+
+// q · 12 / 32768, 2c/255 − 1 and q · 16 / 32768 (section 4.7); a posed
+// object's vertex skinned (model-shading.md 2: flags.w its first render
+// matrix + 1, the vertex's bones b₀ + 64 b₁ in position.w and the weight
+// of b₁ in normal.w): by K[b₀] alone with element 1, by (1 − w) K[b₀] +
+// w K[b₁] with element 0, a projected-light receiver's (params.x > 0);
+// the normal turned by X's rotation and normalised (section 5.5).
 fn model_point(d: Draw, v: ModelVertex) -> ModelPoint {
     var m: ModelPoint;
-    let local = vec3<f32>(v.position.xyz) * (12.0 / 32768.0);
+    var local = vec3<f32>(v.position.xyz) * (12.0 / 32768.0);
+    var n = 2.0 * v.normal.xyz - 1.0;
+    if d.flags.w > 0.5 {
+        let first = u32(d.flags.w - 0.5);
+        let links = u32(v.position.w);
+        let k0 = bone_columns(first + links % 64u);
+        let k1 = bone_columns(first + links / 64u);
+        let w = select(0.0, v.normal.w, d.params.x > 0.5);
+        let c0 = mix(k0[0], k1[0], w);
+        let c1 = mix(k0[1], k1[1], w);
+        let c2 = mix(k0[2], k1[2], w);
+        let p = vec4(local, 1.0);
+        local = vec3(dot(p, c0), dot(p, c1), dot(p, c2));
+        let q = vec4(n, 0.0);
+        n = vec3(dot(q, c0), dot(q, c1), dot(q, c2));
+    }
     m.p = (d.transform * vec4(local, 1.0)).xyz;
-    m.n = normalize((d.transform * vec4(2.0 * v.normal.xyz - 1.0, 0.0)).xyz);
+    m.n = normalize((d.transform * vec4(n, 0.0)).xyz);
     m.uv = vec2<f32>(v.uv) * (16.0 / 32768.0);
     return m;
 }
@@ -669,7 +707,8 @@ fn vs_light_tree(v: TreeVertex) -> LightOut {
     return light_vertex(d, p, n, m.xy / 2048.0);
 }
 
-// model_def_*: the model at rest by the object's matrix.
+// model_def_*: the model as its camera passes draw it, by the object's
+// matrix.
 @vertex
 fn vs_light_model(v: ModelVertex) -> LightOut {
     let d = record(v.draw);

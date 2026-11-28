@@ -22,7 +22,87 @@ pub const CHECKS: &[(&str, Run)] = &[
     ("walking draws an offline stalker", |c| {
         Box::pin(walking_draws_an_offline_stalker(c))
     }),
+    ("a played motion poses the trader", |c| {
+        Box::pin(a_played_motion_poses_the_trader(c))
+    }),
 ];
+
+/// motion-playback.md: the trader `escape_trader` playing `idle_2`
+/// (started with mixing, then 10 tracks updates of 20 ms) is drawn
+/// skinned by his bones' render matrices (model-shading.md 2), no longer
+/// in his bind pose: the start view against the same view of a level where
+/// he plays nothing, both updated alike, differs within his screen square
+/// only. Frame `trader-posed`.
+pub async fn a_played_motion_poses_the_trader(cx: &Context<'_>) -> Outcome {
+    let tree = cx.tree;
+    let data = GameData::read(tree, None, SIZE).map_err(|e| format!("game data: {e}"))?;
+    let mut frames = Vec::new();
+    let mut square = None;
+    let mut note = String::new();
+    for play in [false, true] {
+        let mut screen = LevelScreen::load(tree, &data, 0).map_err(|e| format!("level: {e}"))?;
+        if play {
+            let played = (screen.play_cycle(tree, &data, "escape_trader", "idle_2"))
+                .map_err(|e| format!("idle_2: {e}"))?;
+            ensure!(played, "the trader's idle_2");
+        }
+        for k in 1..=10 {
+            screen.set_global_clock(20 * k);
+            screen.update(20 * k, &Default::default());
+        }
+        let mut gpu: Renderer = cx.renderer();
+        let mut presenter = Presenter::new();
+        let list = presenter.draw_list(&mut gpu, tree, &screen.scene(SIZE), 0);
+        frames.push(capture(&mut gpu, &list, SIZE.width, SIZE.height).await?);
+        let errors = presenter.take_errors();
+        ensure!(errors.is_empty(), "{errors:?}");
+        if play {
+            let poses = screen.motions().poses();
+            note = format!("{} render matrices", poses.matrices.len());
+            let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);
+            let eye = screen.state().eye;
+            let focal = projection[1][1] * SIZE.height as f32 / 2.0;
+            let i = (screen.world().objects.instances.iter())
+                .find(|i| i.name == "escape_trader")
+                .ok_or("escape_trader")?;
+            let c = [i.sphere[0], i.sphere[1], i.sphere[2]];
+            let d = (0..3).map(|a| (c[a] - eye[a]).powi(2)).sum::<f32>().sqrt();
+            let (x, y) = project(&view, &projection, c).ok_or("the trader behind the camera")?;
+            let r = focal * i.sphere[3] / (d - i.sphere[3]).max(0.1) + 1.0;
+            square = Some((x - r, y - r, x + r, y + r));
+        }
+    }
+    let (rest, posed) = (&frames[0], &frames[1]);
+    cx.dump("trader-posed", SIZE.width, SIZE.height, posed);
+    let (x0, y0, x1, y1) = square.ok_or("the trader's square")?;
+    let (mut inside, mut outside) = (0, 0);
+    for y in 0..SIZE.height as usize {
+        for x in 0..SIZE.width as usize {
+            let i = (y * SIZE.width as usize + x) * 4;
+            if rest[i..i + 3]
+                .iter()
+                .zip(&posed[i..i + 3])
+                .all(|(a, b)| a.abs_diff(*b) <= 8)
+            {
+                continue;
+            }
+            let (fx, fy) = (x as f32, y as f32);
+            if fx >= x0 && fx <= x1 && fy >= y0 && fy <= y1 {
+                inside += 1;
+            } else {
+                outside += 1;
+            }
+        }
+    }
+    ensure!(
+        inside > 500,
+        "{inside} pixels changed in the trader's square"
+    );
+    ensure_eq!(outside, 0, "changed pixels outside the trader's square");
+    Ok(format!(
+        "{note}; {inside} pixels changed in the trader's square"
+    ))
+}
 
 const SIZE: Resolution = Resolution::new(1024, 768);
 

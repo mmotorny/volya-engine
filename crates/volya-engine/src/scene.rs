@@ -171,6 +171,10 @@ pub struct WorldScene {
     /// drawn (offline).
     #[serde(skip)]
     pub objects: Arc<Vec<Option<Mat4>>>,
+    /// The objects' render matrices this frame, by instance (their
+    /// motions, [`crate::level_motions`]).
+    #[serde(skip)]
+    pub bones: Arc<crate::level_motions::BonePoses>,
     #[serde(skip)]
     pub sky: Option<crate::render::sky::SkyFrame>,
     /// Hidden under an opaque picture: kept on the GPU but not drawn.
@@ -211,6 +215,7 @@ impl PartialEq for WorldScene {
             && self.environment == other.environment
             && self.time == other.time
             && Arc::ptr_eq(&self.objects, &other.objects)
+            && Arc::ptr_eq(&self.bones, &other.bones)
             && self.sky == other.sky
             && self.covered == other.covered
             && self.particles == other.particles

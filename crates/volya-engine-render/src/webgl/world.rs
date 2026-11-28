@@ -103,6 +103,7 @@ fn vertex_layout(layout: VertexLayout) -> &'static gl::VertexLayout {
 fn world_unit(binding: (u32, u32)) -> u32 {
     match binding {
         (0, 1) => units::RECORDS,
+        (0, 2) => units::BONES,
         (1, 0) => units::SECOND,
         (1, 1) => units::HEMI,
         (1, 2) => units::ENV,
@@ -113,6 +114,17 @@ fn world_unit(binding: (u32, u32)) -> u32 {
         (1, 9) => units::PROJECTOR,
         _ => units::OTHER,
     }
+}
+
+/// The objects' render matrices' texture of `rows` rows.
+fn bone_texture(gl: &Gl, rows: u32) -> gl::Texture {
+    gl.texture(
+        TexFormat::Rgba32Float,
+        BONES_PER_ROW * BONE_TEXELS,
+        rows,
+        1,
+        false,
+    )
 }
 
 fn world_point(binding: (u32, u32)) -> u32 {
@@ -530,6 +542,13 @@ struct Inner {
     programs: Vec<Program>,
     /// Each surface's alpha reference as its records hold it (−1: none).
     alpha_refs: Vec<f32>,
+    /// Each surface's records' last texel at rest ([`flags_texel`]).
+    flag_texels: Vec<[f32; 4]>,
+    /// The objects' render matrices ([`BONE_TEXELS`] a matrix,
+    /// [`BONES_PER_ROW`] a row) and its rows, and the first matrix each
+    /// posed kept draw's record names.
+    bones: RefCell<(gl::Texture, u32)>,
+    posed: RefCell<HashMap<u32, u32>>,
     /// The receivers' records as last written: by kept draw, its c_bias
     /// and params texels (object-projected-light.md 6).
     receivers: RefCell<HashMap<u32, [f32; 8]>>,
@@ -611,6 +630,7 @@ impl Inner {
         crate::stats::bind_group();
         gl.bind_uniforms(points::WORLD, &self.frame, 0, FRAME_BYTES);
         gl.bind_texture(units::RECORDS, &self.draw_texels, &programs.nearest);
+        gl.bind_texture(units::BONES, &self.bones.borrow().0, &programs.nearest);
         gl.bind_texture(
             units::PROJECTOR,
             &programs.projector.texture,
@@ -1554,6 +1574,9 @@ impl Renderer {
             alpha_refs: (surfaces.iter())
                 .map(|s| s.alpha_ref.map_or(-1.0, f32::from))
                 .collect(),
+            flag_texels: surfaces.iter().map(|s| flags_texel(s, None)).collect(),
+            bones: RefCell::new((bone_texture(&gl, 1), 1)),
+            posed: RefCell::new(HashMap::new()),
             receivers: RefCell::new(HashMap::new()),
             early: Step::new(early, &calls, &exclusive),
             late: Step::new(late, &calls, &exclusive),
@@ -1605,6 +1628,64 @@ impl Renderer {
                 d.transform = *transform;
                 d.sphere = sphere;
             }
+        }
+    }
+
+    /// The objects' render matrices *K* this frame (model-shading.md 2),
+    /// and the first of them each of `draws` (indices among the draws
+    /// `world` was created with) is skinned with; `None` draws it at rest.
+    /// A draw not named keeps what it had; one left out of the world is
+    /// ignored. Only records that change are written.
+    pub fn pose_draws(
+        &self,
+        world: &World,
+        matrices: &[BoneMatrix],
+        draws: &[(usize, Option<u32>)],
+    ) {
+        let inner = &world.0;
+        if !matrices.is_empty() {
+            let rows = (matrices.len() as u32).div_ceil(BONES_PER_ROW);
+            let mut bones = inner.bones.borrow_mut();
+            if bones.1 < rows {
+                *bones = (bone_texture(&self.gl, rows), rows);
+            }
+            let mut bytes: Vec<u8> =
+                Vec::with_capacity((rows * BONES_PER_ROW * BONE_TEXELS) as usize * 16);
+            for m in matrices {
+                for column in m {
+                    bytes.extend(column.iter().flat_map(|v| v.to_le_bytes()));
+                }
+            }
+            bytes.resize((rows * BONES_PER_ROW * BONE_TEXELS) as usize * 16, 0);
+            let width = BONES_PER_ROW * BONE_TEXELS;
+            self.gl
+                .write_texture(&bones.0, 0, 0, 0, 0, width, rows, &mut bytes);
+        }
+        let mut posed = inner.posed.borrow_mut();
+        for &(draw, first) in draws {
+            let Some(Some(k)) = inner.kept_of.get(draw).copied() else {
+                continue;
+            };
+            if posed.get(&k).copied() == first {
+                continue;
+            }
+            match first {
+                Some(f) => posed.insert(k, f),
+                None => posed.remove(&k),
+            };
+            let mut texel = inner.flag_texels[inner.calls[k as usize].surface as usize];
+            texel[3] = first.map_or(0.0, |f| (f + 1) as f32);
+            let mut bytes: Vec<u8> = texel.iter().flat_map(|v| v.to_le_bytes()).collect();
+            self.gl.write_texture(
+                &inner.draw_texels,
+                0,
+                0,
+                k % DRAWS_PER_ROW * DRAW_TEXELS + DRAW_TEXELS - 1,
+                k / DRAWS_PER_ROW,
+                1,
+                1,
+                &mut bytes,
+            );
         }
     }
 
@@ -1950,6 +2031,7 @@ impl Renderer {
         let size = (PROJECTOR_SIZE, PROJECTOR_SIZE);
         Renderer::begin_pass(&gl, &projector.framebuffer, size, None, Some(1.0));
         gl.bind_texture(units::RECORDS, &inner.draw_texels, &programs.nearest);
+        gl.bind_texture(units::BONES, &inner.bones.borrow().0, &programs.nearest);
         for (n, cell) in cells.iter().enumerate() {
             let offset = n as u64 * CELL_SLOT;
             let constants = frame_constants(frame, &cell.view_projection, size);

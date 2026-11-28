@@ -316,6 +316,9 @@ pub struct Presenter {
     /// The objects' placements last applied to the world's draws; `None`
     /// as uploaded.
     placed: Option<Arc<Vec<Option<Mat4>>>>,
+    /// The objects' render matrices last applied; `None`: every object
+    /// at rest, as uploaded.
+    posed: Option<Arc<crate::level_motions::BonePoses>>,
     /// The world's draw index of the first object draw.
     first_object_draw: usize,
     /// Each static draw item's world draw index (none: not drawn).
@@ -469,6 +472,7 @@ impl Presenter {
                 // with its effects' textures.
                 self.world = None;
                 self.placed = None;
+                self.posed = None;
                 self.particle_shaders.clear();
                 self.glow_shaders.clear();
                 renderer.clear_level_textures();
@@ -523,6 +527,7 @@ impl Presenter {
         }
         let world = self.world.as_ref()?.1.clone()?;
         self.place_objects(renderer, &world, scene);
+        self.pose_objects(renderer, &world, scene);
         let drawn = scene.seen.as_ref().map(|s| self.drawn(&scene.world, s));
         let e = &scene.environment;
         Some(WorldFrame {
@@ -868,6 +873,33 @@ impl Presenter {
     /// [`crate::objects::LevelObjects::draws`] (tests).
     pub fn object_draw_index(&self, j: usize) -> usize {
         self.first_object_draw + j
+    }
+
+    /// Hands the scene's render matrices to the renderer, and to each
+    /// object draw the first of its instance's (model-shading.md 2): those
+    /// whose instance is animated now or was.
+    fn pose_objects(&mut self, renderer: &Renderer, world: &World, scene: &WorldScene) {
+        let bones = &scene.bones;
+        if self.posed.as_ref().is_some_and(|p| Arc::ptr_eq(p, bones)) {
+            return;
+        }
+        let before = self.posed.take();
+        let was = |k: usize| {
+            before
+                .as_ref()
+                .and_then(|b| b.first.get(k).copied().flatten())
+        };
+        let first = self.first_object_draw;
+        let draws: Vec<(usize, Option<u32>)> = (scene.world.objects.draws.iter().enumerate())
+            .filter_map(|(j, d)| {
+                let now = bones.first.get(d.instance).copied().flatten();
+                (now.is_some() || was(d.instance).is_some()).then_some((first + j, now))
+            })
+            .collect();
+        if !draws.is_empty() {
+            renderer.pose_draws(world, &bones.matrices, &draws);
+        }
+        self.posed = Some(bones.clone());
     }
 
     fn place_objects(&mut self, renderer: &Renderer, world: &World, scene: &WorldScene) {

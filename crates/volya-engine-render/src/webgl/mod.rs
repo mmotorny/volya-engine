@@ -183,8 +183,10 @@ pub(crate) mod units {
     pub const LIGHT_ATT: u32 = 7;
     /// The projected light texture (object-projected-light.md).
     pub const PROJECTOR: u32 = 8;
+    /// The objects' render matrices (its vertex programs).
+    pub const BONES: u32 = 9;
     /// Every other program's textures, from here in binding order.
-    pub const OTHER: u32 = 9;
+    pub const OTHER: u32 = 10;
 }
 
 /// The uniform buffer binding points, one per program family.

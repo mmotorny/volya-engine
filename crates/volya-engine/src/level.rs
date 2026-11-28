@@ -416,6 +416,8 @@ pub struct LevelScreen {
     /// Where each of the objects' instances is drawn; `None` while it is
     /// not online. Shared with the scenes, replaced when it changes.
     placements: Arc<Vec<Option<Mat4>>>,
+    /// The motions the instances play (motion-playback.md).
+    motions: crate::level_motions::LevelMotions,
     /// Instance of each object id with a loaded visual.
     instances: HashMap<u16, usize>,
     /// The level's particle objects: the effects of `level.ps_static`
@@ -2557,7 +2559,7 @@ impl NewGameLoad {
         );
         let glow_shaders = self.lights.glow_shaders.clone();
         let lights = LevelLights::new(std::mem::take(&mut self.lights), objects.lamps.clone())?;
-        let placements = objects
+        let placements: Vec<Option<Mat4>> = objects
             .instances
             .iter()
             .map(|i| i.online.then_some(i.transform))
@@ -2648,6 +2650,7 @@ impl NewGameLoad {
             sun_fade: SunFade::default(),
             simulation: Some(simulation),
             info_portions: Some(info_portions),
+            motions: crate::level_motions::LevelMotions::new(placements.len()),
             placements: Arc::new(placements),
             instances,
             effects,
@@ -2933,6 +2936,12 @@ impl LevelScreen {
         // The lamps' frame updates (hanging-lamps.md 4) on the global clock.
         self.lights
             .lamps_frame(self.global_ms as f32 / 1000.0, elapsed as f32 / 1000.0);
+        // motion-playback.md 4.1: the objects' tracks updates on
+        // `time_global()`, the global clock, then their poses.
+        self.motions.update(crate::core::motion_playback::Clock {
+            time_global: self.global_ms as u32,
+            frame: self.frame as u32,
+        });
         // The placed effects on the world clock, which is the global clock
         // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
         // still while the pause is on (the menu, a `pause_state on` intro
@@ -3615,6 +3624,45 @@ impl LevelScreen {
         self.global_ms = ms;
     }
 
+    /// Starts the cycle `cycle` of the object instance named `object` as a
+    /// script's `PlayCycle` does (motion-playback.md 3.4: the definition's
+    /// partition, mixing, no notification, channel 0), its model's motions
+    /// read from `tree` the first time it plays one. Whether the object and
+    /// the cycle were found; a playback limit's fatal error is an error.
+    pub fn play_cycle(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        object: &str,
+        cycle: &str,
+    ) -> io::Result<bool> {
+        use crate::core::motion_playback::{Clock, Start};
+        let objects = &self.world.objects;
+        let Some(k) = objects.instances.iter().position(|i| i.name == object) else {
+            return Ok(false);
+        };
+        let model = objects.instances[k].model;
+        let (loaded, names, dir) = (&objects.models[model], &objects.names, &self.world.dir);
+        let animated = self.motions.animate(k, model, || {
+            crate::level_motions::model_motions(tree, data, dir, loaded, names)
+        })?;
+        let Some(motion) = animated.motions().cycle(cycle) else {
+            return Ok(false);
+        };
+        let clock = Clock {
+            time_global: self.global_ms as u32,
+            frame: self.frame as u32,
+        };
+        (animated.play_cycle(motion, Start::mixing(None), clock))
+            .map_err(|e| invalid(e.to_string()))?;
+        Ok(true)
+    }
+
+    /// The motions the object instances play.
+    pub fn motions(&self) -> &crate::level_motions::LevelMotions {
+        &self.motions
+    }
+
     /// `r__detail_density` now (read when a cell is built,
     /// detail-objects.md 7; clamped to its range) and the wind strength *W*
     /// (weather-ambient-effects.md 4.3).
@@ -4275,6 +4323,7 @@ impl LevelScreen {
             // trees' sway (tree-sway.md 3.1) and the clouds' drift (sky.md).
             time: (self.global_ms as f64 / 1000.0) as f32,
             objects: self.placements.clone(),
+            bones: self.motions.poses(),
             seen: Some(self.seen.clone()),
             sky: Some(sky::sky_frame(
                 &self.environment,
@@ -4552,6 +4601,7 @@ impl LevelScreen {
             simulation: None,
             info_portions: None,
             placements: Arc::new(Vec::new()),
+            motions: Default::default(),
             instances: HashMap::new(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),

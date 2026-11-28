@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Skeletal motions (docs/formats/skeletal-motions.md), as far as the
-//! lengths of cycles need them (docs/behavior/player-cycle-lengths.md, S10):
-//! a model's motion-file list (chunk 19, section 1.2), the motion
-//! parameters (chunk 15, section 2) and each motion's key count (the start
-//! of chunk 14's sub-chunks, section 3). The tracks are not read: a motion
-//! file is walked as a stream, reading only chunk 15 and the head of each
-//! motion.
+//! Skeletal motions (docs/formats/skeletal-motions.md): a model's
+//! motion-file list (chunk 19, section 1.2), the motion parameters (chunk
+//! 15, section 2) and each motion's key count (the start of chunk 14's
+//! sub-chunks, section 3), which the lengths of cycles need
+//! (docs/behavior/player-cycle-lengths.md, S10), walking a motion file as a
+//! stream; and, for motions that are played, every motion's tracks
+//! (section 3, [`read_motions`]).
 
 use std::io::{self, Read, Seek, SeekFrom};
 
@@ -345,6 +345,138 @@ pub fn read_model_motions(reader: &mut (impl Read + Seek), what: &str) -> io::Re
     Ok(ModelMotions::None)
 }
 
+/// A track's flags (section 3): bit 0, translation keys; bit 1, a single
+/// rotation key.
+pub const TRANSLATION_KEYS: u8 = 0x1;
+pub const SINGLE_ROTATION: u8 = 0x2;
+
+/// f32(1/32767), a rotation key component's unit (section 3).
+pub const ROTATION_UNIT: f32 = 1.0 / 32767.0;
+
+/// One bone's track of a motion (section 3), its keys as stored.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Track {
+    /// The rotation keys (*x*, *y*, *z*, *w*): one (the same at every key)
+    /// or *N*.
+    pub rotations: Box<[[i16; 4]]>,
+    /// The translation keys (*a*₀, *a*₁, *a*₂): *N*, or none (translation
+    /// **o** at every key).
+    pub translations: Box<[[i8; 3]]>,
+    /// The translation size **s** (zero without translation keys) and
+    /// base **o**.
+    pub size: [f32; 3],
+    pub base: [f32; 3],
+}
+
+impl Track {
+    /// Whether it has a single rotation key.
+    pub fn single_rotation(&self) -> bool {
+        self.rotations.len() == 1
+    }
+
+    /// The rotation of key `k`, decoded: each component · f32(1/32767).
+    pub fn rotation(&self, k: usize) -> [f32; 4] {
+        let r = &self.rotations[if self.single_rotation() { 0 } else { k }];
+        r.map(|c| f32::from(c) * ROTATION_UNIT)
+    }
+
+    /// The translation of key `k`: *a*ᵢ · **s**ᵢ + **o**ᵢ, or **o** without
+    /// translation keys.
+    pub fn translation(&self, k: usize) -> [f32; 3] {
+        match self.translations.get(k) {
+            Some(a) => std::array::from_fn(|i| f32::from(a[i]) * self.size[i] + self.base[i]),
+            None => self.base,
+        }
+    }
+
+    /// Whether it has translation keys.
+    pub fn has_translations(&self) -> bool {
+        !self.translations.is_empty()
+    }
+}
+
+/// A motion's keys (section 3): its key count *N* and one track per bone,
+/// in track-index order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Motion {
+    pub keys: u32,
+    pub tracks: Vec<Track>,
+}
+
+/// Parses a motion's sub-chunk (section 3) with `bones` tracks; the
+/// checksums are skipped (the game uses them only to share key arrays).
+fn parse_motion(content: &[u8], bones: usize) -> io::Result<Motion> {
+    let mut c = Cursor {
+        data: content,
+        at: 0,
+    };
+    c.string_z()?;
+    let keys = c.u32()?;
+    let n = keys as usize;
+    let rotation = |k: &[u8]| -> [i16; 4] {
+        std::array::from_fn(|i| i16::from_le_bytes([k[2 * i], k[2 * i + 1]]))
+    };
+    let tracks = (0..bones)
+        .map(|_| {
+            let flags = c.take(1)?[0];
+            let rotations: Box<[[i16; 4]]> = if flags & SINGLE_ROTATION != 0 {
+                Box::new([rotation(c.take(8)?)])
+            } else {
+                c.u32()?;
+                c.take(8 * n)?
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|k| rotation(k))
+                    .collect()
+            };
+            let (translations, size): (Box<[[i8; 3]]>, _) = if flags & TRANSLATION_KEYS != 0 {
+                c.u32()?;
+                let keys = (c.take(3 * n)?.as_chunks::<3>().0.iter())
+                    .map(|k| k.map(|a| a as i8))
+                    .collect();
+                (keys, [c.f32()?, c.f32()?, c.f32()?])
+            } else {
+                (Box::default(), [0.0; 3])
+            };
+            Ok(Track {
+                rotations,
+                translations,
+                size,
+                base: [c.f32()?, c.f32()?, c.f32()?],
+            })
+        })
+        .collect::<io::Result<_>>()?;
+    Ok(Motion { keys, tracks })
+}
+
+/// Every motion of a chunk sequence's chunk 14 (a motion file, or a model
+/// file with embedded motions; section 1): `count` of them (the
+/// definitions of its chunk 15), sub-chunk *k* + 1 found by id, each read
+/// with `bones` tracks (section 4.1: one per bone of the model that decodes
+/// it). A compressed chunk is decoded, the whole chunk or one motion.
+pub fn read_motions(
+    reader: &mut (impl Read + Seek),
+    count: usize,
+    bones: usize,
+    what: &str,
+) -> io::Result<Vec<Motion>> {
+    let headers = chunks::index(reader)?;
+    let keys = chunks::find_header(&headers, KEYS_CHUNK)
+        .ok_or_else(|| invalid(format!("{what}: no motion keys")))?;
+    let content = keys.read_content(reader)?;
+    let subs = chunks::Chunks::parse(&content)?;
+    (1..=count)
+        .map(|id| {
+            let sub = subs
+                .find(id as u32)
+                .ok_or_else(|| invalid(format!("{what}: no motion {id}")))?;
+            parse_motion(&sub.content()?, bones)
+                .map_err(|e| invalid(format!("{what}: motion {id}: {e}")))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -470,6 +602,48 @@ pub(crate) mod tests {
             read_model_motions(&mut std::io::Cursor::new(&model), "m").unwrap(),
             ModelMotions::Files(vec!["a".into(), "b".into()])
         );
+    }
+
+    #[test]
+    fn reads_tracks() {
+        // Section 3: two keys; track 0 with both key arrays, track 1 with
+        // a single rotation and no translation keys.
+        let mut m = b"walk\0".to_vec();
+        m.extend(2u32.to_le_bytes());
+        m.push(TRANSLATION_KEYS);
+        m.extend(0u32.to_le_bytes());
+        for k in [[0i16, 0, 0, 32767], [0, 32767, 0, 0]] {
+            k.iter().for_each(|c| m.extend(c.to_le_bytes()));
+        }
+        m.extend(0u32.to_le_bytes());
+        m.extend([1u8, 0, 0, 0, 0xFF, 0]);
+        for v in [0.5f32, 1.0, 1.0, 0.0, 2.0, 0.0] {
+            m.extend(v.to_le_bytes());
+        }
+        m.push(SINGLE_ROTATION);
+        [16384i16, 0, 0, 16384]
+            .iter()
+            .for_each(|c| m.extend(c.to_le_bytes()));
+        for v in [1.0f32, 2.0, 3.0] {
+            m.extend(v.to_le_bytes());
+        }
+        let mut c14 = chunk(0, &1u32.to_le_bytes());
+        c14.extend(chunk(1, &m));
+        let file = chunk(KEYS_CHUNK, &c14);
+        let motions = read_motions(&mut std::io::Cursor::new(&file), 1, 2, "t").unwrap();
+        let [motion] = motions.as_slice() else {
+            panic!("one motion");
+        };
+        assert_eq!(motion.keys, 2);
+        let t = &motion.tracks;
+        assert_eq!(t[0].rotation(1), [0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(t[0].translation(0), [0.5, 2.0, 0.0]);
+        assert_eq!(t[0].translation(1), [0.0, 1.0, 0.0]);
+        assert!(t[1].single_rotation() && !t[1].has_translations());
+        assert_eq!(t[1].rotation(1), t[1].rotation(0));
+        assert_eq!(t[1].translation(1), [1.0, 2.0, 3.0]);
+        // A track past the sub-chunk's end is an error.
+        assert!(read_motions(&mut std::io::Cursor::new(&file), 1, 3, "t").is_err());
     }
 
     #[test]

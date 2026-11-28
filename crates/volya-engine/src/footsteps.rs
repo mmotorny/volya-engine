@@ -109,17 +109,7 @@ pub fn read_cycles(tree: &dyn Vfs, data: &GameData, dir: &str, visual: &str) -> 
         ModelMotions::Files(items) => items
             .iter()
             .map(|item| {
-                let name = format!("{item}.omf");
-                let level = format!("{dir}\\{name}");
-                let path = if tree.exists(&level) {
-                    level
-                } else {
-                    let meshes = data.aliases.path("$game_meshes$", &name)?;
-                    if !tree.exists(&meshes) {
-                        return Err(invalid(format!("Can't find motion file '{item}'.")));
-                    }
-                    meshes
-                };
+                let path = crate::level_motions::locate_motion_file(tree, data, dir, item)?;
                 let mut f = tree.open(&path).map_err(|e| context(&path, e))?;
                 skeletal_motions::read_motion_file(&mut f, &path).map_err(|e| context(&path, e))
             })

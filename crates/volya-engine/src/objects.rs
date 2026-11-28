@@ -31,7 +31,7 @@ use crate::core::object_light;
 use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
-use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, model_vertex};
+use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, skinned_vertex};
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
 use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord};
@@ -228,6 +228,8 @@ pub struct LoadedModel {
     /// Every bone's bind matrix whole when one's fourth column is not
     /// exactly (0, 0, 0, 1); empty otherwise.
     binds: Box<[Mat4]>,
+    /// Each bone's parent (skeleton-ogf.md 4); empty when not given.
+    parents: Box<[Option<u16>]>,
 }
 
 impl LoadedModel {
@@ -258,7 +260,19 @@ impl LoadedModel {
                 })
                 .collect(),
             binds,
+            parents: Box::default(),
         }
+    }
+
+    /// The model with its bones' parents.
+    pub fn with_parents(mut self, parents: Box<[Option<u16>]>) -> Self {
+        self.parents = parents;
+        self
+    }
+
+    /// Bone `i`'s parent, if it has one (and the parents were given).
+    pub fn bone_parent(&self, i: usize) -> Option<usize> {
+        self.parents.get(i).copied().flatten().map(usize::from)
     }
 
     /// How many bones it has.
@@ -323,10 +337,14 @@ pub fn add_model(
         let first_vertex =
             (geometry.vertices.len() / crate::render::world::MODEL_VERTEX_BYTES) as u32;
         for v in &m.vertices {
-            geometry.vertices.extend(model_vertex(
+            // model-shading.md 1, 2: the bones and the quantized weight,
+            // which a posed object's draw skins by.
+            geometry.vertices.extend(skinned_vertex(
                 v.position.map(model::quantize_position),
                 model::quantize_normal(v.normal),
                 v.uv.map(model::quantize_uv),
+                v.bones,
+                model::quantize_weight(v.weight),
             ));
         }
         // Every detail window's indices; the renderer draws the window of
@@ -362,12 +380,13 @@ pub fn add_model(
     let bones: Vec<(Name, Mat4)> = (model.bones.iter().zip(pose))
         .map(|(b, m)| (names.add(&b.name), m))
         .collect();
-    Ok(LoadedModel::new(
-        names.add(path),
-        model.header,
-        meshes.into(),
-        &bones,
-    ))
+    let parents = (model.bones.iter())
+        .map(|b| b.parent.map(|p| p as u16))
+        .collect();
+    Ok(
+        LoadedModel::new(names.add(path), model.header, meshes.into(), &bones)
+            .with_parents(parents),
+    )
 }
 
 /// The section listing the models prefetched for the single-player game

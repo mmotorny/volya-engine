@@ -82,17 +82,52 @@ pub enum VertexLayout {
 pub const MODEL_VERTEX_BYTES: usize = 16;
 
 /// One model vertex as stored for drawing: the quantized position, normal
-/// and texture coordinate of model-shading.md 1.
+/// and texture coordinate of model-shading.md 1, linked to bone 0.
 pub fn model_vertex(position: [i16; 3], normal: [u8; 3], uv: [i16; 2]) -> [u8; MODEL_VERTEX_BYTES] {
+    skinned_vertex(position, normal, uv, [0, 0], 0)
+}
+
+/// Bones a model vertex can name ([`skinned_vertex`]); the shipped models
+/// have at most 61 (skeleton-ogf.md 4).
+pub const MODEL_BONES: u16 = 64;
+
+/// [`model_vertex`] with its bones `b₀`, `b₁` and the quantized weight of
+/// `b₁` (model-shading.md 1, 2): the bones packed as `b₀ + 64 b₁` in the
+/// position's unused fourth component, the weight in the normal's.
+pub fn skinned_vertex(
+    position: [i16; 3],
+    normal: [u8; 3],
+    uv: [i16; 2],
+    bones: [u16; 2],
+    weight: u8,
+) -> [u8; MODEL_VERTEX_BYTES] {
     let mut v = [0; MODEL_VERTEX_BYTES];
     for (i, c) in position.iter().enumerate() {
         v[2 * i..2 * i + 2].copy_from_slice(&c.to_le_bytes());
     }
+    let links = bones.map(|b| b.min(MODEL_BONES - 1));
+    v[6..8].copy_from_slice(&(links[0] + MODEL_BONES * links[1]).to_le_bytes());
     v[8..11].copy_from_slice(&normal);
+    v[11] = weight;
     v[12..14].copy_from_slice(&uv[0].to_le_bytes());
     v[14..16].copy_from_slice(&uv[1].to_le_bytes());
     v
 }
+
+/// An object's render matrix *K* (model-shading.md 2) as the renderer
+/// reads it: its columns 0 – 2, each the four rows' values (column 3 is
+/// (0, 0, 0, 1)).
+pub type BoneMatrix = [[f32; 4]; 3];
+
+/// [`BoneMatrix`] of `k`.
+pub fn bone_matrix(k: &Mat4) -> BoneMatrix {
+    std::array::from_fn(|c| std::array::from_fn(|r| k[r][c]))
+}
+
+/// RGBA32F texels per render matrix, and matrices per row of the bones
+/// texture (world.wgsl's `BONES_PER_ROW`).
+pub(crate) const BONE_TEXELS: u32 = 3;
+pub(crate) const BONES_PER_ROW: u32 = 64;
 
 /// The objects' models on the GPU side: every model vertex
 /// ([`model_vertex`]) in one buffer and every index in another; each draw
@@ -843,16 +878,19 @@ pub(crate) fn draw_record(surface: &Surface<Texture>, d: &WorldDraw, out: &mut V
             surface.alpha_ref.map_or(-1.0, f32::from),
         ],
     );
-    push_vec4(
-        out,
-        [
-            f32::from(u8::from(surface.fog)),
-            f32::from(u8::from(surface.object_lod)),
-            // The light elements' alpha reference.
-            surface.light.map_or(0.0, |l| f32::from(l.alpha_ref)),
-            0.0,
-        ],
-    );
+    push_vec4(out, flags_texel(surface, None));
+}
+
+/// A draw record's last texel: fog, the tree object LOD, the light
+/// elements' alpha reference and an object's first render matrix + 1 (0:
+/// drawn at rest).
+pub(crate) fn flags_texel<T>(surface: &Surface<T>, bones: Option<u32>) -> [f32; 4] {
+    [
+        f32::from(u8::from(surface.fog)),
+        f32::from(u8::from(surface.object_lod)),
+        surface.light.map_or(0.0, |l| f32::from(l.alpha_ref)),
+        bones.map_or(0.0, |b| (b + 1) as f32),
+    ]
 }
 
 /// Most bytes of a buffer the CPU holds at once while streaming it to the
