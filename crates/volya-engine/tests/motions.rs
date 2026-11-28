@@ -418,10 +418,12 @@ fn the_trader_plays_on_the_level() {
         near(t, 0.6 * 0.999_465_94, 1e-4, "idle_2 time");
         let poses = screen.motions().poses();
         let first = poses.first[k].unwrap() as usize;
-        assert_eq!(poses.matrices.len(), m.motions().bone_count());
-        assert_eq!(first, 0);
-        assert!(poses.first.iter().filter(|f| f.is_some()).count() == 1);
+        // Other instances are posed too: physics objects playing their
+        // startup animations, shells posed by their bodies
+        // (physics-shells.md 7, 8.1).
+        assert!(poses.matrices.len() >= first + m.motions().bone_count());
         // A bone moved from its bind pose: K is not the identity.
-        assert!(poses.matrices.iter().any(|k| (k[0][0] - 1.0).abs() > 1e-3));
+        let own = &poses.matrices[first..first + m.motions().bone_count()];
+        assert!(own.iter().any(|k| (k[0][0] - 1.0).abs() > 1e-3));
     });
 }
