@@ -10,10 +10,15 @@ pose, joint defaults, emptying a group, the normalisation, the box-box
 edge-edge contacts, dGeomRaySet, the exported internals; and the arithmetic
 of docs/behavior/physics-harness.md sections 2-5 (the load-time auto-disable
 threshold, dNormalize3_slow, QuickStep's linear update, the quaternion
-derivative, ray-sphere) and of physics-harness-2.md section 5 (the sphere
+derivative, ray-sphere), of physics-harness-2.md section 5 (the sphere
 and box inertias, dRFromAxisAndAngle's sine, dBodySetRotation's trace, the
 steppers' angular update, the relative point's rotation, the finite rotation
-without an axis, the box-plane depth). Applied by Bazel to the release
+without an axis, the box-plane depth) and of physics-harness-3.md section 8
+(the colliders' groupings and box-box's added contacts' face centre,
+QuickStep's and the exact stepper's solve, the joints' rows, setters and
+getters, the finite rotation, the mass functions, the body-frame products,
+the rotation-to-quaternion conversion, dQFromAxisAndAngle, dNormalize4's x87
+products, the force functions' rotations). Applied by Bazel to the release
 (MODULE.bazel); ODE's code is used under its BSD licence option.
 
 diff --git a/include/ode/collision.h b/include/ode/collision.h
@@ -85,10 +90,18 @@ index 2e2a7ee..584589e 100644
  
  
 diff --git a/ode/src/collision_std.cpp b/ode/src/collision_std.cpp
-index 8b709e1..5586c6d 100644
+index 8b709e1..6f6086a 100644
 --- a/ode/src/collision_std.cpp
 +++ b/ode/src/collision_std.cpp
-@@ -442,16 +442,13 @@ void dGeomRaySet (dGeomID g, dReal px, dReal py, dReal pz,
+@@ -37,6 +37,7 @@ dContactGeom::g1 and dContactGeom::g2.
+ #include "collision_kernel.h"
+ #include "collision_std.h"
+ #include "collision_util.h"
++#include "util.h"
+ 
+ #ifdef _MSC_VER
+ #pragma warning(disable:4291)  // for VC++, no complaints about "no matching operator delete found"
+@@ -442,16 +443,13 @@ void dGeomRaySet (dGeomID g, dReal px, dReal py, dReal pz,
  		  dReal dx, dReal dy, dReal dz)
  {
    dUASSERT (g && g->type == dRayClass,"argument not a ray");
@@ -112,42 +125,46 @@ index 8b709e1..5586c6d 100644
  }
  
  
-@@ -657,6 +654,90 @@ void cullPoints (int n, dReal p[], int m, int i0, int iret[])
+@@ -657,6 +655,98 @@ void cullPoints (int n, dReal p[], int m, int i0, int iret[])
  // collision functions. this function only fills in the position and depth
  // fields.
  
 +// the shipped library's edge-edge contacts. a box is (p,R,half sides H);
 +// its axis j is column j of R. for box `own' with edge axis k, of its other
 +// two axes the one with the larger |n . axis| (the second when equal) is M,
-+// the other S.
++// the other S. every dot product here is summed (y + z) + x
++// (physics-harness-3.md 2.4).
 +
 +static void edgeEdgeAxes (const dMatrix3 R, const dVector3 n, int k,
 +			  int *M, int *S)
 +{
 +  int a = (k+1)%3, b = (k+2)%3;
-+  dReal na = dFabs (dDOT14 (n,R+a));
-+  dReal nb = dFabs (dDOT14 (n,R+b));
++  dReal na = dFabs (dxDOT14 (dxSumYZX,n,R+a));
++  dReal nb = dFabs (dxDOT14 (dxSumYZX,n,R+b));
 +  if (na > nb) { *M = a; *S = b; }
 +  else { *M = b; *S = a; }
 +}
 +
 +
-+// a candidate: face j (sign s) of box (p,R,H) against the line through P
-+// along unit u. writes the point Q where the line meets the face's plane and
-+// returns 1 when Q is within the face.
++// a candidate: face j (sign s) of box (R,H) against the line through P
++// along unit u, the face's centre taken from the point pc (the box's centre,
++// but box 2's for box 1's faces on its own edge axis). writes the point Q
++// where the line meets the face's plane and returns 1 when Q is within the
++// face.
 +
-+static int edgeEdgeCandidate (const dVector3 p, const dMatrix3 R,
++static int edgeEdgeCandidate (const dVector3 pc, const dMatrix3 R,
 +			      const dReal H[3], int j, dReal s,
 +			      const dVector3 P, const dVector3 u, dVector3 Q)
 +{
 +  dVector3 F;
 +  int i;
-+  for (i=0; i<3; i++) F[i] = p[i] + s*H[j]*R[i*4+j];
-+  dReal t = (dDOT14 (P,R+j) - dDOT14 (F,R+j)) / dDOT14 (u,R+j);
++  for (i=0; i<3; i++) F[i] = pc[i] + s*H[j]*R[i*4+j];
++  dReal t = (dxDOT14 (dxSumYZX,P,R+j) - dxDOT14 (dxSumYZX,F,R+j)) /
++    dxDOT14 (dxSumYZX,u,R+j);
 +  for (i=0; i<3; i++) Q[i] = P[i] - t*u[i];
 +  int c = (j+1)%3, e = (j+2)%3;
-+  return dFabs (dDOT14 (Q,R+c) - dDOT14 (F,R+c)) <= H[c] &&
-+    dFabs (dDOT14 (Q,R+e) - dDOT14 (F,R+e)) <= H[e];
++  return dFabs (dxDOT14 (dxSumYZX,Q,R+c) - dxDOT14 (dxSumYZX,F,R+c)) <= H[c] &&
++    dFabs (dxDOT14 (dxSumYZX,Q,R+e) - dxDOT14 (dxSumYZX,F,R+e)) <= H[e];
 +}
 +
 +
@@ -181,18 +198,22 @@ index 8b709e1..5586c6d 100644
 +      dVector3 d;
 +      for (i=0; i<3; i++) d[i] = p[i] - P[i];
 +      j = S;
-+      s = (dDOT14 (d,R+S) > 0) ? REAL(1.0) : REAL(-1.0);
++      s = (dxDOT14 (dxSumYZX,d,R+S) > 0) ? REAL(1.0) : REAL(-1.0);
 +    }
 +    else {
 +      j = k;
 +      s = (c % 3 == 1) ? REAL(1.0) : REAL(-1.0);
 +    }
++    // candidates 4 and 5 (box 1's faces on its edge axis) take the face
++    // centre from box 2's centre (physics-harness-3.md 2.4)
++    const dReal *pc = (c >= 4) ? p2 : p;
 +
 +    dContactGeom *con = CONTACT (contact,num*skip);
-+    if (edgeEdgeCandidate (p,R,H,j,s,P,u,con->pos)) {
++    if (edgeEdgeCandidate (pc,R,H,j,s,P,u,con->pos)) {
 +      dVector3 qp;
 +      for (i=0; i<3; i++) qp[i] = con->pos[i] - P[i];
-+      con->depth = depth - dFabs (dDOT14 (n,R+M) * dDOT14 (qp,R+M));
++      con->depth = depth - dFabs (dxDOT14 (dxSumYZX,n,R+M) *
++				  dxDOT14 (dxSumYZX,qp,R+M));
 +      if (con->depth > 0) num++;
 +    }
 +  }
@@ -203,7 +224,128 @@ index 8b709e1..5586c6d 100644
  int dBoxBox (const dVector3 p1, const dMatrix3 R1,
  	     const dVector3 side1, const dVector3 p2,
  	     const dMatrix3 R2, const dVector3 side2,
-@@ -814,7 +895,12 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+@@ -674,7 +764,9 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+   p[0] = p2[0] - p1[0];
+   p[1] = p2[1] - p1[1];
+   p[2] = p2[2] - p1[2];
+-  dMULTIPLY1_331 (pp,R1,p);		// get pp = p relative to body 1
++  // get pp = p relative to body 1. the shipped library's groupings
++  // (physics-harness-3.md 2.4) here and in the tests below
++  dxMULTIPLY1_331 (pp,R1,p,dxSumXYZ,dxSumYZX,dxSumYZX);
+ 
+   // get side lengths / 2
+   A[0] = side1[0]*REAL(0.5);
+@@ -685,9 +777,11 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+   B[2] = side2[2]*REAL(0.5);
+ 
+   // Rij is R1'*R2, i.e. the relative rotation between R1 and R2
+-  R11 = dDOT44(R1+0,R2+0); R12 = dDOT44(R1+0,R2+1); R13 = dDOT44(R1+0,R2+2);
+-  R21 = dDOT44(R1+1,R2+0); R22 = dDOT44(R1+1,R2+1); R23 = dDOT44(R1+1,R2+2);
+-  R31 = dDOT44(R1+2,R2+0); R32 = dDOT44(R1+2,R2+1); R33 = dDOT44(R1+2,R2+2);
++  R11 = dDOT44(R1+0,R2+0);
++  R12 = dxDOT44(dxSumYZX,R1+0,R2+1); R13 = dxDOT44(dxSumYZX,R1+0,R2+2);
++  R21 = dxDOT44(dxSumYZX,R1+1,R2+0); R22 = dxDOT44(dxSumYZX,R1+1,R2+1);
++  R23 = dxDOT44(dxSumYZX,R1+1,R2+2); R31 = dxDOT44(dxSumYZX,R1+2,R2+0);
++  R32 = dxDOT44(dxSumYZX,R1+2,R2+1); R33 = dxDOT44(dxSumYZX,R1+2,R2+2);
+ 
+   Q11 = dFabs(R11); Q12 = dFabs(R12); Q13 = dFabs(R13);
+   Q21 = dFabs(R21); Q22 = dFabs(R22); Q23 = dFabs(R23);
+@@ -718,47 +812,49 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+   code = 0;
+ 
+   // separating axis = u1,u2,u3
+-  TST (pp[0],(A[0] + B[0]*Q11 + B[1]*Q12 + B[2]*Q13),R1+0,1);
+-  TST (pp[1],(A[1] + B[0]*Q21 + B[1]*Q22 + B[2]*Q23),R1+1,2);
+-  TST (pp[2],(A[2] + B[0]*Q31 + B[1]*Q32 + B[2]*Q33),R1+2,3);
++  TST (pp[0],((B[0]*Q11 + (B[1]*Q12 + B[2]*Q13)) + A[0]),R1+0,1);
++  TST (pp[1],(((B[2]*Q23 + B[1]*Q22) + B[0]*Q21) + A[1]),R1+1,2);
++  TST (pp[2],((B[0]*Q31 + (B[1]*Q32 + B[2]*Q33)) + A[2]),R1+2,3);
+ 
+   // separating axis = v1,v2,v3
+-  TST (dDOT41(R2+0,p),(A[0]*Q11 + A[1]*Q21 + A[2]*Q31 + B[0]),R2+0,4);
+-  TST (dDOT41(R2+1,p),(A[0]*Q12 + A[1]*Q22 + A[2]*Q32 + B[1]),R2+1,5);
+-  TST (dDOT41(R2+2,p),(A[0]*Q13 + A[1]*Q23 + A[2]*Q33 + B[2]),R2+2,6);
++  TST (dxDOT41(dxSumYZX,R2+0,p),(((A[1]*Q21 + A[2]*Q31) + A[0]*Q11) + B[0]),R2+0,4);
++  TST (dxDOT41(dxSumYZX,R2+1,p),(((A[2]*Q32 + A[1]*Q22) + A[0]*Q12) + B[1]),R2+1,5);
++  TST (dxDOT41(dxSumYZX,R2+2,p),(((A[1]*Q23 + A[2]*Q33) + A[0]*Q13) + B[2]),R2+2,6);
+ 
+   // note: cross product axes need to be scaled when s is computed.
+-  // normal (n1,n2,n3) is relative to box 1.
++  // normal (n1,n2,n3) is relative to box 1. the shipped library multiplies
++  // the separation and the normal by one rounded reciprocal of the length.
+ #undef TST
+ #define TST(expr1,expr2,n1,n2,n3,cc) \
+   s2 = dFabs(expr1) - (expr2); \
+   if (s2 > 0) return 0; \
+   l = dSqrt ((n1)*(n1) + (n2)*(n2) + (n3)*(n3)); \
+   if (l > 0) { \
+-    s2 /= l; \
++    dReal il = dRecip (l); \
++    s2 *= il; \
+     if (s2*fudge_factor > s) { \
+       s = s2; \
+       normalR = 0; \
+-      normalC[0] = (n1)/l; normalC[1] = (n2)/l; normalC[2] = (n3)/l; \
++      normalC[0] = (n1)*il; normalC[1] = (n2)*il; normalC[2] = (n3)*il; \
+       invert_normal = ((expr1) < 0); \
+       code = (cc); \
+     } \
+   }
+ 
+   // separating axis = u1 x (v1,v2,v3)
+-  TST(pp[2]*R21-pp[1]*R31,(A[1]*Q31+A[2]*Q21+B[1]*Q13+B[2]*Q12),0,-R31,R21,7);
+-  TST(pp[2]*R22-pp[1]*R32,(A[1]*Q32+A[2]*Q22+B[0]*Q13+B[2]*Q11),0,-R32,R22,8);
+-  TST(pp[2]*R23-pp[1]*R33,(A[1]*Q33+A[2]*Q23+B[0]*Q12+B[1]*Q11),0,-R33,R23,9);
++  TST(pp[2]*R21-pp[1]*R31,(((B[2]*Q12 + B[1]*Q13) + A[1]*Q31) + A[2]*Q21),0,-R31,R21,7);
++  TST(pp[2]*R22-pp[1]*R32,((A[1]*Q32 + (B[2]*Q11 + B[0]*Q13)) + A[2]*Q22),0,-R32,R22,8);
++  TST(pp[2]*R23-pp[1]*R33,(((A[1]*Q33 + B[1]*Q11) + A[2]*Q23) + B[0]*Q12),0,-R33,R23,9);
+ 
+   // separating axis = u2 x (v1,v2,v3)
+-  TST(pp[0]*R31-pp[2]*R11,(A[0]*Q31+A[2]*Q11+B[1]*Q23+B[2]*Q22),R31,0,-R11,10);
+-  TST(pp[0]*R32-pp[2]*R12,(A[0]*Q32+A[2]*Q12+B[0]*Q23+B[2]*Q21),R32,0,-R12,11);
+-  TST(pp[0]*R33-pp[2]*R13,(A[0]*Q33+A[2]*Q13+B[0]*Q22+B[1]*Q21),R33,0,-R13,12);
++  TST(pp[0]*R31-pp[2]*R11,(((B[2]*Q22 + B[1]*Q23) + A[0]*Q31) + A[2]*Q11),R31,0,-R11,10);
++  TST(pp[0]*R32-pp[2]*R12,(((B[0]*Q23 + B[2]*Q21) + A[0]*Q32) + A[2]*Q12),R32,0,-R12,11);
++  TST(pp[0]*R33-pp[2]*R13,(A[2]*Q13 + ((B[1]*Q21 + B[0]*Q22) + A[0]*Q33)),R33,0,-R13,12);
+ 
+   // separating axis = u3 x (v1,v2,v3)
+-  TST(pp[1]*R11-pp[0]*R21,(A[0]*Q21+A[1]*Q11+B[1]*Q33+B[2]*Q32),-R21,R11,0,13);
+-  TST(pp[1]*R12-pp[0]*R22,(A[0]*Q22+A[1]*Q12+B[0]*Q33+B[2]*Q31),-R22,R12,0,14);
+-  TST(pp[1]*R13-pp[0]*R23,(A[0]*Q23+A[1]*Q13+B[0]*Q32+B[1]*Q31),-R23,R13,0,15);
++  TST(pp[1]*R11-pp[0]*R21,(A[1]*Q11 + ((B[2]*Q32 + B[1]*Q33) + A[0]*Q21)),-R21,R11,0,13);
++  TST(pp[1]*R12-pp[0]*R22,(((B[2]*Q31 + B[0]*Q33) + A[0]*Q22) + A[1]*Q12),-R22,R12,0,14);
++  TST(pp[1]*R13-pp[0]*R23,((A[0]*Q23 + (B[0]*Q32 + B[1]*Q31)) + A[1]*Q13),-R23,R13,0,15);
+ 
+ #undef TST
+ 
+@@ -772,7 +868,7 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     normal[2] = normalR[8];
+   }
+   else {
+-    dMULTIPLY0_331 (normal,R1,normalC);
++    dxMULTIPLY0_331 (normal,R1,normalC,dxSumXYZ,dxSumYZX,dxSumYZX);
+   }
+   if (invert_normal) {
+     normal[0] = -normal[0];
+@@ -790,7 +886,7 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     dReal sign;
+     for (i=0; i<3; i++) pa[i] = p1[i];
+     for (j=0; j<3; j++) {
+-      sign = (dDOT14(normal,R1+j) > 0) ? REAL(1.0) : REAL(-1.0);
++      sign = (dxDOT14(dxSumXZY,normal,R1+j) > 0) ? REAL(1.0) : REAL(-1.0);
+       for (i=0; i<3; i++) pa[i] += sign * A[j] * R1[i*4+j];
+     }
+ 
+@@ -798,7 +894,7 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     dVector3 pb;
+     for (i=0; i<3; i++) pb[i] = p2[i];
+     for (j=0; j<3; j++) {
+-      sign = (dDOT14(normal,R2+j) > 0) ? REAL(-1.0) : REAL(1.0);
++      sign = (dxDOT14(dxSumXZY,normal,R2+j) > 0) ? REAL(-1.0) : REAL(1.0);
+       for (i=0; i<3; i++) pb[i] += sign * B[j] * R2[i*4+j];
+     }
+ 
+@@ -814,7 +910,12 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
      for (i=0; i<3; i++) contact[0].pos[i] = REAL(0.5)*(pa[i]+pb[i]);
      contact[0].depth = *depth;
      *return_code = code;
@@ -217,18 +359,226 @@ index 8b709e1..5586c6d 100644
    }
  
    // okay, we have a face-something intersection (because the separating
-@@ -1201,7 +1287,9 @@ int dCollideBoxPlane (dxGeom *o1, dxGeom *o2,
+@@ -853,7 +954,7 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     normal2[1] = -normal[1];
+     normal2[2] = -normal[2];
+   }
+-  dMULTIPLY1_331 (nr,Rb,normal2);
++  dxMULTIPLY1_331 (nr,Rb,normal2,dxSumYZX,dxSumYZX,dxSumYZX);
+   anr[0] = dFabs (nr[0]);
+   anr[1] = dFabs (nr[1]);
+   anr[2] = dFabs (nr[2]);
+@@ -915,15 +1016,15 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+   // find the four corners of the incident face, in reference-face coordinates
+   dReal quad[8];	// 2D coordinate of incident face (x,y pairs)
+   dReal c1,c2,m11,m12,m21,m22;
+-  c1 = dDOT14 (center,Ra+code1);
+-  c2 = dDOT14 (center,Ra+code2);
++  c1 = dxDOT14 (dxSumYZX,center,Ra+code1);
++  c2 = dxDOT14 (dxSumYZX,center,Ra+code2);
+   // optimize this? - we have already computed this data above, but it is not
+   // stored in an easy-to-index format. for now it's quicker just to recompute
+   // the four dot products.
+-  m11 = dDOT44 (Ra+code1,Rb+a1);
+-  m12 = dDOT44 (Ra+code1,Rb+a2);
+-  m21 = dDOT44 (Ra+code2,Rb+a1);
+-  m22 = dDOT44 (Ra+code2,Rb+a2);
++  m11 = dxDOT44 (dxSumYZX,Ra+code1,Rb+a1);
++  m12 = dxDOT44 (dxSumYZX,Ra+code1,Rb+a2);
++  m21 = dxDOT44 (dxSumYZX,Ra+code2,Rb+a1);
++  m22 = dxDOT44 (dxSumYZX,Ra+code2,Rb+a2);
+   {
+     dReal k1 = m11*Sb[a1];
+     dReal k2 = m21*Sb[a1];
+@@ -933,8 +1034,8 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     quad[1] = c2 - k2 - k4;
+     quad[2] = c1 - k1 + k3;
+     quad[3] = c2 - k2 + k4;
+-    quad[4] = c1 + k1 + k3;
+-    quad[5] = c2 + k2 + k4;
++    quad[4] = (k3 + k1) + c1;
++    quad[5] = (k4 + k2) + c2;
+     quad[6] = c1 + k1 - k3;
+     quad[7] = c2 + k2 - k4;
+   }
+@@ -965,8 +1066,8 @@ int dBoxBox (const dVector3 p1, const dMatrix3 R1,
+     dReal k1 =  m22*(ret[j*2]-c1) - m12*(ret[j*2+1]-c2);
+     dReal k2 = -m21*(ret[j*2]-c1) + m11*(ret[j*2+1]-c2);
+     for (i=0; i<3; i++) point[cnum*3+i] =
+-			  center[i] + k1*Rb[i*4+a1] + k2*Rb[i*4+a2];
+-    dep[cnum] = Sa[codeN] - dDOT(normal2,point+cnum*3);
++			  (k1*Rb[i*4+a1] + k2*Rb[i*4+a2]) + center[i];
++    dep[cnum] = Sa[codeN] - dxDOT(dxSumXZY,normal2,point+cnum*3);
+     if (dep[cnum] >= 0) {
+       ret[cnum*2] = ret[j*2];
+       ret[cnum*2+1] = ret[j*2+1];
+@@ -1061,16 +1162,16 @@ int dCollideSphereBox (dxGeom *o1, dxGeom *o2, int flags,
+   p[2] = o1->pos[2] - o2->pos[2];
+ 
+   l[0] = box->side[0]*REAL(0.5);
+-  t[0] = dDOT14(p,o2->R);
++  t[0] = dxDOT14(dxSumYZX,p,o2->R);
+   if (t[0] < -l[0]) { t[0] = -l[0]; onborder = 1; }
+   if (t[0] >  l[0]) { t[0] =  l[0]; onborder = 1; }
+ 
+   l[1] = box->side[1]*REAL(0.5);
+-  t[1] = dDOT14(p,o2->R+1);
++  t[1] = dxDOT14(dxSumYZX,p,o2->R+1);
+   if (t[1] < -l[1]) { t[1] = -l[1]; onborder = 1; }
+   if (t[1] >  l[1]) { t[1] =  l[1]; onborder = 1; }
+ 
+-  t[2] = dDOT14(p,o2->R+2);
++  t[2] = dxDOT14(dxSumYZX,p,o2->R+2);
+   l[2] = box->side[2]*REAL(0.5);
+   if (t[2] < -l[2]) { t[2] = -l[2]; onborder = 1; }
+   if (t[2] >  l[2]) { t[2] =  l[2]; onborder = 1; }
+@@ -1096,18 +1197,18 @@ int dCollideSphereBox (dxGeom *o1, dxGeom *o2, int flags,
+     tmp[1] = 0;
+     tmp[2] = 0;
+     tmp[mini] = (t[mini] > 0) ? REAL(1.0) : REAL(-1.0);
+-    dMULTIPLY0_331 (contact->normal,o2->R,tmp);
++    dxROTATE (contact->normal,o2->R,tmp);
+     // contact depth = distance to wall along normal plus radius
+     contact->depth = min_distance + sphere->radius;
+     return 1;
+   }
+ 
+   t[3] = 0;			//@@@ hmmm
+-  dMULTIPLY0_331 (q,o2->R,t);
++  dxROTATE (q,o2->R,t);
+   r[0] = p[0] - q[0];
+   r[1] = p[1] - q[1];
+   r[2] = p[2] - q[2];
+-  depth = sphere->radius - dSqrt(dDOT(r,r));
++  depth = sphere->radius - dSqrt(dxDOT(dxSumYZX,r,r));
+   if (depth < 0) return 0;
+   contact->pos[0] = q[0] + o2->pos[0];
+   contact->pos[1] = q[1] + o2->pos[1];
+@@ -1132,7 +1233,8 @@ int dCollideSpherePlane (dxGeom *o1, dxGeom *o2, int flags,
+ 
+   contact->g1 = o1;
+   contact->g2 = o2;
+-  dReal k = dDOT (o1->pos,plane->p);
++  // the shipped library sums the dot (y + z) + x (physics-harness-3.md 2.5)
++  dReal k = dxDOT (dxSumYZX,o1->pos,plane->p);
+   dReal depth = plane->p[3] - k + sphere->radius;
+   if (depth >= 0) {
+     contact->normal[0] = plane->p[0];
+@@ -1190,9 +1292,11 @@ int dCollideBoxPlane (dxGeom *o1, dxGeom *o2,
+   const dReal *n = plane->p;		// normal vector
+ 
+   // project sides lengths along normal vector, get absolute values
++  // the shipped library sums the second and third (y + z) + x
++  // (physics-harness-3.md 2.5)
+   dReal Q1 = dDOT14(n,R+0);
+-  dReal Q2 = dDOT14(n,R+1);
+-  dReal Q3 = dDOT14(n,R+2);
++  dReal Q2 = dxDOT14(dxSumYZX,n,R+1);
++  dReal Q3 = dxDOT14(dxSumYZX,n,R+2);
+   dReal A1 = box->side[0] * Q1;
+   dReal A2 = box->side[1] * Q2;
+   dReal A3 = box->side[2] * Q3;
+@@ -1201,7 +1305,11 @@ int dCollideBoxPlane (dxGeom *o1, dxGeom *o2,
    dReal B3 = dFabs(A3);
  
    // early exit test
 -  dReal depth = plane->p[3] + REAL(0.5)*(B1+B2+B3) - dDOT(n,o1->pos);
 +  // the shipped library sums the half-extents' last two first
-+  // (physics-harness-2.md 2.7)
-+  dReal depth = plane->p[3] + REAL(0.5)*((B2+B3)+B1) - dDOT(n,o1->pos);
++  // (physics-harness-2.md 2.7) and normal . centre (y + z) + x
++  // (physics-harness-3.md 2.5)
++  dReal depth = plane->p[3] + REAL(0.5)*((B2+B3)+B1) -
++    dxDOT(dxSumYZX,n,o1->pos);
    if (depth < 0) return 0;
  
    // find number of contacts requested
-@@ -1540,8 +1628,9 @@ static int ray_sphere_helper (dxRay *ray, dVector3 sphere_pos, dReal radius,
+@@ -1307,11 +1415,12 @@ int dCollideCCylinderSphere (dxGeom *o1, dxGeom *o2, int flags,
+   contact->g1 = o1;
+   contact->g2 = o2;
+ 
+-  // find the point on the cylinder axis that is closest to the sphere
+-  dReal alpha = 
+-    o1->R[2]  * (o2->pos[0] - o1->pos[0]) +
+-    o1->R[6]  * (o2->pos[1] - o1->pos[1]) +
+-    o1->R[10] * (o2->pos[2] - o1->pos[2]);
++  // find the point on the cylinder axis that is closest to the sphere (the
++  // shipped library: summed (y + z) + x, physics-harness-3.md 2.5)
++  dReal alpha =
++    (o1->R[6]  * (o2->pos[1] - o1->pos[1]) +
++     o1->R[10] * (o2->pos[2] - o1->pos[2])) +
++    o1->R[2]  * (o2->pos[0] - o1->pos[0]);
+   dReal lz2 = ccyl->lz * REAL(0.5);
+   if (alpha > lz2) alpha = lz2;
+   if (alpha < -lz2) alpha = -lz2;
+@@ -1398,7 +1507,9 @@ int dCollideCCylinderCCylinder (dxGeom *o1, dxGeom *o2,
+   // algorithm is robust in all casts, but it can return only one contact.
+ 
+   dVector3 sphere1,sphere2;
+-  dReal a1a2 = dDOT (axis1,axis2);
++  // the shipped library sums the dot products here (y + z) + x
++  // (physics-harness-3.md 2.3)
++  dReal a1a2 = dxDOT (dxSumYZX,axis1,axis2);
+   dReal det = REAL(1.0)-a1a2*a1a2;
+   if (det < tolerance) {
+     // the cylinder axes (almost) parallel, so we will generate up to two
+@@ -1413,7 +1524,7 @@ int dCollideCCylinderCCylinder (dxGeom *o1, dxGeom *o2,
+     }
+     dReal q[3];
+     for (i=0; i<3; i++) q[i] = pos1[i]-pos2[i];
+-    dReal k = dDOT (axis1,q);
++    dReal k = dxDOT (dxSumYZX,axis1,q);
+     dReal a1lo = -lz1;
+     dReal a1hi = lz1;
+     dReal a2lo = -lz2 - k;
+@@ -1433,8 +1544,8 @@ int dCollideCCylinderCCylinder (dxGeom *o1, dxGeom *o2,
+ 	  for (i=0; i<3; i++) sphere1[i] = pos1[i] + hi*axis1[i];
+ 	  for (i=0; i<3; i++) sphere2[i] = pos2[i] + (hi+k)*axis2[i];
+ 	  dContactGeom *c2 = CONTACT(contact,skip);
+-	  int n2 = dCollideSpheres (sphere1,cyl1->radius,
+-				    sphere2,cyl2->radius, c2);
++	  int n2 = dCollideSpheresYZX (sphere1,cyl1->radius,
++				       sphere2,cyl2->radius, c2);
+ 	  if (n2) {
+ 	    c2->g1 = o1;
+ 	    c2->g2 = o2;
+@@ -1449,8 +1560,8 @@ int dCollideCCylinderCCylinder (dxGeom *o1, dxGeom *o2,
+       dReal alpha2 = alpha1 + k;
+       for (i=0; i<3; i++) sphere1[i] = pos1[i] + alpha1*axis1[i];
+       for (i=0; i<3; i++) sphere2[i] = pos2[i] + alpha2*axis2[i];
+-      return dCollideSpheres (sphere1,cyl1->radius,
+-			      sphere2,cyl2->radius,contact);
++      return dCollideSpheresYZX (sphere1,cyl1->radius,
++				 sphere2,cyl2->radius,contact);
+     }
+   }
+ 	  
+@@ -1484,13 +1595,15 @@ int dCollideCCylinderPlane (dxGeom *o1, dxGeom *o2, int flags,
+   dxPlane *plane = (dxPlane*) o2;
+ 
+   // collide the deepest capping sphere with the plane
+-  dReal sign = (dDOT14 (plane->p,o1->R+2) > 0) ? REAL(-1.0) : REAL(1.0);
++  // the shipped library sums the dot products here (y + z) + x
++  // (physics-harness-3.md 2.5)
++  dReal sign = (dxDOT14 (dxSumYZX,plane->p,o1->R+2) > 0) ? REAL(-1.0) : REAL(1.0);
+   dVector3 p;
+   p[0] = o1->pos[0] + o1->R[2]  * ccyl->lz * REAL(0.5) * sign;
+   p[1] = o1->pos[1] + o1->R[6]  * ccyl->lz * REAL(0.5) * sign;
+   p[2] = o1->pos[2] + o1->R[10] * ccyl->lz * REAL(0.5) * sign;
+ 
+-  dReal k = dDOT (p,plane->p);
++  dReal k = dxDOT (dxSumYZX,p,plane->p);
+   dReal depth = plane->p[3] - k + ccyl->radius;
+   if (depth < 0) return 0;
+   contact->normal[0] = plane->p[0];
+@@ -1508,7 +1621,7 @@ int dCollideCCylinderPlane (dxGeom *o1, dxGeom *o2, int flags,
+     p[1] = o1->pos[1] - o1->R[6]  * ccyl->lz * REAL(0.5) * sign;
+     p[2] = o1->pos[2] - o1->R[10] * ccyl->lz * REAL(0.5) * sign;
+ 
+-    k = dDOT (p,plane->p);
++    k = dxDOT (dxSumYZX,p,plane->p);
+     depth = plane->p[3] - k + ccyl->radius;
+     if (depth >= 0) {
+       dContactGeom *c2 = CONTACT(contact,skip);
+@@ -1540,8 +1653,9 @@ static int ray_sphere_helper (dxRay *ray, dVector3 sphere_pos, dReal radius,
    q[0] = ray->pos[0] - sphere_pos[0];
    q[1] = ray->pos[1] - sphere_pos[1];
    q[2] = ray->pos[2] - sphere_pos[2];
@@ -240,6 +590,80 @@ index 8b709e1..5586c6d 100644
    // note: if C <= 0 then the start of the ray is inside the sphere
    dReal k = B*B - C;
    if (k < 0) return 0;
+@@ -1607,11 +1721,13 @@ int dCollideRayBox (dxGeom *o1, dxGeom *o2, int flags,
+   tmp[0] = ray->pos[0] - box->pos[0];
+   tmp[1] = ray->pos[1] - box->pos[1];
+   tmp[2] = ray->pos[2] - box->pos[2];
+-  dMULTIPLY1_331 (s,box->R,tmp);
++  // the shipped library sums every component (y + z) + x
++  // (physics-harness-3.md 2.6)
++  dxROTATE_BACK (s,box->R,tmp);
+   tmp[0] = ray->R[0*4+2];
+   tmp[1] = ray->R[1*4+2];
+   tmp[2] = ray->R[2*4+2];
+-  dMULTIPLY1_331 (v,box->R,tmp);
++  dxROTATE_BACK (v,box->R,tmp);
+ 
+   // mirror the line so that v has all components >= 0
+   dVector3 sign;
+@@ -1644,12 +1760,14 @@ int dCollideRayBox (dxGeom *o1, dxGeom *o2, int flags,
+   int nlo = 0, nhi = 0;
+   for (i=0; i<3; i++) {
+     if (v[i] != 0) {
+-      dReal k = (-h[i] - s[i])/v[i];
++      // the shipped library: times one rounded reciprocal per axis
++      dReal iv = dRecip (v[i]);
++      dReal k = (-h[i] - s[i])*iv;
+       if (k > lo) {
+ 	lo = k;
+ 	nlo = i;
+       }
+-      k = (h[i] - s[i])/v[i];
++      k = (h[i] - s[i])*iv;
+       if (k < hi) {
+ 	hi = k;
+ 	nhi = i;
+@@ -1700,11 +1818,13 @@ int dCollideRayCCylinder (dxGeom *o1, dxGeom *o2,
+   cs[0] = ray->pos[0] - ccyl->pos[0];
+   cs[1] = ray->pos[1] - ccyl->pos[1];
+   cs[2] = ray->pos[2] - ccyl->pos[2];
+-  k = dDOT41(ccyl->R+2,cs);	// position of ray start along ccyl axis
++  // the shipped library sums the six dot products here (y + z) + x
++  // (physics-harness-3.md 2.6)
++  k = dxDOT41(dxSumYZX,ccyl->R+2,cs);	// position of ray start along ccyl axis
+   q[0] = k*ccyl->R[0*4+2] - cs[0];
+   q[1] = k*ccyl->R[1*4+2] - cs[1];
+   q[2] = k*ccyl->R[2*4+2] - cs[2];
+-  C = dDOT(q,q) - ccyl->radius*ccyl->radius;
++  C = dxDOT(dxSumYZX,q,q) - ccyl->radius*ccyl->radius;
+   // if C < 0 then ray start position within infinite extension of cylinder
+ 
+   // see if ray start position is inside the capped cylinder
+@@ -1730,12 +1850,12 @@ int dCollideRayCCylinder (dxGeom *o1, dxGeom *o2,
+     if (k < 0) k = -lz2; else k = lz2;
+   }
+   else {
+-    dReal uv = dDOT44(ccyl->R+2,ray->R+2);
++    dReal uv = dxDOT44(dxSumYZX,ccyl->R+2,ray->R+2);
+     r[0] = uv*ccyl->R[0*4+2] - ray->R[0*4+2];
+     r[1] = uv*ccyl->R[1*4+2] - ray->R[1*4+2];
+     r[2] = uv*ccyl->R[2*4+2] - ray->R[2*4+2];
+-    dReal A = dDOT(r,r);
+-    dReal B = 2*dDOT(q,r);
++    dReal A = dxDOT(dxSumYZX,r,r);
++    dReal B = 2*dxDOT(dxSumYZX,q,r);
+     k = B*B-4*A*C;
+     if (k < 0) {
+       // the ray does not intersect the infinite cylinder, but if the ray is
+@@ -1762,7 +1882,7 @@ int dCollideRayCCylinder (dxGeom *o1, dxGeom *o2,
+       q[0] = contact->pos[0] - ccyl->pos[0];
+       q[1] = contact->pos[1] - ccyl->pos[1];
+       q[2] = contact->pos[2] - ccyl->pos[2];
+-      k = dDOT14(q,ccyl->R+2);
++      k = dxDOT14(dxSumYZX,q,ccyl->R+2);
+       dReal nsign = inside_ccyl ? REAL(-1.0) : REAL(1.0);
+       if (k >= -lz2 && k <= lz2) {
+ 	contact->normal[0] = nsign * (contact->pos[0] -
 diff --git a/ode/src/collision_std.h b/ode/src/collision_std.h
 index 4a487e0..b01c2f7 100644
 --- a/ode/src/collision_std.h
@@ -260,11 +684,459 @@ index 4a487e0..b01c2f7 100644
  			  int flags, dContactGeom *contact, int skip);
  int dCollideRayPlane (dxGeom *o1, dxGeom *o2, int flags,
  		      dContactGeom *contact, int skip);
+diff --git a/ode/src/collision_util.cpp b/ode/src/collision_util.cpp
+index 96a3b78..38fc5b8 100644
+--- a/ode/src/collision_util.cpp
++++ b/ode/src/collision_util.cpp
+@@ -31,16 +31,15 @@ functions that are defined in the public header files.
+ #include <ode/collision.h>
+ #include <ode/odemath.h>
+ #include "collision_util.h"
++#include "util.h"
+ 
+ //****************************************************************************
+ 
+-int dCollideSpheres (dVector3 p1, dReal r1,
+-		     dVector3 p2, dReal r2, dContactGeom *c)
+-{
+-  // printf ("d=%.2f  (%.2f %.2f %.2f) (%.2f %.2f %.2f) r1=%.2f r2=%.2f\n",
+-  //	  d,p1[0],p1[1],p1[2],p2[0],p2[1],p2[2],r1,r2);
++// the contact of two spheres given their distance d.
+ 
+-  dReal d = dDISTANCE (p1,p2);
++static int collideSpheresAt (dVector3 p1, dReal r1, dVector3 p2, dReal r2,
++			     dReal d, dContactGeom *c)
++{
+   if (d > (r1 + r2)) return 0;
+   if (d <= 0) {
+     c->pos[0] = p1[0];
+@@ -66,6 +65,25 @@ int dCollideSpheres (dVector3 p1, dReal r1,
+ }
+ 
+ 
++int dCollideSpheres (dVector3 p1, dReal r1,
++		     dVector3 p2, dReal r2, dContactGeom *c)
++{
++  return collideSpheresAt (p1,r1,p2,r2,dDISTANCE (p1,p2),c);
++}
++
++
++// dCollideSpheres with the distance's squares summed (y + z) + x
++// (physics-harness-3.md 2.3).
++
++int dCollideSpheresYZX (dVector3 p1, dReal r1,
++			dVector3 p2, dReal r2, dContactGeom *c)
++{
++  dVector3 q;
++  for (int i=0; i<3; i++) q[i] = p1[i]-p2[i];
++  return collideSpheresAt (p1,r1,p2,r2,dSqrt (dxDOT (dxSumYZX,q,q)),c);
++}
++
++
+ void dLineClosestApproach (const dVector3 pa, const dVector3 ua,
+ 			   const dVector3 pb, const dVector3 ub,
+ 			   dReal *alpha, dReal *beta)
+@@ -112,6 +130,10 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   dVector3 a1a2,b1b2,a1b1,a1b2,a2b1,a2b2,n;
+   dReal la,lb,k,da1,da2,da3,da4,db1,db2,db3,db4,det;
+ 
++  // the shipped library sums every dot product (y + z) + x
++  // (physics-harness-3.md 2.3)
++#define DOT(a,b) dxDOT (dxSumYZX,a,b)
++
+ #define SET2(a,b) a[0]=b[0]; a[1]=b[1]; a[2]=b[2];
+ #define SET3(a,b,op,c) a[0]=b[0] op c[0]; a[1]=b[1] op c[1]; a[2]=b[2] op c[2];
+ 
+@@ -120,8 +142,8 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   SET3 (a1a2,a2,-,a1);
+   SET3 (b1b2,b2,-,b1);
+   SET3 (a1b1,b1,-,a1);
+-  da1 = dDOT(a1a2,a1b1);
+-  db1 = dDOT(b1b2,a1b1);
++  da1 = DOT(a1a2,a1b1);
++  db1 = DOT(b1b2,a1b1);
+   if (da1 <= 0 && db1 >= 0) {
+     SET2 (cp1,a1);
+     SET2 (cp2,b1);
+@@ -129,8 +151,8 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   }
+ 
+   SET3 (a1b2,b2,-,a1);
+-  da2 = dDOT(a1a2,a1b2);
+-  db2 = dDOT(b1b2,a1b2);
++  da2 = DOT(a1a2,a1b2);
++  db2 = DOT(b1b2,a1b2);
+   if (da2 <= 0 && db2 <= 0) {
+     SET2 (cp1,a1);
+     SET2 (cp2,b2);
+@@ -138,8 +160,8 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   }
+ 
+   SET3 (a2b1,b1,-,a2);
+-  da3 = dDOT(a1a2,a2b1);
+-  db3 = dDOT(b1b2,a2b1);
++  da3 = DOT(a1a2,a2b1);
++  db3 = DOT(b1b2,a2b1);
+   if (da3 >= 0 && db3 >= 0) {
+     SET2 (cp1,a2);
+     SET2 (cp2,b1);
+@@ -147,8 +169,8 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   }
+ 
+   SET3 (a2b2,b2,-,a2);
+-  da4 = dDOT(a1a2,a2b2);
+-  db4 = dDOT(b1b2,a2b2);
++  da4 = DOT(a1a2,a2b2);
++  db4 = DOT(b1b2,a2b2);
+   if (da4 >= 0 && db4 <= 0) {
+     SET2 (cp1,a2);
+     SET2 (cp2,b2);
+@@ -159,11 +181,11 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   // if one or both of the lines has zero length, we will never get to here,
+   // so we do not have to worry about the following divisions by zero.
+ 
+-  la = dDOT(a1a2,a1a2);
++  la = DOT(a1a2,a1a2);
+   if (da1 >= 0 && da3 <= 0) {
+     k = da1 / la;
+     SET3 (n,a1b1,-,k*a1a2);
+-    if (dDOT(b1b2,n) >= 0) {
++    if (DOT(b1b2,n) >= 0) {
+       SET3 (cp1,a1,+,k*a1a2);
+       SET2 (cp2,b1);
+       return;
+@@ -173,18 +195,18 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   if (da2 >= 0 && da4 <= 0) {
+     k = da2 / la;
+     SET3 (n,a1b2,-,k*a1a2);
+-    if (dDOT(b1b2,n) <= 0) {
++    if (DOT(b1b2,n) <= 0) {
+       SET3 (cp1,a1,+,k*a1a2);
+       SET2 (cp2,b2);
+       return;
+     }
+   }
+ 
+-  lb = dDOT(b1b2,b1b2);
++  lb = DOT(b1b2,b1b2);
+   if (db1 <= 0 && db2 >= 0) {
+     k = -db1 / lb;
+     SET3 (n,-a1b1,-,k*b1b2);
+-    if (dDOT(a1a2,n) >= 0) {
++    if (DOT(a1a2,n) >= 0) {
+       SET2 (cp1,a1);
+       SET3 (cp2,b1,+,k*b1b2);
+       return;
+@@ -194,7 +216,7 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+   if (db3 <= 0 && db4 >= 0) {
+     k = -db3 / lb;
+     SET3 (n,-a2b1,-,k*b1b2);
+-    if (dDOT(a1a2,n) <= 0) {
++    if (DOT(a1a2,n) <= 0) {
+       SET2 (cp1,a2);
+       SET3 (cp2,b1,+,k*b1b2);
+       return;
+@@ -203,7 +225,7 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+ 
+   // it must be edge-edge
+ 
+-  k = dDOT(a1a2,b1b2);
++  k = DOT(a1a2,b1b2);
+   det = la*lb - k*k;
+   if (det <= 0) {
+     // this should never happen, but just in case...
+@@ -219,6 +241,7 @@ void dClosestLineSegmentPoints (const dVector3 a1, const dVector3 a2,
+ 
+ # undef SET2
+ # undef SET3
++# undef DOT
+ }
+ 
+ 
+@@ -257,11 +280,13 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+   tmp[0] = p1[0] - c[0];
+   tmp[1] = p1[1] - c[1];
+   tmp[2] = p1[2] - c[2];
+-  dMULTIPLY1_331 (s,R,tmp);
++  // the shipped library sums components 1 and 2 (y + z) + x
++  // (physics-harness-3.md 2.2)
++  dxMULTIPLY1_331 (s,R,tmp,dxSumXYZ,dxSumYZX,dxSumYZX);
+   tmp[0] = p2[0] - p1[0];
+   tmp[1] = p2[1] - p1[1];
+   tmp[2] = p2[2] - p1[2];
+-  dMULTIPLY1_331 (v,R,tmp);
++  dxMULTIPLY1_331 (v,R,tmp,dxSumXYZ,dxSumYZX,dxSumYZX);
+ 
+   // mirror the line so that v has all components >= 0
+   dVector3 sign;
+@@ -310,9 +335,11 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+     }
+   }
+ 
+-  // compute d|d|^2/dt for t=0. if it's >= 0 then p1 is the closest point
++  // compute d|d|^2/dt for t=0. if it's >= 0 then p1 is the closest point.
++  // the shipped library subtracts the products from -0
++  // (physics-harness-3.md 2.2)
+   dReal t=0;
+-  dReal dd2dt = 0;
++  dReal dd2dt = REAL(-0.0);
+   for (i=0; i<3; i++) dd2dt -= (region[i] ? v2[i] : 0) * tanchor[i];
+   if (dd2dt >= 0) goto got_answer;
+ 
+@@ -324,11 +351,13 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+         next_t = tanchor[i];
+     }
+ 
+-    // compute d|d|^2/dt for the next t
+-    dReal next_dd2dt = 0;
++    // compute d|d|^2/dt for the next t: the shipped library sums the three
++    // terms from the first (physics-harness-3.md 2.2)
++    dReal term[3];
+     for (i=0; i<3; i++) {
+-      next_dd2dt += (region[i] ? v2[i] : 0) * (next_t - tanchor[i]);
++      term[i] = (region[i] ? v2[i] : 0) * (next_t - tanchor[i]);
+     }
++    dReal next_dd2dt = term[0] + term[1] + term[2];
+ 
+     // if the sign of d|d|^2/dt has changed, solution = the crossover point
+     if (next_dd2dt >= 0) {
+@@ -361,7 +390,7 @@ void dClosestLineBoxPoints (const dVector3 p1, const dVector3 p2,
+     if (tmp[i] < -h[i]) tmp[i] = -h[i];
+     else if (tmp[i] > h[i]) tmp[i] = h[i];
+   }
+-  dMULTIPLY0_331 (s,R,tmp);
++  dxMULTIPLY0_331 (s,R,tmp,dxSumXYZ,dxSumYZX,dxSumYZX);
+   for (i=0; i<3; i++) bret[i] = s[i] + c[i];
+ }
+ 
+diff --git a/ode/src/collision_util.h b/ode/src/collision_util.h
+index 4c5fb08..d8e164e 100644
+--- a/ode/src/collision_util.h
++++ b/ode/src/collision_util.h
+@@ -44,6 +44,12 @@ some useful collision utility stuff.
+ int dCollideSpheres (dVector3 p1, dReal r1,
+ 		     dVector3 p2, dReal r2, dContactGeom *c);
+ 
++// the same, the distance's squares summed (y + z) + x (the shipped library's
++// for some contacts of two capped cylinders).
++
++int dCollideSpheresYZX (dVector3 p1, dReal r1,
++			dVector3 p2, dReal r2, dContactGeom *c);
++
+ 
+ // given two lines
+ //    qa = pa + alpha* ua
 diff --git a/ode/src/joint.cpp b/ode/src/joint.cpp
-index 4e61b0a..90ee878 100644
+index 4e61b0a..242c794 100644
 --- a/ode/src/joint.cpp
 +++ b/ode/src/joint.cpp
-@@ -384,9 +384,10 @@ void dxJointLimitMotor::init (dxWorld *world)
+@@ -33,6 +33,11 @@ transform is the identity.
+ #include <ode/rotation.h>
+ #include <ode/matrix.h>
+ #include "joint.h"
++#include "util.h"
++
++// the shipped library's joint arithmetic (physics-harness-3.md 5): every
++// rotation of a stored anchor, axis or offset into the world frame and back
++// sums each row (y + z) + x (dxROTATE, dxROTATE_BACK; rule 1).
+ 
+ //****************************************************************************
+ // externs
+@@ -43,6 +48,32 @@ extern "C" void dBodyAddForce (dBodyID, dReal fx, dReal fy, dReal fz);
+ //****************************************************************************
+ // utility
+ 
++// the relative rotation qb^-1 qc as dQMultiply1 computes it, but its scalar
++// part summing the products of components a, b, c, d in that order (the
++// shipped library's setters, physics-harness-3.md 5.2 rule 15).
++
++static void relativeRotation (dQuaternion qa, const dQuaternion qb,
++			      const dQuaternion qc, int a, int b, int c, int d)
++{
++  dQMultiply1 (qa,qb,qc);
++  qa[0] = ((qb[a]*qc[a] + qb[b]*qc[b]) + qb[c]*qc[c]) + qb[d]*qc[d];
++}
++
++
++// normalise a given its squared length L: the library's rule
++// (physics-library.md 3.5) with L summed by the caller.
++
++static void normaliseWith (dVector3 a, dReal L)
++{
++  if (L >= REAL(1.1920929e-5)) {
++    L = dRecipSqrt (L);
++    a[0] *= L;
++    a[1] *= L;
++    a[2] *= L;
++  }
++  else dNormalize3_slow (a);
++}
++
+ // set three "ball-and-socket" rows in the constraint equation, and the
+ // corresponding right hand side.
+ 
+@@ -58,13 +89,13 @@ static inline void setBall (dxJoint *joint, dxJoint::Info2 *info,
+   info->J1l[0] = 1;
+   info->J1l[s+1] = 1;
+   info->J1l[2*s+2] = 1;
+-  dMULTIPLY0_331 (a1,joint->node[0].body->R,anchor1);
++  dxROTATE (a1,joint->node[0].body->R,anchor1);
+   dCROSSMAT (info->J1a,a1,s,-,+);
+   if (joint->node[1].body) {
+     info->J2l[0] = -1;
+     info->J2l[s+1] = -1;
+     info->J2l[2*s+2] = -1;
+-    dMULTIPLY0_331 (a2,joint->node[1].body->R,anchor2);
++    dxROTATE (a2,joint->node[1].body->R,anchor2);
+     dCROSSMAT (info->J2a,a2,s,+,-);
+   }
+ 
+@@ -108,7 +139,7 @@ static inline void setBall2 (dxJoint *joint, dxJoint::Info2 *info,
+   for (i=0; i<3; i++) info->J1l[i] = axis[i];
+   for (i=0; i<3; i++) info->J1l[s+i] = q1[i];
+   for (i=0; i<3; i++) info->J1l[2*s+i] = q2[i];
+-  dMULTIPLY0_331 (a1,joint->node[0].body->R,anchor1);
++  dxROTATE (a1,joint->node[0].body->R,anchor1);
+   dCROSS (info->J1a,=,a1,axis);
+   dCROSS (info->J1a+s,=,a1,q1);
+   dCROSS (info->J1a+2*s,=,a1,q2);
+@@ -116,7 +147,7 @@ static inline void setBall2 (dxJoint *joint, dxJoint::Info2 *info,
+     for (i=0; i<3; i++) info->J2l[i] = -axis[i];
+     for (i=0; i<3; i++) info->J2l[s+i] = -q1[i];
+     for (i=0; i<3; i++) info->J2l[2*s+i] = -q2[i];
+-    dMULTIPLY0_331 (a2,joint->node[1].body->R,anchor2);
++    dxROTATE (a2,joint->node[1].body->R,anchor2);
+     dCROSS (info->J2a,= -,a2,axis);
+     dCROSS (info->J2a+s,= -,a2,q1);
+     dCROSS (info->J2a+2*s,= -,a2,q2);
+@@ -129,14 +160,16 @@ static inline void setBall2 (dxJoint *joint, dxJoint::Info2 *info,
+   for (i=0; i<3; i++) a1[i] += joint->node[0].body->pos[i];
+   if (joint->node[1].body) {
+     for (i=0; i<3; i++) a2[i] += joint->node[1].body->pos[i];
++    // the shipped library sums the plane-space vectors' dots with a1
++    // (x + z) + y (physics-harness-3.md 5.1 rule 7)
+     info->c[0] = k1 * (dDOT(axis,a2) - dDOT(axis,a1));
+-    info->c[1] = k * (dDOT(q1,a2) - dDOT(q1,a1));
+-    info->c[2] = k * (dDOT(q2,a2) - dDOT(q2,a1));
++    info->c[1] = k * (dDOT(q1,a2) - dxDOT(dxSumXZY,q1,a1));
++    info->c[2] = k * (dDOT(q2,a2) - dxDOT(dxSumXZY,q2,a1));
+   }
+   else {
+     info->c[0] = k1 * (dDOT(axis,anchor2) - dDOT(axis,a1));
+-    info->c[1] = k * (dDOT(q1,anchor2) - dDOT(q1,a1));
+-    info->c[2] = k * (dDOT(q2,anchor2) - dDOT(q2,a1));
++    info->c[1] = k * (dDOT(q1,anchor2) - dxDOT(dxSumXZY,q1,a1));
++    info->c[2] = k * (dDOT(q2,anchor2) - dxDOT(dxSumXZY,q2,a1));
+   }
+ }
+ 
+@@ -188,11 +221,12 @@ static void setFixedOrientation(dxJoint *joint, dxJoint::Info2 *info, dQuaternio
+     qerr[2] = -qerr[2];
+     qerr[3] = -qerr[3];
+   }
+-  dMULTIPLY0_331 (e,joint->node[0].body->R,qerr+1); // @@@ bad SIMD padding!
++  dxROTATE (e,joint->node[0].body->R,qerr+1); // @@@ bad SIMD padding!
+   dReal k = info->fps * info->erp;
+-  info->c[start_row] = 2*k * e[0];
+-  info->c[start_row+1] = 2*k * e[1];
+-  info->c[start_row+2] = 2*k * e[2];
++  // the shipped library: (e k) 2 (physics-harness-3.md 5.1 rule 5)
++  info->c[start_row] = e[0] * k * 2;
++  info->c[start_row+1] = e[1] * k * 2;
++  info->c[start_row+2] = e[2] * k * 2;
+ }
+ 
+ 
+@@ -207,13 +241,13 @@ static void setAnchors (dxJoint *j, dReal x, dReal y, dReal z,
+     q[1] = y - j->node[0].body->pos[1];
+     q[2] = z - j->node[0].body->pos[2];
+     q[3] = 0;
+-    dMULTIPLY1_331 (anchor1,j->node[0].body->R,q);
++    dxROTATE_BACK (anchor1,j->node[0].body->R,q);
+     if (j->node[1].body) {
+       q[0] = x - j->node[1].body->pos[0];
+       q[1] = y - j->node[1].body->pos[1];
+       q[2] = z - j->node[1].body->pos[2];
+       q[3] = 0;
+-      dMULTIPLY1_331 (anchor2,j->node[1].body->R,q);
++      dxROTATE_BACK (anchor2,j->node[1].body->R,q);
+     }
+     else {
+       anchor2[0] = x;
+@@ -239,12 +273,12 @@ static void setAxes (dxJoint *j, dReal x, dReal y, dReal z,
+     q[3] = 0;
+     dNormalize3 (q);
+     if (axis1) {
+-      dMULTIPLY1_331 (axis1,j->node[0].body->R,q);
++      dxROTATE_BACK (axis1,j->node[0].body->R,q);
+       axis1[3] = 0;
+     }
+     if (axis2) {
+       if (j->node[1].body) {
+-	dMULTIPLY1_331 (axis2,j->node[1].body->R,q);
++	dxROTATE_BACK (axis2,j->node[1].body->R,q);
+       }
+       else {
+ 	axis2[0] = x;
+@@ -260,7 +294,7 @@ static void setAxes (dxJoint *j, dReal x, dReal y, dReal z,
+ static void getAnchor (dxJoint *j, dVector3 result, dVector3 anchor1)
+ {
+   if (j->node[0].body) {
+-    dMULTIPLY0_331 (result,j->node[0].body->R,anchor1);
++    dxROTATE (result,j->node[0].body->R,anchor1);
+     result[0] += j->node[0].body->pos[0];
+     result[1] += j->node[0].body->pos[1];
+     result[2] += j->node[0].body->pos[2];
+@@ -271,7 +305,7 @@ static void getAnchor (dxJoint *j, dVector3 result, dVector3 anchor1)
+ static void getAnchor2 (dxJoint *j, dVector3 result, dVector3 anchor2)
+ {
+   if (j->node[1].body) {
+-    dMULTIPLY0_331 (result,j->node[1].body->R,anchor2);
++    dxROTATE (result,j->node[1].body->R,anchor2);
+     result[0] += j->node[1].body->pos[0];
+     result[1] += j->node[1].body->pos[1];
+     result[2] += j->node[1].body->pos[2];
+@@ -287,7 +321,7 @@ static void getAnchor2 (dxJoint *j, dVector3 result, dVector3 anchor2)
+ static void getAxis (dxJoint *j, dVector3 result, dVector3 axis1)
+ {
+   if (j->node[0].body) {
+-    dMULTIPLY0_331 (result,j->node[0].body->R,axis1);
++    dxROTATE (result,j->node[0].body->R,axis1);
+   }
+ }
+ 
+@@ -295,7 +329,7 @@ static void getAxis (dxJoint *j, dVector3 result, dVector3 axis1)
+ static void getAxis2 (dxJoint *j, dVector3 result, dVector3 axis2)
+ {
+   if (j->node[1].body) {
+-    dMULTIPLY0_331 (result,j->node[1].body->R,axis2);
++    dxROTATE (result,j->node[1].body->R,axis2);
+   }
+   else {
+     result[0] = axis2[0];
+@@ -365,6 +399,21 @@ static dReal getHingeAngle (dxBody *body1, dxBody *body2, dVector3 axis,
+     dQuaternion qq;
+     dQMultiply1 (qq,body1->q,body2->q);
+     dQMultiply2 (qrel,qq,q_initial);
++    // the shipped library with two bodies (physics-harness-3.md 5.2 rule
++    // 12): the scalar part summing the products of components 0, 3, 1, 2;
++    // the sine of the half angle on the x87, its squares summed last first;
++    // the sign test's dot (y + z) + x
++    qrel[0] = ((qq[0]*q_initial[0] + qq[3]*q_initial[3]) +
++	       qq[1]*q_initial[1]) + qq[2]*q_initial[2];
++    dReal cost2 = qrel[0];
++    dReal sint2 = dX87Store (dX87SqrtD (dX87AddD (dX87AddD (
++      dX87MulD (qrel[3],qrel[3]),dX87MulD (qrel[2],qrel[2])),
++      dX87MulD (qrel[1],qrel[1]))));
++    dReal theta = (dxDOT (dxSumYZX,qrel+1,axis) >= 0) ?
++      (2 * dAtan2(sint2,cost2)) :
++      (2 * dAtan2(sint2,-cost2));
++    if (theta > M_PI) theta -= 2*M_PI;
++    return -theta;
+   }
+   else {
+     // pretend body2->q is the identity
+@@ -384,9 +433,10 @@ void dxJointLimitMotor::init (dxWorld *world)
    lostop = -dInfinity;
    histop = dInfinity;
    fudge_factor = 1;
@@ -278,7 +1150,179 @@ index 4e61b0a..90ee878 100644
    bounce = 0;
    limit = 0;
    limit_err = 0;
-@@ -1256,9 +1257,9 @@ static void contactGetInfo2 (dxJointContact *j, dxJoint::Info2 *info)
+@@ -586,15 +636,17 @@ int dxJointLimitMotor::addLimot (dxJoint *joint,
+ 	if (bounce > 0) {
+ 	  // calculate joint velocity
+ 	  dReal vel;
++	  // the shipped library sums the dots (y + z) + x
++	  // (physics-harness-3.md 5.1 rule 9)
+ 	  if (rotational) {
+-	    vel = dDOT(joint->node[0].body->avel,ax1);
++	    vel = dxDOT(dxSumYZX,joint->node[0].body->avel,ax1);
+ 	    if (joint->node[1].body)
+-	      vel -= dDOT(joint->node[1].body->avel,ax1);
++	      vel -= dxDOT(dxSumYZX,joint->node[1].body->avel,ax1);
+ 	  }
+ 	  else {
+-	    vel = dDOT(joint->node[0].body->lvel,ax1);
++	    vel = dxDOT(dxSumYZX,joint->node[0].body->lvel,ax1);
+ 	    if (joint->node[1].body)
+-	      vel -= dDOT(joint->node[1].body->lvel,ax1);
++	      vel -= dxDOT(dxSumYZX,joint->node[1].body->lvel,ax1);
+ 	  }
+ 
+ 	  // only apply bounce if the velocity is incoming, and if the
+@@ -734,7 +786,7 @@ static void hingeGetInfo2 (dxJointHinge *joint, dxJoint::Info2 *info)
+ 
+   dVector3 ax1;  // length 1 joint axis in global coordinates, from 1st body
+   dVector3 p,q;  // plane space vectors for ax1
+-  dMULTIPLY0_331 (ax1,joint->node[0].body->R,joint->axis1);
++  dxROTATE (ax1,joint->node[0].body->R,joint->axis1);
+   dPlaneSpace (ax1,p,q);
+ 
+   int s3=3*info->rowskip;
+@@ -774,7 +826,7 @@ static void hingeGetInfo2 (dxJointHinge *joint, dxJoint::Info2 *info)
+ 
+   dVector3 ax2,b;
+   if (joint->node[1].body) {
+-    dMULTIPLY0_331 (ax2,joint->node[1].body->R,joint->axis2);
++    dxROTATE (ax2,joint->node[1].body->R,joint->axis2);
+   }
+   else {
+     ax2[0] = joint->axis2[0];
+@@ -783,8 +835,10 @@ static void hingeGetInfo2 (dxJointHinge *joint, dxJoint::Info2 *info)
+   }
+   dCROSS (b,=,ax1,ax2);
+   dReal k = info->fps * info->erp;
+-  info->c[3] = k * dDOT(b,p);
+-  info->c[4] = k * dDOT(b,q);
++  // the shipped library sums the dots (y + z) + x (physics-harness-3.md 5.1
++  // rule 3)
++  info->c[3] = k * dxDOT(dxSumYZX,b,p);
++  info->c[4] = k * dxDOT(dxSumYZX,b,q);
+ 
+   // if the hinge is powered, or has joint limits, add in the stuff
+   joint->limot.addLimot (joint,info,5,ax1,1);
+@@ -793,11 +847,20 @@ static void hingeGetInfo2 (dxJointHinge *joint, dxJoint::Info2 *info)
+ 
+ // compute initial relative rotation body1 -> body2, or env -> body1
+ 
+-static void hingeComputeInitialRelativeRotation (dxJointHinge *joint)
++static void hingeComputeInitialRelativeRotation (dxJointHinge *joint,
++						 int shipped_order = 0)
+ {
+   if (joint->node[0].body) {
+     if (joint->node[1].body) {
+-      dQMultiply1 (joint->qrel,joint->node[0].body->q,joint->node[1].body->q);
++      if (shipped_order) {
++	// dJointSetHingeAxis's (physics-harness-3.md 5.2 rule 15)
++	relativeRotation (joint->qrel,joint->node[0].body->q,
++			  joint->node[1].body->q,3,0,2,1);
++      }
++      else {
++	dQMultiply1 (joint->qrel,joint->node[0].body->q,
++		     joint->node[1].body->q);
++      }
+     }
+     else {
+       // set joint->qrel to the transpose of the first body q
+@@ -824,7 +887,7 @@ extern "C" void dJointSetHingeAxis (dxJointHinge *joint,
+   dUASSERT(joint,"bad joint argument");
+   dUASSERT(joint->vtable == &__dhinge_vtable,"joint is not a hinge");
+   setAxes (joint,x,y,z,joint->axis1,joint->axis2);
+-  hingeComputeInitialRelativeRotation (joint);
++  hingeComputeInitialRelativeRotation (joint,1);
+ }
+ 
+ 
+@@ -900,9 +963,12 @@ extern "C" dReal dJointGetHingeAngleRate (dxJointHinge *joint)
+   dUASSERT(joint->vtable == &__dhinge_vtable,"joint is not a Hinge");
+   if (joint->node[0].body) {
+     dVector3 axis;
+-    dMULTIPLY0_331 (axis,joint->node[0].body->R,joint->axis1);
+-    dReal rate = dDOT(axis,joint->node[0].body->avel);
+-    if (joint->node[1].body) rate -= dDOT(axis,joint->node[1].body->avel);
++    dxROTATE (axis,joint->node[0].body->R,joint->axis1);
++    // the shipped library sums both dots (y + z) + x (physics-harness-3.md
++    // 5.2 rule 13)
++    dReal rate = dxDOT(dxSumYZX,axis,joint->node[0].body->avel);
++    if (joint->node[1].body)
++      rate -= dxDOT(dxSumYZX,axis,joint->node[1].body->avel);
+     if (joint->flags & dJOINT_REVERSE) rate = - rate;
+     return rate;
+   }
+@@ -958,13 +1024,18 @@ extern "C" dReal dJointGetSliderPosition (dxJointSlider *joint)
+ 
+   // get axis1 in global coordinates
+   dVector3 ax1,q;
+-  dMULTIPLY0_331 (ax1,joint->node[0].body->R,joint->axis1);
++  dxROTATE (ax1,joint->node[0].body->R,joint->axis1);
+ 
+   if (joint->node[1].body) {
+     // get body2 + offset point in global coordinates
+-    dMULTIPLY0_331 (q,joint->node[1].body->R,joint->offset);
++    dxROTATE (q,joint->node[1].body->R,joint->offset);
+     for (int i=0; i<3; i++) q[i] = joint->node[0].body->pos[i] - q[i] -
+ 			      joint->node[1].body->pos[i];
++    // the shipped library: the dot (y + z) + x on the x87
++    // (physics-harness-3.md 5.2 rule 14)
++    return dX87Store (dX87AddD (dX87AddD (dX87MulD (q[2],ax1[2]),
++					  dX87MulD (q[1],ax1[1])),
++				dX87MulD (q[0],ax1[0])));
+   }
+   else {
+     for (int i=0; i<3; i++) q[i] = joint->node[0].body->pos[i] -
+@@ -982,7 +1053,7 @@ extern "C" dReal dJointGetSliderPositionRate (dxJointSlider *joint)
+ 
+   // get axis1 in global coordinates
+   dVector3 ax1;
+-  dMULTIPLY0_331 (ax1,joint->node[0].body->R,joint->axis1);
++  dxROTATE (ax1,joint->node[0].body->R,joint->axis1);
+ 
+   if (joint->node[1].body) {
+     return dDOT(ax1,joint->node[0].body->lvel) -
+@@ -1055,7 +1126,7 @@ static void sliderGetInfo2 (dxJointSlider *joint, dxJoint::Info2 *info)
+ 
+   dVector3 ax1;	// joint axis in global coordinates (unit length)
+   dVector3 p,q;	// plane space of ax1
+-  dMULTIPLY0_331 (ax1,R1,joint->axis1);
++  dxROTATE (ax1,R1,joint->axis1);
+   dPlaneSpace (ax1,p,q);
+   if (joint->node[1].body) {
+     dVector3 tmp;
+@@ -1076,10 +1147,12 @@ static void sliderGetInfo2 (dxJointSlider *joint, dxJoint::Info2 *info)
+   dReal k = info->fps * info->erp;
+   if (joint->node[1].body) {
+     dVector3 ofs;		// offset point in global coordinates
+-    dMULTIPLY0_331 (ofs,R2,joint->offset);
++    dxROTATE (ofs,R2,joint->offset);
+     for (i=0; i<3; i++) c[i] += ofs[i];
+-    info->c[3] = k * dDOT(p,c);
+-    info->c[4] = k * dDOT(q,c);
++    // the shipped library sums the dots (x + z) + y (physics-harness-3.md
++    // 5.1 rule 4)
++    info->c[3] = k * dxDOT(dxSumXZY,p,c);
++    info->c[4] = k * dxDOT(dxSumXZY,q,c);
+   }
+   else {
+     dVector3 ofs;		// offset point in global coordinates
+@@ -1104,11 +1177,13 @@ extern "C" void dJointSetSliderAxis (dxJointSlider *joint,
+   // compute initial relative rotation body1 -> body2, or env -> body1
+   // also compute center of body1 w.r.t body 2
+   if (joint->node[1].body) {
+-    dQMultiply1 (joint->qrel,joint->node[0].body->q,joint->node[1].body->q);
++    // the shipped library's scalar part (physics-harness-3.md 5.2 rule 15)
++    relativeRotation (joint->qrel,joint->node[0].body->q,
++		      joint->node[1].body->q,0,3,2,1);
+     dVector3 c;
+     for (i=0; i<3; i++)
+       c[i] = joint->node[0].body->pos[i] - joint->node[1].body->pos[i];
+-    dMULTIPLY1_331 (joint->offset,joint->node[1].body->R,c);
++    dxROTATE_BACK (joint->offset,joint->node[1].body->R,c);
+   }
+   else {
+     // set joint->qrel to the transpose of the first body's q
+@@ -1256,9 +1331,9 @@ static void contactGetInfo2 (dxJointContact *j, dxJoint::Info2 *info)
    if (j->contact.surface.mode & dContactSoftERP)
      erp = j->contact.surface.soft_erp;
    dReal k = info->fps * erp;
@@ -290,7 +1334,26 @@ index 4e61b0a..90ee878 100644
    if (k*depth > maxvel) info->c[0] = maxvel; else info->c[0] = k*depth;
    if (j->contact.surface.mode & dContactSoftCFM)
      info->cfm[0] = j->contact.surface.soft_cfm;
-@@ -1366,6 +1367,24 @@ dxJoint::Vtable __dcontact_vtable = {
+@@ -1266,11 +1341,14 @@ static void contactGetInfo2 (dxJointContact *j, dxJoint::Info2 *info)
+   // deal with bounce
+   if (j->contact.surface.mode & dContactBounce) {
+     // calculate outgoing velocity (-ve for incoming contact)
+-    dReal outgoing = dDOT(info->J1l,j->node[0].body->lvel) +
+-      dDOT(info->J1a,j->node[0].body->avel);
++    // the shipped library sums each dot (y + z) + x, both steppers
++    // (physics-harness-3.md 3 item 7, 4.1 rule 4: its other groupings of
++    // the four give the same values)
++    dReal outgoing = dxDOT(dxSumYZX,info->J1l,j->node[0].body->lvel) +
++      dxDOT(dxSumYZX,info->J1a,j->node[0].body->avel);
+     if (j->node[1].body) {
+-      outgoing += dDOT(info->J2l,j->node[1].body->lvel) +
+-	dDOT(info->J2a,j->node[1].body->avel);
++      outgoing += dxDOT(dxSumYZX,info->J2l,j->node[1].body->lvel) +
++	dxDOT(dxSumYZX,info->J2a,j->node[1].body->avel);
+     }
+     // only apply bounce if the outgoing velocity is greater than the
+     // threshold, and if the resulting c[0] exceeds what we already have.
+@@ -1366,6 +1444,24 @@ dxJoint::Vtable __dcontact_vtable = {
    (dxJoint::getInfo2_fn*) contactGetInfo2,
    dJointTypeContact};
  
@@ -315,7 +1378,7 @@ index 4e61b0a..90ee878 100644
  //****************************************************************************
  // hinge 2. note that this joint must be attached to two bodies for it to work
  
-@@ -1399,8 +1418,8 @@ static void hinge2Init (dxJointHinge2 *j)
+@@ -1399,8 +1495,8 @@ static void hinge2Init (dxJointHinge2 *j)
    j->limot1.init (j->world);
    j->limot2.init (j->world);
  
@@ -326,10 +1389,154 @@ index 4e61b0a..90ee878 100644
  
    j->flags |= dJOINT_TWOBODIES;
  }
-@@ -2654,6 +2673,28 @@ extern "C" void dJointSetFixed (dxJointFixed *joint)
+@@ -1443,11 +1539,19 @@ static void hinge2GetInfo1 (dxJointHinge2 *j, dxJoint::Info1 *info)
+ 
+ static void hinge2GetInfo2 (dxJointHinge2 *joint, dxJoint::Info2 *info)
+ {
+-  // get information we need to set the hinge row
++  // get information we need to set the hinge row. the shipped library
++  // (physics-harness-3.md 5.1 rule 7): one squared length summed
++  // (y + z) + x for the sine and q's normalisation, the cosine (x + z) + y
+   dReal s,c;
+   dVector3 q;
+-  HINGE2_GET_AXIS_INFO (q,s,c);
+-  dNormalize3 (q);		// @@@ quicker: divide q by s ?
++  dVector3 ax1,ax2;
++  dxROTATE (ax1,joint->node[0].body->R,joint->axis1);
++  dxROTATE (ax2,joint->node[1].body->R,joint->axis2);
++  dCROSS (q,=,ax1,ax2);
++  dReal L = dxDOT (dxSumYZX,q,q);
++  s = dSqrt (L);
++  c = dxDOT (dxSumXZY,ax1,ax2);
++  normaliseWith (q,L);
+ 
+   // set the three ball-and-socket rows (aligned to the suspension axis ax1)
+   setBall2 (joint,info,joint->anchor1,joint->anchor2,ax1,joint->susp_erp);
+@@ -1543,7 +1647,7 @@ extern "C" void dJointSetHinge2Axis1 (dxJointHinge2 *joint,
+     q[2] = z;
+     q[3] = 0;
+     dNormalize3 (q);
+-    dMULTIPLY1_331 (joint->axis1,joint->node[0].body->R,q);
++    dxROTATE_BACK (joint->axis1,joint->node[0].body->R,q);
+     joint->axis1[3] = 0;
+ 
+     // compute the sin and cos of the angle between axis 1 and axis 2
+@@ -1566,7 +1670,7 @@ extern "C" void dJointSetHinge2Axis2 (dxJointHinge2 *joint,
+     q[2] = z;
+     q[3] = 0;
+     dNormalize3 (q);
+-    dMULTIPLY1_331 (joint->axis2,joint->node[1].body->R,q);
++    dxROTATE_BACK (joint->axis2,joint->node[1].body->R,q);
+     joint->axis1[3] = 0;
+ 
+     // compute the sin and cos of the angle between axis 1 and axis 2
+@@ -1623,7 +1727,7 @@ extern "C" void dJointGetHinge2Axis1 (dxJointHinge2 *joint, dVector3 result)
+   dUASSERT(result,"bad result argument");
+   dUASSERT(joint->vtable == &__dhinge2_vtable,"joint is not a hinge2");
+   if (joint->node[0].body) {
+-    dMULTIPLY0_331 (result,joint->node[0].body->R,joint->axis1);
++    dxROTATE (result,joint->node[0].body->R,joint->axis1);
+   }
  }
  
+@@ -1634,7 +1738,7 @@ extern "C" void dJointGetHinge2Axis2 (dxJointHinge2 *joint, dVector3 result)
+   dUASSERT(result,"bad result argument");
+   dUASSERT(joint->vtable == &__dhinge2_vtable,"joint is not a hinge2");
+   if (joint->node[1].body) {
+-    dMULTIPLY0_331 (result,joint->node[1].body->R,joint->axis2);
++    dxROTATE (result,joint->node[1].body->R,joint->axis2);
+   }
+ }
  
+@@ -1669,7 +1773,7 @@ extern "C" dReal dJointGetHinge2Angle1Rate (dxJointHinge2 *joint)
+   dUASSERT(joint->vtable == &__dhinge2_vtable,"joint is not a hinge2");
+   if (joint->node[0].body) {
+     dVector3 axis;
+-    dMULTIPLY0_331 (axis,joint->node[0].body->R,joint->axis1);
++    dxROTATE (axis,joint->node[0].body->R,joint->axis1);
+     dReal rate = dDOT(axis,joint->node[0].body->avel);
+     if (joint->node[1].body) rate -= dDOT(axis,joint->node[1].body->avel);
+     return rate;
+@@ -1684,7 +1788,7 @@ extern "C" dReal dJointGetHinge2Angle2Rate (dxJointHinge2 *joint)
+   dUASSERT(joint->vtable == &__dhinge2_vtable,"joint is not a hinge2");
+   if (joint->node[0].body && joint->node[1].body) {
+     dVector3 axis;
+-    dMULTIPLY0_331 (axis,joint->node[1].body->R,joint->axis2);
++    dxROTATE (axis,joint->node[1].body->R,joint->axis2);
+     dReal rate = dDOT(axis,joint->node[0].body->avel);
+     if (joint->node[1].body) rate -= dDOT(axis,joint->node[1].body->avel);
+     return rate;
+@@ -1744,10 +1848,10 @@ static void universalInit (dxJointUniversal *j)
+ static void getUniversalAxes(dxJointUniversal *joint, dVector3 ax1, dVector3 ax2)
+ {
+   // This says "ax1 = joint->node[0].body->R * joint->axis1"
+-  dMULTIPLY0_331 (ax1,joint->node[0].body->R,joint->axis1);
++  dxROTATE (ax1,joint->node[0].body->R,joint->axis1);
+ 
+   if (joint->node[1].body) {
+-    dMULTIPLY0_331 (ax2,joint->node[1].body->R,joint->axis2);
++    dxROTATE (ax2,joint->node[1].body->R,joint->axis2);
+   }
+   else {
+     ax2[0] = joint->axis2[0];
+@@ -1889,13 +1993,15 @@ static void universalGetInfo2 (dxJointUniversal *joint, dxJoint::Info2 *info)
+   dVector3 p;
+   dReal k;
+ 
++  // the shipped library (physics-harness-3.md 5.1 rule 6): the dot and p's
++  // squared length (y + z) + x
+   getUniversalAxes(joint, ax1, ax2);
+-  k = dDOT(ax1, ax2);
++  k = dxDOT(dxSumYZX, ax1, ax2);
+   ax2_temp[0] = ax2[0] - k*ax1[0];
+   ax2_temp[1] = ax2[1] - k*ax1[1];
+   ax2_temp[2] = ax2[2] - k*ax1[2];
+   dCROSS(p, =, ax1, ax2_temp);
+-  dNormalize3(p);
++  normaliseWith (p,dxDOT(dxSumYZX, p, p));
+ 
+   int s3=3*info->rowskip;
+ 
+@@ -1923,7 +2029,8 @@ static void universalGetInfo2 (dxJointUniversal *joint, dxJoint::Info2 *info)
+   // theta - Pi/2 ~= cos(theta), so
+   //    |angular_velocity|  ~= (erp*fps) * (ax1 dot ax2)
+ 
+-  info->c[3] = info->fps * info->erp * - dDOT(ax1, ax2);
++  // the shipped library: -((erp d) fps) (physics-harness-3.md 5.1 rule 6)
++  info->c[3] = -(info->erp * k * info->fps);
+ 
+   // if the first angle is powered, or has joint limits, add in the stuff
+   int row = 4 + joint->limot1.addLimot (joint,info,4,ax1,1);
+@@ -2605,7 +2712,7 @@ static void fixedGetInfo2 (dxJointFixed *joint, dxJoint::Info2 *info)
+   info->J1l[2*s+2] = 1;
+ 
+   dVector3 ofs;
+-  dMULTIPLY0_331 (ofs,joint->node[0].body->R,joint->offset);
++  dxROTATE (ofs,joint->node[0].body->R,joint->offset);
+   if (joint->node[1].body) {
+     dCROSSMAT (info->J1a,ofs,s,+,-);
+     info->J2l[0] = -1;
+@@ -2638,11 +2745,13 @@ extern "C" void dJointSetFixed (dxJointFixed *joint)
+   // compute the offset between the bodies
+   if (joint->node[0].body) {
+     if (joint->node[1].body) {
+-      dQMultiply1 (joint->qrel,joint->node[0].body->q,joint->node[1].body->q);
++      // the shipped library's scalar part (physics-harness-3.md 5.2 rule 15)
++      relativeRotation (joint->qrel,joint->node[0].body->q,
++			joint->node[1].body->q,3,0,2,1);
+       dReal ofs[4];
+       for (i=0; i<4; i++) ofs[i] = joint->node[0].body->pos[i];
+       for (i=0; i<4; i++) ofs[i] -= joint->node[1].body->pos[i];
+-      dMULTIPLY1_331 (joint->offset,joint->node[0].body->R,ofs);
++      dxROTATE_BACK (joint->offset,joint->node[0].body->R,ofs);
+     }
+     else {
+       // set joint->qrel to the transpose of the first body's q
+@@ -2653,6 +2762,28 @@ extern "C" void dJointSetFixed (dxJointFixed *joint)
+   }
+ }
+ 
++
 +// holds a fixed joint's single body at the pose (q,pos): the state
 +// dJointSetFixed gives for a first body of orientation q at position pos.
 +// with two bodies or none it does nothing.
@@ -351,10 +1558,9 @@ index 4e61b0a..90ee878 100644
 +  }
 +}
 +
-+
+ 
  dxJoint::Vtable __dfixed_vtable = {
    sizeof(dxJointFixed),
-   (dxJoint::init_fn*) fixedInit,
 diff --git a/ode/src/joint.h b/ode/src/joint.h
 index dbc7c5f..c395c40 100644
 --- a/ode/src/joint.h
@@ -367,11 +1573,63 @@ index dbc7c5f..c395c40 100644
  
  
  // hinge 2
+diff --git a/ode/src/lcp.cpp b/ode/src/lcp.cpp
+index e1b61f5..ce367c4 100644
+--- a/ode/src/lcp.cpp
++++ b/ode/src/lcp.cpp
+@@ -1240,7 +1240,9 @@ void dSolveLCP (int n, dReal *A, dReal *x, dReal *b,
+ 
+ 	int cmd = 1;		// index switching command
+ 	int si = 0;		// si = index to switch if cmd>3
+-	dReal s = -w[i]/delta_w[i];
++	// the shipped library's steps that make a w zero: (-1 / delta_w)
++	// times w (physics-harness-3.md 4.1 rule 3)
++	dReal s = (REAL(-1.0)/delta_w[i]) * w[i];
+ 	if (dir > 0) {
+ 	  if (hi[i] < dInfinity) {
+ 	    dReal s2 = (hi[i]-x[i])/dirf;		// step to x(i)=hi(i)
+@@ -1265,7 +1267,7 @@ void dSolveLCP (int n, dReal *A, dReal *x, dReal *b,
+ 	      (state[lcp.indexN(k)]!=0 && delta_w[lcp.indexN(k)] > 0)) {
+ 	    // don't bother checking if lo=hi=0
+ 	    if (lo[lcp.indexN(k)] == 0 && hi[lcp.indexN(k)] == 0) continue;
+-	    dReal s2 = -w[lcp.indexN(k)] / delta_w[lcp.indexN(k)];
++	    dReal s2 = (REAL(-1.0)/delta_w[lcp.indexN(k)]) * w[lcp.indexN(k)];
+ 	    if (s2 < s) {
+ 	      s = s2;
+ 	      cmd = 4;
 diff --git a/ode/src/mass.cpp b/ode/src/mass.cpp
-index 8832305..b93e458 100644
+index 8832305..787c68f 100644
 --- a/ode/src/mass.cpp
 +++ b/ode/src/mass.cpp
-@@ -117,7 +117,9 @@ void dMassSetSphereTotal (dMass *m, dReal total_mass, dReal radius)
+@@ -24,6 +24,7 @@
+ #include <ode/mass.h>
+ #include <ode/odemath.h>
+ #include <ode/matrix.h>
++#include "util.h"
+ 
+ 
+ #define _I(i,j) I[(i)*4+(j)]
+@@ -105,10 +106,17 @@ void dMassSetParameters (dMass *m, dReal themass,
+ }
+ 
+ 
++// 4/3 pi as the shipped library has it: the single-precision product of 4/3
++// and pi (physics-harness-3.md 7.2)
++#define dxFOUR_THIRDS_PI REAL(4.1887903)
++
++
+ void dMassSetSphere (dMass *m, dReal density, dReal radius)
+ {
+-  dMassSetSphereTotal (m, (REAL(4.0)/REAL(3.0)) * M_PI *
+-			  radius*radius*radius * density, radius);
++  // the shipped library (physics-harness-3.md 7.3): the density times the
++  // radius three times, then 4/3 pi
++  dMassSetSphereTotal (m, density*radius*radius*radius*dxFOUR_THIRDS_PI,
++		       radius);
+ }
+ 
+ 
+@@ -117,7 +125,9 @@ void dMassSetSphereTotal (dMass *m, dReal total_mass, dReal radius)
    dAASSERT (m);
    dMassSetZero (m);
    m->mass = total_mass;
@@ -382,7 +1640,65 @@ index 8832305..b93e458 100644
    m->_I(0,0) = II;
    m->_I(1,1) = II;
    m->_I(2,2) = II;
-@@ -200,9 +202,12 @@ void dMassSetBoxTotal (dMass *m, dReal total_mass,
+@@ -135,12 +145,15 @@ void dMassSetCappedCylinder (dMass *m, dReal density, int direction,
+   dAASSERT (m);
+   dUASSERT (direction >= 1 && direction <= 3,"bad direction number");
+   dMassSetZero (m);
+-  M1 = M_PI*radius*radius*length*density;			// cylinder mass
+-  M2 = (REAL(4.0)/REAL(3.0))*M_PI*radius*radius*radius*density;	// total cap mass
+-  m->mass = M1+M2;
+-  Ia = M1*(REAL(0.25)*radius*radius + (REAL(1.0)/REAL(12.0))*length*length) +
+-    M2*(REAL(0.4)*radius*radius + REAL(0.375)*radius*length + REAL(0.25)*length*length);
+-  Ib = (M1*REAL(0.5) + M2*REAL(0.4))*radius*radius;
++  // the shipped library's groupings (physics-harness-3.md 7.2)
++  dReal P = density*radius*radius;
++  M1 = P*length*M_PI;					// cylinder mass
++  M2 = P*radius*dxFOUR_THIRDS_PI;			// total cap mass
++  m->mass = M2+M1;
++  Ia = M2*((REAL(0.4)*radius + REAL(0.375)*length)*radius +
++	   length*length*REAL(0.25)) +
++    M1*(radius*radius*REAL(0.25) + length*length*(REAL(1.0)/REAL(12.0)));
++  Ib = (M2*REAL(0.4) + M1*REAL(0.5))*radius*radius;
+   m->_I(0,0) = Ia;
+   m->_I(1,1) = Ia;
+   m->_I(2,2) = Ia;
+@@ -163,7 +176,8 @@ void dMassSetCappedCylinderTotal (dMass *m, dReal total_mass, int direction,
+ void dMassSetCylinder (dMass *m, dReal density, int direction,
+ 		       dReal radius, dReal length)
+ {
+-  dMassSetCylinderTotal (m, M_PI*radius*radius*length*density,
++  // the shipped library (physics-harness-3.md 7.3)
++  dMassSetCylinderTotal (m, density*radius*radius*length*M_PI,
+ 			    direction, radius, length);
+ }
+ 
+@@ -175,11 +189,12 @@ void dMassSetCylinderTotal (dMass *m, dReal total_mass, int direction,
+   dMassSetZero (m);
+   r2 = radius*radius;
+   m->mass = total_mass;
+-  I = total_mass*(REAL(0.25)*r2 + (REAL(1.0)/REAL(12.0))*length*length);
++  // the shipped library's groupings (physics-harness-3.md 7.3)
++  I = (length*length*(REAL(1.0)/REAL(12.0)) + r2*REAL(0.25))*total_mass;
+   m->_I(0,0) = I;
+   m->_I(1,1) = I;
+   m->_I(2,2) = I;
+-  m->_I(direction-1,direction-1) = total_mass*REAL(0.5)*r2;
++  m->_I(direction-1,direction-1) = r2*total_mass*REAL(0.5);
+ 
+ # ifndef dNODEBUG
+   checkMass (m);
+@@ -190,7 +205,9 @@ void dMassSetCylinderTotal (dMass *m, dReal total_mass, int direction,
+ void dMassSetBox (dMass *m, dReal density,
+ 		  dReal lx, dReal ly, dReal lz)
+ {
+-  dMassSetBoxTotal (m, lx*ly*lz*density, lx, ly, lz);
++  // the shipped library: the density times the sides (physics-harness-3.md
++  // 7.3)
++  dMassSetBoxTotal (m, density*lx*ly*lz, lx, ly, lz);
+ }
+ 
+ 
+@@ -200,9 +217,12 @@ void dMassSetBoxTotal (dMass *m, dReal total_mass,
    dAASSERT (m);
    dMassSetZero (m);
    m->mass = total_mass;
@@ -398,6 +1714,35 @@ index 8832305..b93e458 100644
  
  # ifndef dNODEBUG
    checkMass (m);
+@@ -276,22 +296,22 @@ void dMassRotate (dMass *m, const dMatrix3 R)
+   //
+   // where I is the old inertia.
+ 
+-  dMatrix3 t1;
+   dReal t2[3];
+ 
+   dAASSERT (m);
+ 
+-  // rotate inertia matrix
+-  dMULTIPLY2_333 (t1,m->I,R);
+-  dMULTIPLY0_333 (m->I,R,t1);
++  // rotate inertia matrix. the shipped library (physics-harness-3.md 7.3):
++  // I R^T with entry (0,0) in source order and every other (y + z) + x, then
++  // R times it with every row (y + z) + x
++  dxWorldFrame (m->I,R,m->I,dxSumYZX,dxSumYZX,dxSumYZX);
+ 
+   // ensure perfect symmetry
+   m->_I(1,0) = m->_I(0,1);
+   m->_I(2,0) = m->_I(0,2);
+   m->_I(2,1) = m->_I(1,2);
+ 
+-  // rotate center of mass
+-  dMULTIPLY0_331 (t2,R,m->c);
++  // rotate center of mass, every row (y + z) + x
++  dxMULTIPLY0_331 (t2,R,m->c,dxSumYZX,dxSumYZX,dxSumYZX);
+   m->c[0] = t2[0];
+   m->c[1] = t2[1];
+   m->c[2] = t2[2];
 diff --git a/ode/src/objects.h b/ode/src/objects.h
 index 7475ac2..f982db9 100644
 --- a/ode/src/objects.h
@@ -443,14 +1788,13 @@ index 7475ac2..f982db9 100644
  
  #endif
 diff --git a/ode/src/ode.cpp b/ode/src/ode.cpp
-index 0b1c839..f2c7361 100644
+index 0b1c839..1b539a4 100644
 --- a/ode/src/ode.cpp
 +++ b/ode/src/ode.cpp
-@@ -41,6 +41,21 @@
- // misc defines
+@@ -42,6 +42,21 @@
  #define ALLOCA dALLOCA16
  
-+//****************************************************************************
+ //****************************************************************************
 +// the library-wide world parameters and their values when the library loads
 +
 +dxWorldParameters dxGlobal = {
@@ -465,9 +1809,10 @@ index 0b1c839..f2c7361 100644
 +  {dInfinity,REAL(0.001)}		// maximum correcting velocity, layer
 +};
 +
- //****************************************************************************
++//****************************************************************************
  // utility
  
+ static inline void initObject (dObject *obj, dxWorld *w)
 @@ -224,7 +239,6 @@ void dWorldCheck (dxWorld *w)
  
  dxBody *dBodyCreate (dxWorld *w)
@@ -508,29 +1853,70 @@ index 0b1c839..f2c7361 100644
    delete b;
  }
  
-@@ -319,7 +331,9 @@ void dBodySetRotation (dBodyID b, const dMatrix3 R)
+@@ -319,7 +331,7 @@ void dBodySetRotation (dBodyID b, const dMatrix3 R)
  {
    dAASSERT (b && R);
    dQuaternion q;
 -  dRtoQ (R,q);
-+  // the shipped library sums the trace's last two terms first
-+  // (physics-harness-2.md 2.3)
-+  dxQfromRTrace (q,R,(R[1*4+1] + R[2*4+2]) + R[0*4+0]);
++  dQfromR (q,R);
    dNormalize4 (q);
    b->q[0] = q[0];
    b->q[1] = q[1];
-@@ -543,7 +557,9 @@ void dBodyAddRelForceAtRelPos (dBodyID b, dReal fx, dReal fy, dReal fz,
+@@ -447,7 +459,8 @@ void dBodyAddRelForce (dBodyID b, dReal fx, dReal fy, dReal fz)
+   t1[1] = fy;
+   t1[2] = fz;
+   t1[3] = 0;
+-  dMULTIPLY0_331 (t2,b->R,t1);
++  // the shipped library sums each row (y + z) + x (physics-harness-3.md 7.6)
++  dxROTATE (t2,b->R,t1);
+   b->facc[0] += t2[0];
+   b->facc[1] += t2[1];
+   b->facc[2] += t2[2];
+@@ -462,7 +475,8 @@ void dBodyAddRelTorque (dBodyID b, dReal fx, dReal fy, dReal fz)
+   t1[1] = fy;
+   t1[2] = fz;
+   t1[3] = 0;
+-  dMULTIPLY0_331 (t2,b->R,t1);
++  // the shipped library sums each row (y + z) + x (physics-harness-3.md 7.6)
++  dxROTATE (t2,b->R,t1);
+   b->tacc[0] += t2[0];
+   b->tacc[1] += t2[1];
+   b->tacc[2] += t2[2];
+@@ -500,7 +514,8 @@ void dBodyAddForceAtRelPos (dBodyID b, dReal fx, dReal fy, dReal fz,
+   prel[1] = py;
    prel[2] = pz;
    prel[3] = 0;
-   dMULTIPLY0_331 (f,b->R,frel);
 -  dMULTIPLY0_331 (p,b->R,prel);
-+  // the shipped library sums each row of the point's rotation (y + z) + x
-+  // (physics-harness-2.md 2.5)
-+  dxMULTIPLY0_331 (p,b->R,prel,dxSumYZX,dxSumYZX,dxSumYZX);
++  // the shipped library sums each row (y + z) + x (physics-harness-3.md 7.6)
++  dxROTATE (p,b->R,prel);
    b->facc[0] += f[0];
    b->facc[1] += f[1];
    b->facc[2] += f[2];
-@@ -741,8 +757,6 @@ void dBodyEnable (dBodyID b)
+@@ -517,7 +532,8 @@ void dBodyAddRelForceAtPos (dBodyID b, dReal fx, dReal fy, dReal fz,
+   frel[1] = fy;
+   frel[2] = fz;
+   frel[3] = 0;
+-  dMULTIPLY0_331 (f,b->R,frel);
++  // the shipped library sums each row (y + z) + x (physics-harness-3.md 7.6)
++  dxROTATE (f,b->R,frel);
+   b->facc[0] += f[0];
+   b->facc[1] += f[1];
+   b->facc[2] += f[2];
+@@ -542,8 +558,11 @@ void dBodyAddRelForceAtRelPos (dBodyID b, dReal fx, dReal fy, dReal fz,
+   prel[1] = py;
+   prel[2] = pz;
+   prel[3] = 0;
+-  dMULTIPLY0_331 (f,b->R,frel);
+-  dMULTIPLY0_331 (p,b->R,prel);
++  // the shipped library sums each row of the force's and the point's
++  // rotations (y + z) + x (physics-harness-2.md 2.5, physics-harness-3.md
++  // 7.6)
++  dxROTATE (f,b->R,frel);
++  dxROTATE (p,b->R,prel);
+   b->facc[0] += f[0];
+   b->facc[1] += f[1];
+   b->facc[2] += f[2];
+@@ -741,8 +760,6 @@ void dBodyEnable (dBodyID b)
  {
    dAASSERT (b);
    b->flags &= ~dxBodyDisabled;
@@ -539,7 +1925,7 @@ index 0b1c839..f2c7361 100644
  }
  
  
-@@ -777,59 +791,50 @@ int dBodyGetGravityMode (dBodyID b)
+@@ -777,59 +794,50 @@ int dBodyGetGravityMode (dBodyID b)
  
  // body auto-disable functions
  
@@ -606,7 +1992,7 @@ index 0b1c839..f2c7361 100644
  }
  
  
-@@ -851,10 +856,7 @@ void dBodySetAutoDisableFlag (dBodyID b, int do_auto_disable)
+@@ -851,10 +859,7 @@ void dBodySetAutoDisableFlag (dBodyID b, int do_auto_disable)
  void dBodySetAutoDisableDefaults (dBodyID b)
  {
  	dAASSERT(b);
@@ -618,7 +2004,7 @@ index 0b1c839..f2c7361 100644
  }
  
  //****************************************************************************
-@@ -862,7 +864,7 @@ void dBodySetAutoDisableDefaults (dBodyID b)
+@@ -862,7 +867,7 @@ void dBodySetAutoDisableDefaults (dBodyID b)
  
  static void dJointInit (dxWorld *w, dxJoint *j)
  {
@@ -627,7 +2013,7 @@ index 0b1c839..f2c7361 100644
    initObject (j,w);
    j->vtable = 0;
    j->flags = 0;
-@@ -873,15 +875,17 @@ static void dJointInit (dxWorld *w, dxJoint *j)
+@@ -873,15 +878,17 @@ static void dJointInit (dxWorld *w, dxJoint *j)
    j->node[1].body = 0;
    j->node[1].next = 0;
    dSetZero (j->lambda,6);
@@ -648,7 +2034,7 @@ index 0b1c839..f2c7361 100644
    dxJoint *j;
    if (group) {
      j = (dxJoint*) group->stack.alloc (vtable->size);
-@@ -899,21 +903,18 @@ static dxJoint *createJoint (dWorldID w, dJointGroupID group,
+@@ -899,21 +906,18 @@ static dxJoint *createJoint (dWorldID w, dJointGroupID group,
  
  dxJoint * dJointCreateBall (dWorldID w, dJointGroupID group)
  {
@@ -670,7 +2056,7 @@ index 0b1c839..f2c7361 100644
    return createJoint (w,group,&__dslider_vtable);
  }
  
-@@ -921,7 +922,7 @@ dxJoint * dJointCreateSlider (dWorldID w, dJointGroupID group)
+@@ -921,7 +925,7 @@ dxJoint * dJointCreateSlider (dWorldID w, dJointGroupID group)
  dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
  			       const dContact *c)
  {
@@ -679,7 +2065,7 @@ index 0b1c839..f2c7361 100644
    dxJointContact *j = (dxJointContact *)
      createJoint (w,group,&__dcontact_vtable);
    j->contact = *c;
-@@ -929,37 +930,45 @@ dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
+@@ -929,37 +933,45 @@ dxJoint * dJointCreateContact (dWorldID w, dJointGroupID group,
  }
  
  
@@ -730,7 +2116,7 @@ index 0b1c839..f2c7361 100644
    return createJoint (w,group,&__damotor_vtable);
  }
  
-@@ -969,8 +978,10 @@ void dJointDestroy (dxJoint *j)
+@@ -969,8 +981,10 @@ void dJointDestroy (dxJoint *j)
    dAASSERT (j);
    if (j->flags & dJOINT_INGROUP) return;
    removeJointReferencesFromAttachedBodies (j);
@@ -743,7 +2129,7 @@ index 0b1c839..f2c7361 100644
    dFree (j,j->vtable->size);
  }
  
-@@ -1012,8 +1023,6 @@ void dJointGroupEmpty (dJointGroupID group)
+@@ -1012,8 +1026,6 @@ void dJointGroupEmpty (dJointGroupID group)
    for (i=group->num-1; i >= 0; i--) {
      if (jlist[i]->world) {
        removeJointReferencesFromAttachedBodies (jlist[i]);
@@ -752,7 +2138,7 @@ index 0b1c839..f2c7361 100644
      }
    }
    group->num = 0;
-@@ -1146,27 +1155,27 @@ dxWorld * dWorldCreate()
+@@ -1146,27 +1158,27 @@ dxWorld * dWorldCreate()
    w->firstjoint = 0;
    w->nb = 0;
    w->nj = 0;
@@ -793,7 +2179,7 @@ index 0b1c839..f2c7361 100644
  
    return w;
  }
-@@ -1205,47 +1214,75 @@ void dWorldDestroy (dxWorld *w)
+@@ -1205,47 +1217,75 @@ void dWorldDestroy (dxWorld *w)
  
  void dWorldSetGravity (dWorldID w, dReal x, dReal y, dReal z)
  {
@@ -885,7 +2271,7 @@ index 0b1c839..f2c7361 100644
  }
  
  
-@@ -1253,7 +1290,7 @@ void dWorldStep (dWorldID w, dReal stepsize)
+@@ -1253,7 +1293,7 @@ void dWorldStep (dWorldID w, dReal stepsize)
  {
    dUASSERT (w,"bad world argument");
    dUASSERT (stepsize > 0,"stepsize must be > 0");
@@ -894,7 +2280,7 @@ index 0b1c839..f2c7361 100644
  }
  
  
-@@ -1261,7 +1298,7 @@ void dWorldQuickStep (dWorldID w, dReal stepsize)
+@@ -1261,7 +1301,7 @@ void dWorldQuickStep (dWorldID w, dReal stepsize)
  {
    dUASSERT (w,"bad world argument");
    dUASSERT (stepsize > 0,"stepsize must be > 0");
@@ -903,7 +2289,7 @@ index 0b1c839..f2c7361 100644
  }
  
  
-@@ -1283,126 +1320,126 @@ void dWorldImpulseToForce (dWorldID w, dReal stepsize,
+@@ -1283,126 +1323,126 @@ void dWorldImpulseToForce (dWorldID w, dReal stepsize,
  dReal dWorldGetAutoDisableLinearThreshold (dWorldID w)
  {
  	dAASSERT(w);
@@ -1049,7 +2435,7 @@ index 0b1c839..f2c7361 100644
  
  //****************************************************************************
 diff --git a/ode/src/odemath.cpp b/ode/src/odemath.cpp
-index 512eb7b..d11d0e7 100644
+index 512eb7b..eb5e4f0 100644
 --- a/ode/src/odemath.cpp
 +++ b/ode/src/odemath.cpp
 @@ -31,56 +31,63 @@
@@ -1158,11 +2544,47 @@ index 512eb7b..d11d0e7 100644
  }
  
  
+@@ -110,11 +117,13 @@ void dNormalize4 (dVector4 a)
+   dAASSERT (a);
+   dReal l = dDOT(a,a)+a[3]*a[3];
+   if (l > 0) {
++    // the shipped library (physics-harness-3.md 7.5): the reciprocal square
++    // root and the four products on the x87, not flushed
+     l = dRecipSqrt(l);
+-    a[0] *= l;
+-    a[1] *= l;
+-    a[2] *= l;
+-    a[3] *= l;
++    a[0] = dX87Mul (a[0],l);
++    a[1] = dX87Mul (a[1],l);
++    a[2] = dX87Mul (a[2],l);
++    a[3] = dX87Mul (a[3],l);
+   }
+   else {
+     dDEBUGMSG ("vector has zero size");
 diff --git a/ode/src/quickstep.cpp b/ode/src/quickstep.cpp
-index 4f567dd..39b76db 100644
+index 4f567dd..0e88ad1 100644
 --- a/ode/src/quickstep.cpp
 +++ b/ode/src/quickstep.cpp
-@@ -419,10 +419,20 @@ static void SOR_LCP (int m, int nb, dRealMutablePtr J, int *jb, dxBody * const *
+@@ -91,11 +91,15 @@ static void compute_invM_JT (int m, dRealMutablePtr J, dRealMutablePtr iMJ, int
+ 		int b2 = jb[i*2+1];
+ 		dReal k = body[b1]->invMass;
+ 		for (j=0; j<3; j++) iMJ_ptr[j] = k*J_ptr[j];
+-		dMULTIPLY0_331 (iMJ_ptr + 3, invI + 12*b1, J_ptr + 3);
++		// the shipped library sums every angular row (y + z) + x
++		// (physics-harness-3.md 3, item 3)
++		dxMULTIPLY0_331 (iMJ_ptr + 3, invI + 12*b1, J_ptr + 3,
++				 dxSumYZX,dxSumYZX,dxSumYZX);
+ 		if (b2 >= 0) {
+ 			k = body[b2]->invMass;
+ 			for (j=0; j<3; j++) iMJ_ptr[j+6] = k*J_ptr[j+6];
+-			dMULTIPLY0_331 (iMJ_ptr + 9, invI + 12*b2, J_ptr + 9);
++			dxMULTIPLY0_331 (iMJ_ptr + 9, invI + 12*b2, J_ptr + 9,
++					 dxSumYZX,dxSumYZX,dxSumYZX);
+ 		}
+ 		J_ptr += 12;
+ 		iMJ_ptr += 12;
+@@ -419,10 +423,20 @@ static void SOR_LCP (int m, int nb, dRealMutablePtr J, int *jb, dxBody * const *
  		qsort (order,m,sizeof(IndexError),&compare_index_error);
  #endif
  #ifdef RANDOMLY_REORDER_CONSTRAINTS
@@ -1185,7 +2607,31 @@ index 4f567dd..39b76db 100644
  				order[i] = order[swapi];
  				order[swapi] = tmp;
  			}
-@@ -477,17 +487,19 @@ static void SOR_LCP (int m, int nb, dRealMutablePtr J, int *jb, dxBody * const *
+@@ -461,33 +475,36 @@ static void SOR_LCP (int m, int nb, dRealMutablePtr J, int *jb, dxBody * const *
+ 			dReal delta = b[index] - lambda[index]*Ad[index];
+ 			dRealMutablePtr fc_ptr = fc + 6*b1;
+ 			
+-			// @@@ potential optimization: SIMD-ize this and the b2 >= 0 case
+-			delta -=fc_ptr[0] * J_ptr[0] + fc_ptr[1] * J_ptr[1] +
+-				fc_ptr[2] * J_ptr[2] + fc_ptr[3] * J_ptr[3] +
+-				fc_ptr[4] * J_ptr[4] + fc_ptr[5] * J_ptr[5];
++			// the shipped library adds each body's six products from the
++			// last to the first (physics-harness-3.md 3, item 5)
++			delta -=fc_ptr[5] * J_ptr[5] + fc_ptr[4] * J_ptr[4] +
++				fc_ptr[3] * J_ptr[3] + fc_ptr[2] * J_ptr[2] +
++				fc_ptr[1] * J_ptr[1] + fc_ptr[0] * J_ptr[0];
+ 			// @@@ potential optimization: handle 1-body constraints in a separate
+ 			//     loop to avoid the cost of test & jump?
+ 			if (b2 >= 0) {
+ 				fc_ptr = fc + 6*b2;
+-				delta -=fc_ptr[0] * J_ptr[6] + fc_ptr[1] * J_ptr[7] +
+-					fc_ptr[2] * J_ptr[8] + fc_ptr[3] * J_ptr[9] +
+-					fc_ptr[4] * J_ptr[10] + fc_ptr[5] * J_ptr[11];
++				delta -=fc_ptr[5] * J_ptr[11] + fc_ptr[4] * J_ptr[10] +
++					fc_ptr[3] * J_ptr[9] + fc_ptr[2] * J_ptr[8] +
++					fc_ptr[1] * J_ptr[7] + fc_ptr[0] * J_ptr[6];
+ 			}
+ 
  			// compute lambda and clamp it to [lo,hi].
  			// @@@ potential optimization: does SSE have clamping instructions
  			//     to save test+jump penalties here?
@@ -1210,7 +2656,7 @@ index 4f567dd..39b76db 100644
  			}
  
  			//@@@ a trick that may or may not help
-@@ -544,23 +556,25 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -544,23 +561,25 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  	dRealAllocaArray (invI,3*4*nb);
  	for (i=0; i<nb; i++) {
  		dMatrix3 tmp;
@@ -1244,7 +2690,7 @@ index 4f567dd..39b76db 100644
  		}
  	}
  
-@@ -600,7 +614,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -600,7 +619,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  		dRealAllocaArray (hi,m);
  		int *findex = (int*) alloca (m*sizeof(int));
  		dSetZero (c,m);
@@ -1253,7 +2699,7 @@ index 4f567dd..39b76db 100644
  		dSetValue (lo,m,-dInfinity);
  		dSetValue (hi,m, dInfinity);
  		for (i=0; i<m; i++) findex[i] = -1;
-@@ -623,7 +637,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -623,7 +642,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  		dxJoint::Info2 Jinfo;
  		Jinfo.rowskip = 12;
  		Jinfo.fps = stepsize1;
@@ -1262,7 +2708,19 @@ index 4f567dd..39b76db 100644
  		for (i=0; i<nj; i++) {
  			Jinfo.J1l = J + ofs[i]*12;
  			Jinfo.J1a = Jinfo.J1l + 3;
-@@ -687,7 +701,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -661,7 +680,10 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+ 		for (i=0; i<nb; i++) {
+ 			dReal body_invMass = body[i]->invMass;
+ 			for (j=0; j<3; j++) tmp1[i*6+j] = body[i]->facc[j] * body_invMass + body[i]->lvel[j] * stepsize1;
+-			dMULTIPLY0_331 (tmp1 + i*6 + 3,invI + i*12,body[i]->tacc);
++			// the shipped library sums the middle row (x + z) + y
++			// (physics-harness-3.md 3, item 1)
++			dxMULTIPLY0_331 (tmp1 + i*6 + 3,invI + i*12,body[i]->tacc,
++					 dxSumXYZ,dxSumXZY,dxSumXYZ);
+ 			for (j=0; j<3; j++) tmp1[i*6+3+j] += body[i]->avel[j] * stepsize1;
+ 		}
+ 
+@@ -687,7 +709,7 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  		// solve the LCP problem and get lambda and invM*constraint_force
  		IFTIMING (dTimerNow ("solving LCP problem");)
  		dRealAllocaArray (cforce,nb*6);
@@ -1271,7 +2729,7 @@ index 4f567dd..39b76db 100644
  
  #ifdef WARM_STARTING
  		// save lambda for the next iteration
-@@ -701,6 +715,20 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -701,6 +723,20 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  		// note that the SOR method overwrites rhs and J at this point, so
  		// they should not be used again.
  		
@@ -1292,7 +2750,36 @@ index 4f567dd..39b76db 100644
  		// add stepsize * cforce to the body velocity
  		for (i=0; i<nb; i++) {
  			for (j=0; j<3; j++) body[i]->lvel[j] += stepsize * cforce[i*6+j];
-@@ -750,9 +778,13 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+@@ -714,14 +750,26 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
+ 		//     adjusted cforce, which is not the most efficient way to do it.
+ 		for (j=0; j<nj; j++) {
+ 			if (joint[j]->feedback) {
+-				// compute adjusted cforce
++				// compute adjusted cforce. the shipped library sums the
++				// angular rows in orders that depend on the body's place
++				// in the list (physics-harness-3.md 3, item 8): of the
++				// bodies taken four at a time, the first of each four in
++				// source order, the second with the middle row
++				// (x + z) + y, the third and fourth (y + z) + x; the rest
++				// with the middle row (x + z) + y.
++				int nb4 = (nb >= 4) ? (nb & ~3) : 0;
+ 				for (i=0; i<nb; i++) {
+ 					dReal k = body[i]->mass.mass;
+ 					cforce [i*6+0] *= k;
+ 					cforce [i*6+1] *= k;
+ 					cforce [i*6+2] *= k;
+ 					dVector3 tmp;
+-					dMULTIPLY0_331 (tmp, I + 12*i, cforce + i*6 + 3);
++					dxSum o0 = dxSumXYZ, o1 = dxSumXZY, o2 = dxSumXYZ;
++					if (i < nb4) {
++						if ((i & 3) == 0) o1 = dxSumXYZ;
++						else if ((i & 3) >= 2) o0 = o1 = o2 = dxSumYZX;
++					}
++					dxMULTIPLY0_331 (tmp, I + 12*i, cforce + i*6 + 3,o0,o1,o2);
+ 					cforce [i*6+3] = tmp[0];
+ 					cforce [i*6+4] = tmp[1];
+ 					cforce [i*6+5] = tmp[2];
+@@ -750,9 +798,13 @@ void dxQuickStepper (dxWorld *world, dxBody * const *body, int nb,
  	IFTIMING (dTimerNow ("compute velocity update");)
  	for (i=0; i<nb; i++) {
  		dReal body_invMass = body[i]->invMass;
@@ -1309,63 +2796,33 @@ index 4f567dd..39b76db 100644
  
  #if 0
 diff --git a/ode/src/rotation.cpp b/ode/src/rotation.cpp
-index 1180e6d..38006e0 100644
+index 1180e6d..0ecc533 100644
 --- a/ode/src/rotation.cpp
 +++ b/ode/src/rotation.cpp
-@@ -29,6 +29,7 @@ quaternions have the format: (s,vx,vy,vz) where (vx,vy,vz) is the
- 
- #include <ode/rotation.h>
- #include <ode/odemath.h>
-+#include "util.h"
- 
- 
- #define _R(i,j) R[(i)*4+(j)]
-@@ -60,7 +61,25 @@ void dRFromAxisAndAngle (dMatrix3 R, dReal ax, dReal ay, dReal az,
- {
-   dAASSERT (R);
-   dQuaternion q;
--  dQFromAxisAndAngle (q,ax,ay,az,angle);
-+  // dQFromAxisAndAngle's quaternion, but for the shipped library's scale of
-+  // the vector part (physics-harness-2.md 2.2): the sine not rounded before
-+  // it is multiplied by the axis's reciprocal length, the product rounded
-+  // once
-+  dReal l = ax*ax + ay*ay + az*az;
-+  if (l > REAL(0.0)) {
-+    angle *= REAL(0.5);
-+    q[0] = dCos (angle);
+@@ -164,7 +164,10 @@ void dQFromAxisAndAngle (dQuaternion q, dReal ax, dReal ay, dReal az,
+   if (l > REAL(0.0)) {
+     angle *= REAL(0.5);
+     q[0] = dCos (angle);
+-    l = dSin(angle) * dRecipSqrt(l);
++    // the shipped library (physics-harness-2.md 2.2, physics-harness-3.md
++    // 7.5): the sine not rounded before it is multiplied by the axis's
++    // reciprocal length, the product rounded once
 +    l = volya_x87_sinf_times (float(angle),float(dRecipSqrt(l)));
-+    q[1] = ax*l;
-+    q[2] = ay*l;
-+    q[3] = az*l;
-+  }
-+  else {
-+    q[0] = 1;
-+    q[1] = 0;
-+    q[2] = 0;
-+    q[3] = 0;
-+  }
-   dQtoR (q,R);
- }
- 
-@@ -245,8 +264,15 @@ void dRfromQ (dMatrix3 R, const dQuaternion q)
- void dQfromR (dQuaternion q, const dMatrix3 R)
+     q[1] = ax*l;
+     q[2] = ay*l;
+     q[3] = az*l;
+@@ -246,7 +249,9 @@ void dQfromR (dQuaternion q, const dMatrix3 R)
  {
    dAASSERT (q && R);
--  dReal tr,s;
+   dReal tr,s;
 -  tr = _R(0,0) + _R(1,1) + _R(2,2);
-+  dxQfromRTrace (q,R,_R(0,0) + _R(1,1) + _R(2,2));
-+}
-+
-+
-+// dQfromR given the trace, which dBodySetRotation sums in the shipped
-+// library's order (physics-harness-2.md 2.3)
-+void dxQfromRTrace (dQuaternion q, const dMatrix3 R, dReal tr)
-+{
-+  dReal s;
++  // the shipped library, in every use (physics-harness-2.md 2.3,
++  // physics-harness-3.md 7.5): the last two terms of the trace first
++  tr = _R(0,0) + (_R(1,1) + _R(2,2));
    if (tr >= 0) {
      s = dSqrt (tr + 1);
      q[0] = REAL(0.5) * s;
-@@ -299,6 +325,8 @@ void dDQfromW (dReal dq[4], const dVector3 w, const dQuaternion q)
+@@ -299,6 +304,8 @@ void dDQfromW (dReal dq[4], const dVector3 w, const dQuaternion q)
    dAASSERT (w && q && dq);
    dq[0] = REAL(0.5)*(- w[0]*q[1] - w[1]*q[2] - w[2]*q[3]);
    dq[1] = REAL(0.5)*(  w[0]*q[0] + w[1]*q[3] - w[2]*q[2]);
@@ -1376,7 +2833,7 @@ index 1180e6d..38006e0 100644
    dq[3] = REAL(0.5)*(  w[0]*q[2] - w[1]*q[1] + w[2]*q[0]);
  }
 diff --git a/ode/src/step.cpp b/ode/src/step.cpp
-index b49bfeb..3fae114 100644
+index b49bfeb..e0a568f 100644
 --- a/ode/src/step.cpp
 +++ b/ode/src/step.cpp
 @@ -256,9 +256,9 @@ void dInternalStepIsland_x1 (dxWorld *world, dxBody * const *body, int nb,
@@ -1460,7 +2917,37 @@ index b49bfeb..3fae114 100644
      for (i=0; i<nj; i++) {
        Jinfo.J1l = J + 2*8*ofs[i];
        Jinfo.J1a = Jinfo.J1l + 4;
-@@ -923,8 +925,17 @@ void dInternalStepIsland_x2 (dxWorld *world, dxBody * const *body, int nb,
+@@ -700,7 +702,7 @@ void dInternalStepIsland_x2 (dxWorld *world, dxBody * const *body, int nb,
+       dReal *Jdst = JinvM + 2*8*ofs[i];
+       for (j=info[i].m-1; j>=0; j--) {
+ 	for (k=0; k<3; k++) Jdst[k] = Jsrc[k] * body_invMass;
+-	dMULTIPLY0_133 (Jdst+4,Jsrc+4,body_invI);
++	dxMULTIPLY0_133_XZY (Jdst+4,Jsrc+4,body_invI);
+ 	Jsrc += 8;
+ 	Jdst += 8;
+       }
+@@ -710,7 +712,7 @@ void dInternalStepIsland_x2 (dxWorld *world, dxBody * const *body, int nb,
+ 	body_invI = invI + b*12;
+ 	for (j=info[i].m-1; j>=0; j--) {
+ 	  for (k=0; k<3; k++) Jdst[k] = Jsrc[k] * body_invMass;
+-	  dMULTIPLY0_133 (Jdst+4,Jsrc+4,body_invI);
++	  dxMULTIPLY0_133_XZY (Jdst+4,Jsrc+4,body_invI);
+ 	  Jsrc += 8;
+ 	  Jdst += 8;
+ 	}
+@@ -802,7 +804,10 @@ void dInternalStepIsland_x2 (dxWorld *world, dxBody * const *body, int nb,
+       dReal *body_invI = invI + i*12;
+       for (j=0; j<3; j++) tmp1[i*8+j] = body[i]->facc[j] * body_invMass +
+ 			    body[i]->lvel[j] * stepsize1;
+-      dMULTIPLY0_331 (tmp1 + i*8 + 4,body_invI,body[i]->tacc);
++      // the shipped library sums every row (x + z) + y (physics-harness-3.md
++      // 4.1 rule 2)
++      dxMULTIPLY0_331 (tmp1 + i*8 + 4,body_invI,body[i]->tacc,
++		       dxSumXZY,dxSumXZY,dxSumXZY);
+       for (j=0; j<3; j++) tmp1[i*8+4+j] += body[i]->avel[j] * stepsize1;
+     }
+     // put J*tmp1 into rhs
+@@ -923,8 +928,17 @@ void dInternalStepIsland_x2 (dxWorld *world, dxBody * const *body, int nb,
    for (i=0; i<nb; i++) {
      dReal body_invMass = body[i]->invMass;
      dReal *body_invI = invI + i*12;
@@ -1556,10 +3043,10 @@ index 7258af7..3909a9f 100755
 +	dInternalStepIslandFast (w, bodies, nb, joints, nj, stepsize, maxiterations);
  }
 diff --git a/ode/src/util.cpp b/ode/src/util.cpp
-index 1186ab6..8444985 100644
+index 1186ab6..98a0890 100644
 --- a/ode/src/util.cpp
 +++ b/ode/src/util.cpp
-@@ -30,43 +30,10 @@
+@@ -30,59 +30,25 @@
  //****************************************************************************
  // Auto disabling
  
@@ -1605,54 +3092,77 @@ index 1186ab6..8444985 100644
  }
  
  
-@@ -86,6 +53,17 @@ static inline dReal sinc (dReal x)
+ //****************************************************************************
+ // body rotation
+ 
+-// return sin(x)/x. this has a singularity at 0 so special handling is needed
+-// for small arguments.
++// return sin(x)/x as the shipped library's finite rotation computes it
++// (physics-harness-2.md 2.6, physics-harness-3.md 7.1): the sine not rounded
++// before the division; below 1e-4 (compared in double precision) the series
++// 1 - (x*x)*(1/6).
+ 
+ static inline dReal sinc (dReal x)
+ {
+-  // if |x| < 1e-4 then use a taylor series expansion. this two term expansion
+-  // is actually accurate to one LS bit within this range if double precision
+-  // is being used - so don't worry!
+   if (dFabs(x) < 1.0e-4) return REAL(1.0) - x*x*REAL(0.166666666666666666667);
+-  else return dSin(x)/x;
++  else return volya_x87_sinf_over (float(x),float(x));
  }
  
  
-+// sinc as the shipped library's finite rotation without an axis computes
-+// it (physics-harness-2.md 2.6): the sine not rounded before the division.
-+// Its small arguments are not established; they keep the series.
-+
-+static inline dReal sinc_unrounded (dReal x)
-+{
-+  if (dFabs(x) < 1.0e-4) return REAL(1.0) - x*x*REAL(0.166666666666666666667);
-+  else return volya_x87_sinf_over (float(x),float(x));
-+}
-+
-+
- // given a body b, apply its linear and angular rotation over the time
- // interval h, thereby adjusting its position and orientation.
- 
-@@ -129,7 +107,7 @@ void dxStepBody (dxBody *b, dReal h)
+@@ -104,7 +70,9 @@ void dxStepBody (dxBody *b, dReal h)
+       // split the angular velocity vector into a component along the finite
+       // rotation axis, and a component orthogonal to it.
+       dVector3 frv;		// finite rotation vector
+-      dReal k = dDOT (b->finite_rot_axis,b->avel);
++      // the shipped library sums the dot (y + z) + x (physics-harness-3.md
++      // 7.1)
++      dReal k = dxDOT (dxSumYZX,b->finite_rot_axis,b->avel);
+       frv[0] = b->finite_rot_axis[0] * k;
+       frv[1] = b->finite_rot_axis[1] * k;
+       frv[2] = b->finite_rot_axis[2] * k;
+@@ -123,11 +91,15 @@ void dxStepBody (dxBody *b, dReal h)
+       q[3] = frv[2] * s;
+     }
+     else {
+-      // make a rotation quaternion q that corresponds to w * h
+-      dReal wlen = dSqrt (b->avel[0]*b->avel[0] + b->avel[1]*b->avel[1] +
+-			  b->avel[2]*b->avel[2]);
++      // make a rotation quaternion q that corresponds to w * h. the shipped
++      // library computes the angle on the x87 (physics-harness-3.md 7.1):
++      // the squared length summed (x + z) + y, its square root, times h/2,
++      // stored
++      const dReal *w = b->avel;
++      double l = dX87AddD (dX87AddD (dX87MulD (w[0],w[0]),dX87MulD (w[2],w[2])),
++			   dX87MulD (w[1],w[1]));
        h *= REAL(0.5);
-       dReal theta = wlen * h;
+-      dReal theta = wlen * h;
++      dReal theta = dX87Store (dX87MulD (dX87SqrtD (l),h));
        q[0] = dCos(theta);
--      dReal s = sinc(theta) * h;
-+      dReal s = sinc_unrounded(theta) * h;
+       dReal s = sinc(theta) * h;
        q[1] = b->avel[0] * s;
-       q[2] = b->avel[1] * s;
+@@ -135,9 +107,15 @@ void dxStepBody (dxBody *b, dReal h)
        q[3] = b->avel[2] * s;
-@@ -137,7 +115,18 @@ void dxStepBody (dxBody *b, dReal h)
+     }
  
-     // do the finite rotation
+-    // do the finite rotation
++    // do the finite rotation. the shipped library, with an axis and without
++    // (physics-harness-2.md 2.6, physics-harness-3.md 7.1): components 1 to
++    // 3 summed first, third, second, then the fourth term
      dQuaternion q2;
 -    dQMultiply0 (q2,q,b->q);
-+    if (b->flags & dxBodyFlagFiniteRotationAxis) {
-+      dQMultiply0 (q2,q,b->q);
-+    }
-+    else {
-+      // the shipped library without an axis (physics-harness-2.md 2.6):
-+      // components 1 to 3 summed first, third, second, then the fourth term
-+      const dReal *p = b->q;
-+      q2[0] = q[0]*p[0] - q[1]*p[1] - q[2]*p[2] - q[3]*p[3];
-+      q2[1] = q[0]*p[1] + q[2]*p[3] + q[1]*p[0] - q[3]*p[2];
-+      q2[2] = q[0]*p[2] + q[3]*p[1] + q[2]*p[0] - q[1]*p[3];
-+      q2[3] = q[0]*p[3] + q[1]*p[2] + q[3]*p[0] - q[2]*p[1];
-+    }
++    const dReal *p = b->q;
++    q2[0] = q[0]*p[0] - q[1]*p[1] - q[2]*p[2] - q[3]*p[3];
++    q2[1] = q[0]*p[1] + q[2]*p[3] + q[1]*p[0] - q[3]*p[2];
++    q2[2] = q[0]*p[2] + q[3]*p[1] + q[2]*p[0] - q[1]*p[3];
++    q2[3] = q[0]*p[3] + q[1]*p[2] + q[3]*p[0] - q[2]*p[1];
      for (j=0; j<4; j++) b->q[j] = q2[j];
  
      // do the infitesimal rotation if required
-@@ -166,6 +155,27 @@ void dxStepBody (dxBody *b, dReal h)
+@@ -166,6 +144,27 @@ void dxStepBody (dxBody *b, dReal h)
  //****************************************************************************
  // island processing
  
@@ -1681,10 +3191,10 @@ index 1186ab6..8444985 100644
  // in an island are reachable by going through connected bodies and joints.
  // each island can be simulated separately.
 diff --git a/ode/src/util.h b/ode/src/util.h
-index a8e6390..ffc003c 100644
+index a8e6390..43cbb1a 100644
 --- a/ode/src/util.h
 +++ b/ode/src/util.h
-@@ -24,15 +24,68 @@
+@@ -24,15 +24,101 @@
  #define _ODE_UTIL_H_
  
  #include "objects.h"
@@ -1725,15 +3235,51 @@ index a8e6390..ffc003c 100644
 +#define dxMULTIPLY0_331(A,B,C,o0,o1,o2) dxMULTIPLYOP0_331(A,=,B,C,o0,o1,o2)
 +#define dxMULTIPLYADD0_331(A,B,C,o0,o1,o2) dxMULTIPLYOP0_331(A,+=,B,C,o0,o1,o2)
 +
++// A = B^T C, row i of the product (column i of B times C) summed in grouping
++// oi.
++#define dxMULTIPLY1_331(A,B,C,o0,o1,o2) \
++  (A)[0] = dxSum3 (o0,(B)[0]*(C)[0],(B)[4]*(C)[1],(B)[8]*(C)[2]); \
++  (A)[1] = dxSum3 (o1,(B)[1]*(C)[0],(B)[5]*(C)[1],(B)[9]*(C)[2]); \
++  (A)[2] = dxSum3 (o2,(B)[2]*(C)[0],(B)[6]*(C)[1],(B)[10]*(C)[2]);
++
++// A = B C, B a row 3-vector, C a 3x3 matrix: entry k the sum over l of
++// B(l) C(l,k), summed (x + z) + y (physics-harness-3.md 4.1 rule 1).
++#define dxMULTIPLY0_133_XZY(A,B,C) \
++  (A)[0] = dxSum3 (dxSumXZY,(B)[0]*(C)[0],(B)[1]*(C)[4],(B)[2]*(C)[8]); \
++  (A)[1] = dxSum3 (dxSumXZY,(B)[0]*(C)[1],(B)[1]*(C)[5],(B)[2]*(C)[9]); \
++  (A)[2] = dxSum3 (dxSumXZY,(B)[0]*(C)[2],(B)[1]*(C)[6],(B)[2]*(C)[10]);
++
++// a . b, the elements of a and of b p and q apart (dDOTpq's), summed in
++// grouping o.
++#define dxDOTpq(o,a,b,p,q) \
++  dxSum3 ((o),(a)[0]*(b)[0],(a)[p]*(b)[q],(a)[2*(p)]*(b)[2*(q)])
++#define dxDOT(o,a,b) dxDOTpq(o,a,b,1,1)
++#define dxDOT14(o,a,b) dxDOTpq(o,a,b,1,4)
++#define dxDOT41(o,a,b) dxDOTpq(o,a,b,4,1)
++#define dxDOT44(o,a,b) dxDOTpq(o,a,b,4,4)
++
++// a rotation of a vector stored in a body's frame, R v, and back into it,
++// R^T v: every row summed (y + z) + x (physics-harness-3.md 5.1 rule 1, 7.6)
++#define dxROTATE(A,R,v) dxMULTIPLY0_331(A,R,v,dxSumYZX,dxSumYZX,dxSumYZX)
++#define dxROTATE_BACK(A,R,v) dxMULTIPLY1_331(A,R,v,dxSumYZX,dxSumYZX,dxSumYZX)
++
 +// A = R D R^T, a body-frame matrix D (the inertia or its inverse) in the
-+// world frame: D R^T as dMULTIPLY2_333 computes it, then element (i,j) the
-+// sum over k of R(i,k) (D R^T)(k,j), row i summed in grouping oi
-+// (physics-harness-2.md 2.4).
++// world frame: first T = D R^T, T(k,j) the sum over l of D(k,l) R(j,l),
++// entry (0,0) in source order and every other (y + z) + x
++// (physics-harness-3.md 7.4); then element (i,j) the sum over k of R(i,k)
++// T(k,j), row i summed in grouping oi (physics-harness-2.md 2.4). A may be
++// D.
 +static inline void dxWorldFrame (dReal *A, const dReal *R, const dReal *D,
 +				 dxSum o0, dxSum o1, dxSum o2)
 +{
 +  dMatrix3 tmp;
-+  dMULTIPLY2_333 (tmp,D,R);
++  for (int k=0; k<3; k++) {
++    for (int j=0; j<3; j++) {
++      tmp[k*4+j] = dxSum3 ((k|j) ? dxSumYZX : dxSumXYZ,
++			   D[k*4+0]*R[j*4+0],D[k*4+1]*R[j*4+1],
++			   D[k*4+2]*R[j*4+2]);
++    }
++  }
 +  const dxSum o[3] = {o0,o1,o2};
 +  for (int i=0; i<3; i++) {
 +    for (int j=0; j<3; j++) {
@@ -1742,9 +3288,6 @@ index a8e6390..ffc003c 100644
 +    }
 +  }
 +}
-+
-+// dQfromR (rotation.cpp) given the trace.
-+void dxQfromRTrace (dQuaternion q, const dMatrix3 R, dReal tr);
  
  typedef void (*dstepper_fn_t) (dxWorld *world, dxBody * const *body, int nb,
          dxJoint * const *_joint, int nj, dReal stepsize);

@@ -5,7 +5,8 @@ load("//build:checks.bzl", "volya_checks")
 
 # Our patches to ODE 0.5.0's release (MODULE.bazel): the shipped library's
 # changes (docs/behavior/physics-library.md, physics-harness.md,
-# physics-harness-2.md), then its SSE arithmetic (physics-library.md 7).
+# physics-harness-2.md, physics-harness-3.md), then its SSE arithmetic
+# (physics-library.md 7).
 exports_files(
     [
         "shipped-library.patch",

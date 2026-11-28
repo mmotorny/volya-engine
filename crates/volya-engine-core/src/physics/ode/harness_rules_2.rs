@@ -70,7 +70,7 @@ unsafe extern "C" {
 
 /// A 3-term sum's grouping (physics-harness-2.md's conventions).
 #[derive(Clone, Copy)]
-enum Sum {
+pub(super) enum Sum {
     /// Source order, `(x + y) + z`.
     Xyz,
     /// `(x + z) + y`.
@@ -79,11 +79,11 @@ enum Sum {
     Yzx,
 }
 
-use Sum::{Xyz, Xzy, Yzx};
+pub(super) use Sum::{Xyz, Xzy, Yzx};
 
-const SOURCE: [Sum; 3] = [Xyz; 3];
+pub(super) const SOURCE: [Sum; 3] = [Xyz; 3];
 
-fn sum3(o: Sum, x: f32, y: f32, z: f32) -> f32 {
+pub(super) fn sum3(o: Sum, x: f32, y: f32, z: f32) -> f32 {
     match o {
         Xyz => x + y + z,
         Xzy => x + z + y,
@@ -92,15 +92,15 @@ fn sum3(o: Sum, x: f32, y: f32, z: f32) -> f32 {
 }
 
 /// A 3×3 matrix as ODE stores it, rows four apart.
-type M3 = [f32; 12];
+pub(super) type M3 = [f32; 12];
 
-fn read<const N: usize>(p: *const Real) -> [f32; N] {
+pub(super) fn read<const N: usize>(p: *const Real) -> [f32; N] {
     // SAFETY: the library's arrays of at least N values.
     let s = unsafe { std::slice::from_raw_parts(p, N) };
     std::array::from_fn(|i| s[i])
 }
 
-fn unit_quaternion(inputs: &mut Inputs) -> [f32; 4] {
+pub(super) fn unit_quaternion(inputs: &mut Inputs) -> [f32; 4] {
     let mut q = [0.0; 4].map(|_: f32| inputs.next(-1.0, 1.0));
     // SAFETY: a quaternion.
     unsafe { dNormalize4(q.as_mut_ptr()) };
@@ -108,7 +108,7 @@ fn unit_quaternion(inputs: &mut Inputs) -> [f32; 4] {
 }
 
 /// `dRfromQ`.
-fn rotation(q: [f32; 4]) -> M3 {
+pub(super) fn rotation(q: [f32; 4]) -> M3 {
     let (qq1, qq2, qq3) = (2.0 * q[1] * q[1], 2.0 * q[2] * q[2], 2.0 * q[3] * q[3]);
     [
         1.0 - qq2 - qq3,
@@ -126,7 +126,7 @@ fn rotation(q: [f32; 4]) -> M3 {
     ]
 }
 
-fn mul331(b: &M3, c: [f32; 3], o: [Sum; 3]) -> [f32; 3] {
+pub(super) fn mul331(b: &M3, c: [f32; 3], o: [Sum; 3]) -> [f32; 3] {
     std::array::from_fn(|i| {
         sum3(
             o[i],
@@ -139,7 +139,7 @@ fn mul331(b: &M3, c: [f32; 3], o: [Sum; 3]) -> [f32; 3] {
 
 /// The library's normalisation of a quaternion: the length summed in index
 /// order, times its reciprocal square root.
-fn normalise4(q: [f32; 4]) -> [f32; 4] {
+pub(super) fn normalise4(q: [f32; 4]) -> [f32; 4] {
     let l = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
     let s = 1.0 / l.sqrt();
     q.map(|x| x * s)
@@ -257,21 +257,21 @@ fn set_rotation_sums_the_trace_last_two_first() {
 
 /// 2.4's orders for one stepper: the world-frame inverse inertia, the
 /// world-frame inertia, L = J w, and the update.
-struct Orders {
-    inv: [Sum; 3],
-    inertia: [Sum; 3],
-    l: [Sum; 3],
-    update: [Sum; 3],
+pub(super) struct Orders {
+    pub(super) inv: [Sum; 3],
+    pub(super) inertia: [Sum; 3],
+    pub(super) l: [Sum; 3],
+    pub(super) update: [Sum; 3],
 }
 
-const QUICKSTEP: Orders = Orders {
+pub(super) const QUICKSTEP: Orders = Orders {
     inv: [Yzx, Yzx, Yzx],
     inertia: [Xzy, Yzx, Yzx],
     l: [Xzy, Xzy, Yzx],
     update: [Xyz, Xzy, Xyz],
 };
 
-const EXACT: Orders = Orders {
+pub(super) const EXACT: Orders = Orders {
     inv: [Xzy, Yzx, Yzx],
     inertia: [Yzx, Yzx, Yzx],
     l: SOURCE,
@@ -285,13 +285,20 @@ const PUBLIC: Orders = Orders {
     update: SOURCE,
 };
 
-/// R D Rᵀ: D Rᵀ in source order, then row i summed over k in order `o[i]`.
-fn world_frame(r: &M3, d: &M3, o: [Sum; 3]) -> M3 {
+/// R D Rᵀ: D Rᵀ as physics-harness-3.md 7.4 has it, then row i summed over
+/// k in order `o[i]`.
+pub(super) fn world_frame(r: &M3, d: &M3, o: [Sum; 3]) -> M3 {
     let mut tmp = [0.0; 12];
     for k in 0..3 {
         for j in 0..3 {
-            tmp[k * 4 + j] =
-                d[k * 4] * r[j * 4] + d[k * 4 + 1] * r[j * 4 + 1] + d[k * 4 + 2] * r[j * 4 + 2];
+            // physics-harness-3.md 7.4: entry (0, 0) in source order, every
+            // other (y + z) + x.
+            tmp[k * 4 + j] = sum3(
+                if k + j == 0 { Xyz } else { Yzx },
+                d[k * 4] * r[j * 4],
+                d[k * 4 + 1] * r[j * 4 + 1],
+                d[k * 4 + 2] * r[j * 4 + 2],
+            );
         }
     }
     let mut a = [0.0; 12];
@@ -383,7 +390,8 @@ fn relative_point_rotated_last_two_first() {
     let mut inputs = Inputs::new();
     let mut differ = 0;
     let expect = |r: &M3, t0: [f32; 3], f: [f32; 3], p: [f32; 3], o: [Sum; 3]| {
-        let f = mul331(r, f, SOURCE);
+        // The force's rotation as physics-harness-3.md 7.6 has it.
+        let f = mul331(r, f, [Yzx; 3]);
         let p = mul331(r, p, o);
         [
             t0[0] + (p[1] * f[2] - p[2] * f[1]),
@@ -418,7 +426,8 @@ fn relative_point_rotated_last_two_first() {
 /// 2.6: the finite rotation without an axis, `(cos θ, w k)` with k = (sin θ
 /// / θ) (h / 2), the sine unrounded, times the quaternion, normalised.
 fn finite_rotation(w: [f32; 3], p: [f32; 4], h: f32, shipped: bool) -> [f32; 4] {
-    let wlen = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
+    // The squared length as physics-harness-3.md 7.1 has it.
+    let wlen = (w[0] * w[0] + w[2] * w[2] + w[1] * w[1]).sqrt();
     let h = h * 0.5;
     let th = wlen * h;
     let k = if shipped {
@@ -488,7 +497,13 @@ fn box_plane_depth_last_two_first() {
     let (mut hits, mut differ) = (0, 0);
     let expect = |pl: [f32; 4], r: &M3, side: [f32; 3], pos: [f32; 3], shipped: bool| {
         let b: [f32; 3] = std::array::from_fn(|i| {
-            let q = pl[0] * r[i] + pl[1] * r[4 + i] + pl[2] * r[8 + i];
+            // physics-harness-3.md 2.5: the second and third (y + z) + x.
+            let q = sum3(
+                if i == 0 { Xyz } else { Yzx },
+                pl[0] * r[i],
+                pl[1] * r[4 + i],
+                pl[2] * r[8 + i],
+            );
             (side[i] * q).abs()
         });
         let half = if shipped {
@@ -496,7 +511,7 @@ fn box_plane_depth_last_two_first() {
         } else {
             b[0] + b[1] + b[2]
         };
-        pl[3] + 0.5 * half - (pl[0] * pos[0] + pl[1] * pos[1] + pl[2] * pos[2])
+        pl[3] + 0.5 * half - (pl[1] * pos[1] + pl[2] * pos[2] + pl[0] * pos[0])
     };
     // SAFETY: geometries made, collided and destroyed here.
     unsafe {

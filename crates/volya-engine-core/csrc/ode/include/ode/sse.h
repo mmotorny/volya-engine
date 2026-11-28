@@ -169,6 +169,50 @@ static inline float dSSENarrow (double x)
   return dSSEFlush ((float) x,x);
 }
 
+/* The x87 unit at the game's 24-bit precision (docs/behavior/
+** physics-harness-3.md, x87): operands read as they are (a denormal is not
+** read as zero), each result rounded to 24 bits with the unit's wider
+** exponent, never flushed, and rounded again to the float's grid when stored
+** (twice for a result below the normal range). The values are doubles:
+** a product, sum or square root of 24-bit values rounded to 53 bits and
+** then to 24 rounds as once to 24 (53 >= 2 * 24 + 2). */
+
+/* x rounded to 24 significant bits, the exponent unbounded (for |x| down to
+** 2^-326: below the normal range, scaled into it and back, exactly). */
+static inline double dX87Round (double x)
+{
+  if (__builtin_fabs (x) >= 1.1754943508222875e-38 || x != x)
+    return (double) (float) x;
+  return (double) (float) (x * 0x1p200) * 0x1p-200;
+}
+
+/* a 24-bit result stored as a float */
+static inline float dX87Store (double x)
+{
+  return (float) x;
+}
+
+static inline double dX87MulD (double a, double b)
+{
+  return dX87Round (a * b);
+}
+
+static inline double dX87AddD (double a, double b)
+{
+  return dX87Round (a + b);
+}
+
+static inline double dX87SqrtD (double x)
+{
+  return dX87Round (__builtin_sqrt (x));
+}
+
+/* a product of two floats, stored */
+static inline float dX87Mul (float a, float b)
+{
+  return dX87Store (dX87MulD (a,b));
+}
+
 struct dRealSSE {
   float v;
 

@@ -236,7 +236,7 @@ fn step_body_sums_the_third_derivative_out_of_order() {
 }
 
 /// The library's normalisation of a 3-vector (physics-library.md 3.5).
-fn normalise(a: [f32; 3]) -> [f32; 3] {
+pub(super) fn normalise(a: [f32; 3]) -> [f32; 3] {
     let l = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
     if l >= f(0x3748_0000) {
         let s = 1.0 / l.sqrt();

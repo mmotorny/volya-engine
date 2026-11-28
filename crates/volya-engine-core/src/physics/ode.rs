@@ -29,6 +29,8 @@ pub mod harness;
 mod harness_rules;
 #[cfg(test)]
 mod harness_rules_2;
+#[cfg(test)]
+mod harness_rules_3;
 pub mod msvc_rand;
 pub mod shell;
 pub mod x87;
@@ -1080,9 +1082,10 @@ mod tests {
                 dGeomSetPosition(b, 0.213_990_27, 0.628_570_1, 0.631_959_26);
                 let mut c = [ContactGeom::default(); 8];
                 // At most 1 asked for: public 0.5.0's one, and the further
-                // ones regardless.
+                // ones regardless (two here: box 1's faces on its edge axis
+                // take box 2's centre, physics-harness-3.md 2.4).
                 let n = dCollide(a, b, 1, c.as_mut_ptr(), size_of::<ContactGeom>() as c_int);
-                assert_eq!(n, 4);
+                assert_eq!(n, 3);
                 for k in 0..n as usize {
                     assert!(c[k].depth > 0.0, "{k}: {}", c[k].depth);
                     assert_eq!(c[k].normal, c[0].normal);
