@@ -456,7 +456,7 @@ impl OdeSolver {
                         return made;
                     };
                     // Two objects already merged are one group (our
-                    // reading: 4.2 counts "the two groups together").
+                    // reading of 4.2's "the two groups together", #884).
                     let (bodies, joints) = if ra == rb {
                         (bodies_a, joints_a)
                     } else {
