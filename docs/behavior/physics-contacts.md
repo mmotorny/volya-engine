@@ -32,8 +32,6 @@ Conventions:
   an element's body, or on none (static geometry). Each object of the world has one **collision space** holding
   its geometries (`shells` 2.2). The library's own names (ERP, CFM, `dContact`, `dCollide`, the first and second
   geometry of a contact, *public 0.5.0*) are its published interface.
-- **Contrib cylinder** is the file `contrib/dCylinder/dCylinder.cpp` of the public ODE 0.5.0 release (a
-  flat-ended cylinder contributed to ODE; the game's cylinder kind follows its structure, section 4.3).
 - A contact's **normal** is the library's: it points from the contact's second geometry towards its first
   (public 0.5.0's convention, e.g. sphere–sphere: first centre minus second centre) [T2]. "Front normal" and
   "front side" of a triangle are `cform` 2.3's.
@@ -41,7 +39,7 @@ Conventions:
   marked **believed**; what could not be established is marked **unestablished**.
 - Bracketed ids are the checks reproducing a statement: functions of `checks.py` in the dirty workspace's
   `checks/physics-contacts/` (`python3 checks.py` runs them all); ids `SR-…` are run by `shapeless_root.py` in
-  the same folder (`python3 shapeless_root.py`).
+  the same folder (`python3 shapeless_root.py`), ids `CL…`, `CS…` and `CB…` by `cyl.py` there (`python3 cyl.py`).
 
 ## 1. Which pairs are collided
 
@@ -358,19 +356,136 @@ public 0.5.0's.
 
 ### 4.3 Cylinder pairs
 
-The cylinder kind has the collider set and the wrappers of contrib cylinder (each contact's normal the
-negated separating axis, first geometry the cylinder) [O2]. Against contrib cylinder [O2]:
+**Where they live.** The shipped library has no flat-ended cylinder geometry (its only cylinder geometry is the
+capped cylinder; it has no colliders for class 3, `library` 6.1) [CL1]. The game library registers the cylinder
+as a **user geometry class** through the library's `dCreateGeomClass` (class data 8 bytes: radius, then length;
+its own collider selector and bounds routine, 4.1), and every cylinder collider is code of `bin\xrGame.dll`: the
+selector returns the cylinder–box collider for the box class (1), the cylinder–sphere collider for the sphere class
+(0), the cylinder–cylinder collider for its own class, the cylinder–plane collider for the plane class (4) and no
+collider for any other class [CL1, O1]. The library only stores the class record and calls the colliders through
+`dCollide` (reversed pairs swapped and their normals negated, `library` 6.1). So the black-box harness, which
+loads only `bin\ode.dll` and drives it through its API, cannot test these colliders; only static analysis
+establishes them, and our implementation is checked against this section.
 
-- **cylinder–sphere**: the same three axes (the cylinder's axis; the direction from the axis to the sphere's
-  centre; the direction from the nearest rim point to the sphere's centre), one contact at the sphere's surface,
-  but with **half** the cylinder's length where contrib uses the whole, and the rim point's side chosen from the
-  separating direction itself (contrib reads a normal not yet set);
-- **cylinder–box**: the same eleven axis codes (0 – 10) and single contact, except that for codes 1 – 3 (a box
-  face against the cylinder's side) up to two more contacts are added on the rim, at the points turned 120°
-  (cosine −0.5, sine 0.8660254) either way from the first, each kept only when its depth is above 0, under a
-  test of a quantity against 0.70710677 (its definition: **unestablished**);
-- **cylinder–cylinder** and **cylinder–plane**: the game's own routines; their axes and contacts are
-  **unestablished** (believed after contrib's).
+**Arithmetic conventions** (those of `docs/behavior/physics-harness-3.md`): single precision; every operation is
+rounded and flushed (the game's SSE, `library` 7.2) unless marked **x87** (that specification's definition); a
+sum of three terms is written by its grouping, `(x + y) + z` "source order", `(y + z) + x` the last two first.
+A product of two factors and a sum of two terms are commutative, so only groupings and the factors of products of
+three are stated. `u·v` is `u_x v_x + u_y v_y + u_z v_z` summed as stated. A product by +1 or −1 (the signs σ
+below) is exact, so its place among the factors does not matter. Every value passed to an absolute value or a
+square root is first rounded to single precision; square roots are x87; "−x" is computed as −0 − x (the exact
+negation). **normalise(v)** is `library` 3.5's rule: `L = (v_y² + v_z²) + v_x²`; when `L ≥ 1.1920929 × 10⁻⁵`
+(not below it; a NaN takes this branch) each component is `v_i ×` (1 / √L), the reciprocal and the products x87;
+else `dNormalize3_slow` (`library` 3.5) [CS3, CB7].
+
+**Notation.** The cylinder: centre `p`, rotation `C` with columns `c0`, `a` (the axis, column 1) and `c2`, radius
+`r`, length `l`. `C_ij` is row i, column j. The other geometry's centre `q`; the sphere's radius `ρs`; the box's
+rotation `B` with columns `b0`, `b1`, `b2`, sides `S_k`, half sides `e_k = S_k × 0.5`. `d = q − p`
+componentwise. "Best" is the largest separation met so far, starting at −∞; an axis replaces it only when its
+separation is strictly greater (a NaN never does), and an axis whose separation is above 0 ends the collider with
+no contacts (a NaN does not) [CS2, CB6]. Each axis carries a **flip**: set when its stated test value is below 0.
+Neither collider reads the maximum contact count the caller asks for (`dCollide`'s flags) [CB6]. Every value either
+collider reads is computed in that call [CB7].
+
+#### Cylinder–sphere
+
+The half length `hl = l × 0.5` (x87). Three axes, in this order [CS1]:
+
+1. **The axis** `a`. `s1 = a·d` `(y + z) + x`; separation `|s1| − (ρs + hl)` (x87); flip test `s1`.
+2. **From the axis to the centre.** `t = a·q − a·p`, both sums `(y + z) + x`; `w_i = d_i − a_i t`;
+   `n2 = normalise(w)`; `s2 = n2·d` `(y + z) + x`, x87; separation `|s2| − (ρs + r)` (x87); flip test `s2`.
+3. **From the rim point to the centre.** `u = normalise(d)`. `g0 = c0·u` source order, `g2 = c2·u` `(y + z) + x`;
+   `k = 1 / √(g2² + g0²)` (√ of the rounded sum, stored, then the quotient); `ĝ0 = g0 × k`, `ĝ2 = g2 × k`. The rim
+   point's side: `σ = +1` when `a·u > 0` (`(y + z) + x`), else −1 (a NaN gives −1): the side of the centre of the
+   sphere as seen along the axis, from the normalised direction between the two centres. The rim point
+   - `K_x = ((ĝ2 r) C_02) + ((σ C_01) hl + ((ĝ0 C_00) r + p_x))`,
+   - `K_y = ((C_12 ĝ2) r) + ((σ C_11) hl + ((ĝ0 C_10) r + p_y))`,
+   - `K_z = ((C_22 ĝ2) r) + ((σ C_21) hl + ((ĝ0 C_20) r + p_z))`.
+
+   `n3 = normalise(q − K)`; `s3 = n3·d` `(y + z) + x`, x87; `f0 = c0·n3`, `f2 = c2·n3`, `f = a·n3`, all
+   `(y + z) + x`; separation `|s3| − (((√(f2² + f0²) × r) + (|f| × hl)) + ρs)`, the products, sums and difference
+   x87; flip test `s3`.
+
+**The contact** (always exactly one when no axis separates) [CS2]: with `m` the chosen axis's vector (`a`, `n2` or
+`n3`), negated when its flip is set: normal `−m`, depth `−best`, point `q_i − m_i ρs` (on the sphere's surface),
+first geometry the cylinder, second the sphere.
+
+#### Cylinder–box
+
+Up to 3 contacts, all with one normal and one depth; a wrapper takes the collider's normal `n` (pointing from the
+cylinder towards the box) and writes `−n`, the cylinder as first geometry and the box as second into each of the
+contacts counted [CB6]. `h = l × 0.5`.
+
+**Shared values.** `D0 = c0·d` source order, `Da = a·d` and `D2 = c2·d` `(y + z) + x`. `X0k = c0·b_k`: source order for
+k = 0, x87 `(y + z) + x` for k = 1, 2. `X2k = c2·b_k` and `Xak = a·b_k`, `(y + z) + x`. `Ak = |Xak|`. `ρ0 = √(A1² + A2²)`,
+`ρ1 = √(A0² + A2²)`, `ρ2 = √(A0² + A1²)`. For a unit vector `u`: `βk(u) = (b_k·u) × e_k`, the dot `(y + z) + x`;
+`βsum(u) = |β0| + (|β1| + |β2|)` (x87) [CB1].
+
+**The eleven axes**, tested in code order 0 – 10; for each: its vector, its separation and its flip test [CB1, CB2]
+(x87 for every separation's sums, its products with `h`, `r` and `e_k`, and its difference):
+
+- **0, the axis** `a`: `|Da| − ((((A2 e2) + (A1 e1)) + (A0 e0)) + h)`; flip `Da`.
+- **1 – 3, a box face** (code `k + 1`, box axis `b_k`): `sk = b_k·d` `(y + z) + x` (x87 for code 1); separation
+  `|sk| − (((Ak h) + (ρk r)) + e_k)`; flip `sk`.
+- **4, a box vertex against the side.** `t = a·q − a·p` (both `(y + z) + x`), `w_i = d_i − a_i t`, `u4 = normalise(w)`.
+  The vertex `V = ((q + σ0 e0 b0) + σ1 e1 b1) + σ2 e2 b2` per component, `σk = +1` when `b_k·u4 ≤ 0` (`(y + z) + x`; a
+  NaN gives +1), else −1: the box's vertex nearest the cylinder across the axis. `t' = a·V − a·p`, `w'_i = (V_i − p_i)
+  − a_i t'`, `u = normalise(w')`. `s = u·d` `(y + z) + x`, x87; separation `|s| − (βsum(u) + r)`; flip `s`.
+- **5 – 7, a box edge against the rim** (code 5 with `b0`, 6 with `b1`, 7 with `b2`). For a unit vector `n` define the
+  rim tangent `T(n)_i = α C_i2 − β C_i0` with `α = c0·n`, `β = c2·n`, both `(y + z) + x`. Code 5: `t = b0·p − b0·q`,
+  both source order; `w_i = (b0_i t − p_i) + q_i`; `n5 = normalise(w)`; `u = normalise(T(n5) × b0)`. Code 6: the same
+  with `b1`, both dots `(y + z) + x`, giving `n6` and `u = normalise(T(n6) × b1)`. Code 7: `n7 = normalise(T(n6))`
+  (code 6's tangent, not a vector from `b2`), `u = normalise(T(n7) × b2)`. Cross products `(k × b)_x = k_y b_z − k_z b_y`,
+  `_y = k_z b_x − k_x b_z`, `_z = k_x b_y − k_y b_x`. Then `s = u·d` `(y + z) + x`, x87; `γ0 = c0·u` (source order for
+  code 7, `(y + z) + x` for 5 and 6), `γ2 = c2·u`, `γa = a·u` `(y + z) + x`; separation
+  `|s| − ((√(γ2² + γ0²) × r) + ((|γa| × h) + βsum(u)))`; flip `s`.
+- **8 – 10, a box edge against the side** (code 8 with `b0`, `(i, j) = (1, 2)`; 9 with `b1`, `(0, 2)`; 10 with `b2`,
+  `(0, 1)`; k = code − 8). `E = (D0 × X2k) − (D2 × X0k)` (x87); the test value `|E| − (((Ai e_j) + (Aj e_i)) + r)` ends
+  the collider when above 0 (the cylinder's term `r` is not scaled); `λ = √((−X0k)² + X2k²)`. Only when `λ > 0` (a NaN
+  is not) the axis is a candidate, with separation `(1 / λ) × ` the test value and vector, in the cylinder's frame,
+  `v = ((1 / λ) X2k, (1 / λ) × 0, (1 / λ)(−X0k))`, turned to world axes as `n_x = C_00 v_0 + C_01 v_1 + C_02 v_2` in
+  source order and `n_y`, `n_z` (rows 1 and 2 of `C`) `(y + z) + x`; flip `E`.
+
+**The normal and depth** [CB2]: `n` is the chosen axis's vector (for codes 0 – 3 the column itself), negated when
+its flip is set; depth `−best`.
+
+**The contacts** by the chosen code [CB3, CB4, CB5], each at depth `−best` unless stated:
+
+- **Code 0**: one, at the box vertex `W = ((q + σ0 e0 b0) + σ1 e1 b1) + σ2 e2 b2`, `σk = +1` when `b_k·n ≤ 0` (`(y + z)
+  + x`; a NaN gives +1), else −1.
+- **Code 4**: one, at code 4's vertex `V`.
+- **Codes 1 – 3 and 5 – 7**: the rim point. `g0 = c0·n` source order, `g2 = c2·n` `(y + z) + x`, `s = √(g2² + g0²)`
+  (stored); `s` exactly 0 is taken as 1 (a NaN is kept); `ĝ0 = (1 / s) g0`, `ĝ2 = (1 / s) g2`. `σ = +1` when `a·n > 0`
+  (`(y + z) + x`; a NaN gives −1), else −1. The cap centre `E_i = σ a_i h + p_i`. The point
+  - `K_x = ((ĝ2 C_02) r) + ((C_00 ĝ0) r + E_x)`,
+  - `K_y = ((C_12 ĝ2) r) + ((C_10 ĝ0) r + E_y)`,
+  - `K_z = ((ĝ2 r) C_22) + ((C_20 ĝ0) r + E_z)`.
+
+  For codes 5 – 7 that is the only contact. For codes 1 – 3 (box axis `b_k`, `k` = code − 1), when `ρk < 0.70710677`
+  (not when it is greater, equal or a NaN), two more rim points follow, turned by +120° and −120° in the cap's plane
+  (constants −0.5, 0.5 and 0.8660254, bit pattern 0x3f5db3d7) <!-- spec-lint: constant -->. With
+  `δ = −best − (ρk r)`, `W0 = |X0k|`, `W2 = |X2k|`:
+  - the first: `X = ((ĝ0 × −0.5) − (ĝ2 × 0.8660254)) r`, `Z = ((ĝ0 × 0.8660254) − (ĝ2 × 0.5)) r`;
+  - the second: `X = ((ĝ2 × 0.8660254) − (ĝ0 × 0.5)) r`, `Z = ((ĝ2 × −0.5) − (ĝ0 × 0.8660254)) r`;
+  - each at `((X C_00) + (Z C_02)) + E_x`, `((Z C_12) + (C_10 X)) + E_y`, `((Z C_22) + (C_20 X)) + E_z`, depth
+    `((Z W2) + (X W0)) + δ`, counted only when that depth is above 0 (not when equal or a NaN).
+
+  The first extra point is written to the second contact slot; the second extra point to the slot after the
+  contacts counted so far (so it overwrites the first when that was not counted); the rim point `K` is the first
+  contact. The slots are written whatever maximum count the caller asked for, so the caller's array must hold 3;
+  only the counted contacts get the wrapper's normal and geometries (1 to 3 in all) [CB5, CB6].
+- **Codes 8 – 10**: one, the midpoint of the closest points of two lines. The cylinder's line: through the rim
+  point `K'`, computed as `K` but without the zero test of `s` and with the sums ordered
+  `K'_x = ((ĝ2 r) C_02) + (σ C_01 h + ((C_00 ĝ0) r + p_x))`, `K'_y = ((C_12 ĝ2) r) + (σ C_11 h + ((C_10 ĝ0) r + p_y))`,
+  `K'_z = ((ĝ2 r) C_22) + (σ C_21 h + ((C_20 ĝ0) r + p_z))`, along `a`. The box's line: through code 0's vertex `W`
+  (signs from `b_k·n` as there), along `b = b_k`. With `D = W − K'`, `c = a·b`, `q1 = a·D`, `q2 = −(b·D)` (all
+  `(y + z) + x`) and `den = 1 − c²`: when `den > 0` (or a NaN), `t1 = ((q2 c) + q1) × (1 / den)` and
+  `t2 = ((q1 c) + q2) × (1 / den)`, else both +0. The point `(((t1 a_i) + K'_i) + ((t2 b_i) + W_i)) × 0.5`.
+
+**Count**: 1 for codes 0 and 4 – 10; 1 to 3 for codes 1 – 3 [CB3, CB5].
+
+**Cylinder–cylinder** and **cylinder–plane** are the game's own routines too; their axes and contacts are
+**unestablished**.
 
 ## 5. The player's body
 
@@ -455,7 +570,8 @@ player's rules of PH-8.
 - The level: the triangle overlap tests (3.2); the crossing candidates' rules and the second record's choice
   (3.3); the box's cross-axis contact point and code-0 per-vertex depths (3.4); the cylinder's ordinary contacts
   (3.4); which geometries carry triangle callbacks.
-- Cylinder–box's 0.70710677 test quantity; cylinder–cylinder and cylinder–plane (4.3).
+- Cylinder–cylinder and cylinder–plane (4.3); the cylinder colliders' results when a separation or a
+  normalised vector is not a number beyond what 4.3 states.
 - Which solver solves a merged group, by which object heads it (1.6); believed: an object that merged a group
   requesting the exact solver requests it from then on (the player's body after merging with the trader's door,
   section 7).
@@ -465,20 +581,22 @@ player's rules of PH-8.
 
 ## 10. Provenance
 
-- Date: 2026-11-27.
+- Date: 2026-11-27; section 4.3 revised 2026-11-28.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd` (merged view); binary `bin\xrGame.dll`.
 - Data examined: `gamemtl.xr` (materials `default`, `objects\large_metal_trash`, `creatures\actor`),
   `config\creatures\actor.ltx` (section `actor`), the trader's door record and model (through the trader-door
   checks' readers).
-- Public material: ODE 0.5.0 as released (its source, `include/ode/contact.h`, the collision utilities and
-  `contrib/dCylinder/dCylinder.cpp`).
+- Public material: ODE 0.5.0 as released (its source, `include/ode/contact.h` and the collision utilities).
+- `bin\ode.dll`'s export table (its cylinder geometries).
 - Analysis: static analysis of `bin\xrGame.dll` (headless decompilation and instruction listings with Ghidra) of
   the objects' collision pass, the spatial queries, the class word and its setters, the filter and its masks,
   the pair and level collisions, the contact handling, its properties, callbacks and joint creation, the liquid
   record and force, the motion rays and the ray geometry, the level geometry kind and its colliders for spheres,
   boxes and cylinders (query, triangle cache, front side, crossed-triangle records, per-triangle contacts,
-  push-out contacts), the cylinder kind and its colliders, the death shell's and missiles' class settings;
+  push-out contacts), the cylinder kind and its colliders (cylinder–sphere and cylinder–box: the dataflow of every
+  value from the instructions, the x87 register forms decoded from the bytes, every path followed with its branch
+  outcomes), the death shell's and missiles' class settings;
   the "ignore characters once at rest" mark (its one setter and every call through its slot), the routine giving
   bit 0x20 and its callers, every write of the class word, the shell kind of a type-3 physics object; the
   player's body's material (its setter and every call through its slot, the section's material key, the actor's
