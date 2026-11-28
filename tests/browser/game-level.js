@@ -406,11 +406,13 @@ export const tests = {
     const doorTip = (s) => s.level.doors.find((d) => d.name === "trader_door")?.tip;
     assertEqual(doorTip(s), "tip_door_locked", "the door locked before the talk");
     // After the door's check, facing it: turned half round to the start
-    // view, then forward until the trader is under the crosshair within
-    // 2 m (docs/behavior/talk.md 2.2, use-action.md 6.2).
+    // view, then forward to his desk, which stops the walk within 2 m of
+    // him (docs/behavior/talk.md 2.2, use-action.md 6.2).
     const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
     const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
-    if (s.level.talk.picked === null) {
+    const picked = (s) => s.level.talk.picked !== null;
+    const searched = [];
+    if (!picked(s)) {
       const yaw = s.level.yaw;
       down("ArrowLeft");
       try {
@@ -420,23 +422,41 @@ export const tests = {
       }
       down("KeyW");
       try {
-        s = await until((s) => s.level.talk.picked !== null, "walking to the trader", 4000);
+        await until((s) => s.level.player.moving, "W to walk");
+        s = await until((s) => picked(s) || !s.level.player.moving, "walking to his desk", 6000);
       } finally {
         up("KeyW");
       }
-      s = await until((s) => !s.level.player.moving, "the walk to end");
-      // Stopped, the crosshair may have slid off his bones' shapes over the
-      // desk (use-action.md 2.1): the down arrow nudges it back onto him.
-      for (let i = 0; i < 20 && s.level.talk.picked === null; i++) {
-        down("ArrowDown");
+      s = await until((s) => picked(s) || !s.level.player.moving, "the walk to end");
+      // He sits behind the desk, below the view's level and, after the
+      // walk along it, off to one side (use-action.md 2.1: the crosshair
+      // meets his bones' shapes): the arrows sweep the view down and
+      // across until it is on him.
+      const nudge = async (code) => {
+        down(code);
         await sleep(15);
-        up("ArrowDown");
+        up(code);
         await sleep(60);
-        s = await state();
+        return state();
+      };
+      const view = { yaw: s.level.yaw, pitch: s.level.pitch };
+      // Nudged one way until at or past `want`.
+      const toward = async (want, read, less, more) => {
+        const sign = Math.sign(want - read(s));
+        for (let i = 0; i < 200 && !picked(s) && sign * (want - read(s)) > 0.01; i++) s = await nudge(sign > 0 ? more : less);
+      };
+      for (const dp of [0.15, 0.25, 0.32, 0.39, 0.46]) {
+        await toward(view.pitch + dp, (s) => s.level.pitch, "ArrowUp", "ArrowDown");
+        for (const dy of [0.5, -0.5]) {
+          await toward(view.yaw + dy, (s) => s.level.yaw, "ArrowLeft", "ArrowRight");
+          if (picked(s)) break;
+        }
+        searched.push([+s.level.yaw.toFixed(3), +s.level.pitch.toFixed(3)]);
+        if (picked(s)) break;
       }
     }
     const trader = s.level.talk.picked;
-    assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)}`);
+    assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(s.level.player.position)}, searched ${JSON.stringify(searched)}`);
     const at = s.level.player.position;
     // His talk is off until his scheme reaches mob_trader@new_start_intro3
     // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
