@@ -1751,8 +1751,19 @@ export const tests = {
     assert(!s.level.player.hint && s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(traderView)} from ${JSON.stringify(startView)}, steps ${JSON.stringify(steps)}`);
     for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
     assert(!use.hidden, "Use shown for the trader");
-    tap(use);
-    await until((s) => s.talk, "the touch Use to start a talk");
+    // His talk is off until his scheme reaches mob_trader@new_start_intro3
+    // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
+    // logic starts: Use until it opens.
+    const deadline = performance.now() + 45000;
+    for (;;) {
+      tap(use);
+      try {
+        await until((s) => s.talk, "the touch Use to start a talk", 1500);
+        break;
+      } catch (e) {
+        if (performance.now() > deadline) throw e;
+      }
+    }
     for (let i = 0; i < 50 && controls.dataset.view !== "cursor"; i++) await sleep(20);
     assertEqual(controls.dataset.view, "cursor", "the cursor's controls over the talk screen");
     tap(controls.querySelector(".touch-button.menu"));
