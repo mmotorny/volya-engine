@@ -748,3 +748,87 @@ fn a_missing_travel_key_is_fatal() {
     );
     assert!(sim.load(records(), &system).is_ok());
 }
+
+/// object-visual-and-transform.md 4.1, 4.3: coming online on a flat grid
+/// (every plane height 0).
+#[test]
+fn coming_online_corrects_the_height() {
+    let mut on_box = inventory_box(1, 0, 0, [3.5, 2.0, 3.6]);
+    on_box.object.object_block_mut().state_flags |= 0x80;
+    let records = vec![
+        actor([0.4, 0.5, 0.4], 3, 120),
+        on_box,
+        inventory_box(2, 0, 0, [3.5, 2.0, 3.6]),
+        flesh(3, 0, 0, [3.5, 2.0, 3.6]),
+        bread(4, 3),
+        flesh(5, 0, 0, [30.0, 2.0, 3.6]),
+    ];
+    let mut sim = simulation(records, config(3.0, 5.0));
+    let at = |sim: &Simulation, id| {
+        let r = &sim.object(id).unwrap().record;
+        let b = r.object.object_block();
+        (r.header.position, b.level_graph_node, b.game_graph_vertex)
+    };
+    // The monster always: column 5, row 5, the cell's game vertex 0.
+    assert!(sim.come_online(3, [0.0, 0.9, 0.0]));
+    assert_eq!(at(&sim, 3), ([3.5, 0.001, 3.6], 60, 0));
+    // The inventory box only with bit 0x80.
+    assert!(sim.come_online(1, [0.0; 3]));
+    assert_eq!(at(&sim, 1), ([3.5, 0.001, 3.6], 60, 0));
+    assert!(!sim.come_online(2, [0.0; 3]));
+    assert_eq!(at(&sim, 2), ([3.5, 2.0, 3.6], 0, 0));
+    // The player takes the level vertex, never the height.
+    assert!(!sim.come_online(ACTOR_ID, [0.0; 3]));
+    assert_eq!(at(&sim, ACTOR_ID), ([0.4, 0.5, 0.4], 12, 0));
+    // An object with a parent is not corrected.
+    assert!(!sim.come_online(4, [0.0; 3]));
+    // Off the grid: the nearest of its vertex and its links, no correction.
+    assert!(!sim.come_online(5, [0.0; 3]));
+    assert_eq!(at(&sim, 5).0, [30.0, 2.0, 3.6]);
+}
+
+/// object-visual-and-transform.md 4.4 over stacked vertices.
+#[test]
+fn the_level_vertex_for_a_point() {
+    let header = LevelAiHeader {
+        vertex_count: 4,
+        cell_size: 0.7,
+        height_range: 10.0,
+        box_min: [0.0; 3],
+        box_max: [1.4, 10.0, 1.4],
+        identifier: LEVEL_ID,
+    };
+    // Horizontal planes (direction (0, 126, 0)): 0 at y 3; 1, 2, 3 stacked
+    // in the cell of column 1, row 1 at y 0, 1 and 5.
+    let flat = 126;
+    let q = |y: f32| (y / 10.0 * 65535.0).round() as u16;
+    let ai = LevelAi::with_planes(
+        header,
+        &[
+            (0, q(3.0), flat),
+            (4, q(0.0), flat),
+            (4, q(1.0), flat),
+            (4, q(5.0), flat),
+        ],
+    );
+    let cross = CrossTable::new(1, LEVEL_ID, GRAPH_ID, &[(0, 0.0); 4]);
+    let g = world();
+    let nav = Navigation::new(&g, 1, ai, cross).unwrap();
+    let (x, z) = (0.7, 0.75);
+    let none = u32::MAX;
+    // Its own cell: the start vertex.
+    assert_eq!(nav.vertex_for_point(2, [x, 3.0, z]), Some(2));
+    // The highest at or below y; all above: the lowest.
+    assert_eq!(nav.vertex_for_point(none, [x, 3.0, z]), Some(2));
+    assert_eq!(nav.vertex_for_point(none, [x, -1.0, z]), Some(1));
+    assert_eq!(nav.vertex_for_point(none, [x, 9.0, z]), Some(3));
+    // From vertex 0 (height 3 there): below it and above the cell
+    // vertex; above both, vertex 0 not more than 1 m above the cell
+    // vertex; otherwise the fallback, vertex 0 without links.
+    assert_eq!(nav.vertex_for_point(0, [x, 2.0, z]), Some(2));
+    assert_eq!(nav.vertex_for_point(0, [x, 6.0, z]), Some(3));
+    assert_eq!(nav.vertex_for_point(0, [x, 3.5, z]), Some(0));
+    assert_eq!(nav.vertex_for_point(0, [x, -1.0, z]), Some(0));
+    // Off the grid: the nearest outline of all.
+    assert_eq!(nav.vertex_for_point(none, [x, 4.8, 3.0]), Some(3));
+}

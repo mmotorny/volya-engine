@@ -249,6 +249,44 @@ pub fn uses_level_graph(record: &ObjectRecord) -> bool {
     }
 }
 
+/// Whether the object of `record` uses the level graph online
+/// (object-visual-and-transform.md 4.3), by its kind; this differs from
+/// [`uses_level_graph`]. The online/offline group and the monster group,
+/// which 4.3 does not name, never do (our choice).
+pub fn uses_level_graph_online(record: &ObjectRecord) -> bool {
+    use Kind::*;
+    let class = record.class_id.as_str();
+    let flagged = record.object.object_block().state_flags & STATE_LEVEL_GRAPH != 0;
+    match record.kind() {
+        Stalker | Trader | Monster => true,
+        Item if matches!(class, "G_F1" | "G_RGD5") => true,
+        Item if class == "II_BOLT" => false,
+        PlainVisual => class == "O_INVBOX" && flagged,
+        CrowOrPhantom | Vehicle | PhysicsObject | SkeletonObject | Breakable | Climbable
+        | HangingLamp | Zone | Anomaly | VisualAnomaly | TorridZone | Restrictor | SmartZone
+        | OnOffGroup | MonsterGroup => false,
+        Item
+        | Torch
+        | Pda
+        | Document
+        | Outfit
+        | Ammunition
+        | Knife
+        | MagazineWeapon
+        | WeaponWithGrenadeLauncher
+        | Shotgun
+        | StationaryGun
+        | Helicopter
+        | LevelChanger
+        | TeamBase
+        | Player => flagged,
+    }
+}
+
+/// The constant added to a plane height when an object comes online
+/// (object-visual-and-transform.md 4.1 step 5).
+const ONLINE_HEIGHT_ABOVE_PLANE: f32 = 0.001;
+
 /// Game milliseconds of an `hours:minutes:seconds` value; `None` when
 /// malformed.
 fn interval_ms(text: &str) -> Option<u64> {
@@ -1000,6 +1038,59 @@ impl Simulation {
                     changes.offline.push(c.id);
                 }
             }
+        }
+    }
+
+    /// Object `id` coming online (object-visual-and-transform.md 4.1
+    /// steps 2 – 5), with `sphere_centre` its model's sphere centre in
+    /// model space: on a level with navigation data, an object without a
+    /// parent that uses the level graph online (4.3) takes the level vertex
+    /// the search of 4.4 finds for its model sphere's centre and that
+    /// vertex's game vertex, and, unless it is the player, the height of
+    /// that vertex's plane plus 0.001 when the vertex's cell contains its
+    /// position. The online object's position and vertices are its
+    /// record's here, so the record is changed. Returns whether the
+    /// position changed.
+    pub fn come_online(&mut self, id: u16, sphere_centre: [f32; 3]) -> bool {
+        let Some(nav) = self.level.as_ref().and_then(|l| l.navigation.as_ref()) else {
+            return false;
+        };
+        let Some(o) = self.objects.get(&id) else {
+            return false;
+        };
+        let record = &o.record;
+        if record.header.parent_id != NO_ID || !uses_level_graph_online(record) {
+            return false;
+        }
+        // Step 3: the current level vertex, the Object block's if valid.
+        let stored = record.object.object_block().level_graph_node;
+        let k0 = if nav.valid(stored) { stored } else { u32::MAX };
+        // Step 4: the search for the model sphere's centre.
+        let p = record.header.position;
+        let x = volya_engine_formats::model::transform(p, record.header.angles);
+        let yc = volya_engine_formats::model::transform_point(&x, sphere_centre)[1];
+        let Some(k) = nav.vertex_for_point(k0, [p[0], yc, p[2]]) else {
+            return false;
+        };
+        let game_vertex = nav.cross.cell(k).map(|(g, _)| g);
+        // Step 5.
+        let height = (record.kind() != Kind::Player && nav.ai.cell_contains(k, p))
+            .then(|| nav.ai.plane_height(k, p[0], p[2]))
+            .flatten();
+        let o = self.objects.get_mut(&id).expect("object");
+        let block = o.record.object.object_block_mut();
+        block.level_graph_node = k;
+        if let Some(g) = game_vertex {
+            block.game_graph_vertex = g;
+        }
+        match height {
+            Some(h) => {
+                let y = h + ONLINE_HEIGHT_ABOVE_PLANE;
+                let changed = o.record.header.position[1] != y;
+                o.record.header.position[1] = y;
+                changed
+            }
+            None => false,
         }
     }
 

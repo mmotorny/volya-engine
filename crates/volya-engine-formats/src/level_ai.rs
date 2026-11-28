@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A level's `levels\<level>\level.ai`, only the header and each level
-//! vertex's position (docs/behavior/offline-simulation.md section 3), and
+//! vertex's position (docs/behavior/offline-simulation.md section 3) and
+//! plane (docs/behavior/object-visual-and-transform.md 4.2), and
 //! on request its links and cover values
 //! (docs/behavior/script-api-level.md 3.1, [`LevelAiLinks`]). Not
-//! chunked; read as a stream, keeping 5 of each vertex's 21 bytes (its
-//! packed column and row and its height, as stored) in one block of bytes
+//! chunked; read as a stream, keeping 7 of each vertex's 21 bytes (its
+//! packed column and row, its height and its packed plane, as stored) in one block of bytes
 //! the reader's caller provides ([`LevelAi::read_in`]), and the links and
 //! cover values (14 more) in another: the engine's file cache counts them
 //! against the file (docs/architecture/memory.md, File-backed data).
@@ -27,9 +28,14 @@ const VERTEX_PACKED: usize = 16;
 /// Offset of the byte whose upper 4 bits are the vertex's light
 /// (script-api-game-object-basics.md 4).
 const VERTEX_LIGHT: usize = 11;
+/// Offset of the packed plane in a vertex (object-visual-and-transform.md 4.2).
+const VERTEX_PLANE: usize = 14;
 /// Bytes kept of a vertex: the packed column and row (`u24`), the height
-/// (`u16`), as stored.
-pub const KEPT: usize = 5;
+/// (`u16`), the packed plane (`u16`), as stored.
+pub const KEPT: usize = 7;
+/// The constant |*n*y| is compared with in a plane's height
+/// (object-visual-and-transform.md 4.2).
+const FLAT_LIMIT: f32 = 1e-7;
 /// The largest packed column and row (section 5.2).
 pub const PACKED_LIMIT: u32 = 0x7F_FFFF;
 /// Bytes kept of a vertex for [`LevelAiLinks`]: its four links (bytes
@@ -71,7 +77,8 @@ impl LevelAiHeader {
 pub struct LevelAi {
     pub header: LevelAiHeader,
     /// Per level vertex, [`KEPT`] bytes, little-endian: the packed column
-    /// and row *p* (`u24`), the height *q* (`u16`).
+    /// and row *p* (`u24`), the height *q* (`u16`), the packed plane *w*
+    /// (`u16`).
     vertices: Box<dyn Bytes>,
 }
 
@@ -92,12 +99,20 @@ impl PartialEq for LevelAi {
 
 impl LevelAi {
     /// The level vertices `vertices`, each (packed column and row, height),
-    /// kept on the heap.
+    /// kept on the heap, each with packed plane 0.
     pub fn new(header: LevelAiHeader, vertices: &[(u32, u16)]) -> Self {
+        let planes: Vec<_> = vertices.iter().map(|&(p, q)| (p, q, 0)).collect();
+        Self::with_planes(header, &planes)
+    }
+
+    /// The level vertices `vertices`, each (packed column and row, height,
+    /// packed plane), kept on the heap.
+    pub fn with_planes(header: LevelAiHeader, vertices: &[(u32, u16, u16)]) -> Self {
         let mut bytes = Vec::with_capacity(vertices.len() * KEPT);
-        for &(p, q) in vertices {
+        for &(p, q, w) in vertices {
             bytes.extend(&p.to_le_bytes()[..3]);
             bytes.extend(q.to_le_bytes());
+            bytes.extend(w.to_le_bytes());
         }
         Self {
             header,
@@ -213,7 +228,8 @@ impl LevelAi {
             let bytes = &mut buffer[..VERTEX_SIZE * batch];
             file.read_exact(bytes)?;
             for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut out) {
-                to.copy_from_slice(&v[VERTEX_PACKED..]);
+                to[..5].copy_from_slice(&v[VERTEX_PACKED..]);
+                to[5..].copy_from_slice(&v[VERTEX_PLANE..VERTEX_PACKED]);
             }
             if let Some(out) = links_out.as_mut() {
                 for (v, to) in bytes.as_chunks::<VERTEX_SIZE>().0.iter().zip(&mut *out) {
@@ -307,6 +323,40 @@ impl LevelAi {
         (p < u64::from(PACKED_LIMIT)).then_some(p as u32)
     }
 
+    /// Whether the cell of level vertex `k` contains `position`'s x and z
+    /// as object-visual-and-transform.md 4.1 step 5 tests it: the position
+    /// is on the level's grid and its packed column and row are `k`'s.
+    pub fn cell_contains(&self, k: u32, position: [f32; 3]) -> bool {
+        self.packed(k)
+            .is_some_and(|p| self.packed_at(position) == Some(p))
+    }
+
+    /// The packed plane *w* of level vertex `k` (bytes 14–15).
+    pub fn plane(&self, k: u32) -> Option<u16> {
+        self.vertex(k).map(|v| u16::from_le_bytes([v[5], v[6]]))
+    }
+
+    /// The plane height of level vertex `k` at (`x`, `z`)
+    /// (object-visual-and-transform.md 4.2), in single precision as the
+    /// game evaluates it.
+    pub fn plane_height(&self, k: u32, x: f32, z: f32) -> Option<f32> {
+        let v = self.vertex(k)?;
+        let p = u32::from_le_bytes([v[0], v[1], v[2], 0]);
+        let q = u16::from_le_bytes([v[3], v[4]]);
+        let w = u16::from_le_bytes([v[5], v[6]]);
+        let h = &self.header;
+        let r = h.row_length().max(1);
+        let xv = h.box_min[0] + h.cell_size * (p / r) as f32;
+        let zv = h.box_min[2] + h.cell_size * (p % r) as f32;
+        let yv = f32::from(q) * (1.0 / 65535.0) * h.height_range + h.box_min[1];
+        let [nx, ny, nz] = plane_normal(w);
+        if ny.abs() < FLAT_LIMIT {
+            return Some(yv);
+        }
+        let d = -((zv * nz + xv * nx) + ny * yv);
+        Some(-(((nz * z + nx * x) + ny * yv) + d) / ny + yv)
+    }
+
     /// Whether `position` lies in the cell of level vertex `k` (x and z
     /// only): the square of side *c* centred on its x and z (section 3).
     pub fn in_cell(&self, k: u32, position: [f32; 3]) -> bool {
@@ -316,6 +366,29 @@ impl LevelAi {
         let half = self.header.cell_size / 2.0;
         (position[0] - c[0]).abs() <= half && (position[2] - c[2]).abs() <= half
     }
+}
+
+/// The unit normal of packed plane `w` (object-visual-and-transform.md
+/// 4.2): the packed direction, scaled by the reciprocal of its unsigned
+/// length (computed here in single precision; the game's values of it are
+/// not specified, #1170), then renormalised.
+pub fn plane_normal(w: u16) -> [f32; 3] {
+    let (mut a, mut b) = ((w >> 7) & 63, w & 127);
+    if a + b > 126 {
+        a = 127 - a;
+        b = 127 - b;
+    }
+    let c = 126 - a - b;
+    let (a, b, c) = (f32::from(a), f32::from(b), f32::from(c));
+    let factor = 1.0 / (a * a + b * b + c * c).sqrt();
+    let sign = |bit: u16, v: f32| if w & bit != 0 { -v } else { v };
+    let (nx, ny, nz) = (
+        sign(0x8000, a * factor),
+        sign(0x4000, b * factor),
+        sign(0x2000, c * factor),
+    );
+    let s = (1.0 / (ny * ny + nx * nx + nz * nz)).sqrt();
+    [nx * s, ny * s, nz * s]
 }
 
 /// No links asked for ([`LevelAi::read_with`]).
@@ -441,6 +514,57 @@ pub(crate) mod tests {
         let mut huge = file.clone();
         huge[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(LevelAi::read(io::Cursor::new(&huge[..])).is_err());
+    }
+
+    #[test]
+    fn keeps_each_vertexs_plane() {
+        let mut file = level_ai_file(7.0, 3.5, &[(0, 0, 0), (2, 3, 65535)]);
+        file[HEADER_SIZE + VERTEX_SIZE + VERTEX_PLANE..][..2]
+            .copy_from_slice(&125u16.to_le_bytes());
+        let ai = LevelAi::read(io::Cursor::new(&file[..])).unwrap();
+        assert_eq!(
+            (ai.plane(0), ai.plane(1), ai.plane(2)),
+            (Some(0), Some(125), None)
+        );
+        assert_eq!(ai.packed(1), Some(2 * 6 + 3));
+        assert!(ai.cell_contains(1, [1.5, 0.0, 2.0]));
+        assert!(!ai.cell_contains(0, [1.5, 0.0, 2.0]));
+    }
+
+    /// object-visual-and-transform.md 4.2, 4.5: vertex 12,442 of
+    /// `l01_escape` (column 55, row 496, *q* 12,293, direction (0, 125, 1))
+    /// at the trader's stored x and z.
+    #[test]
+    fn plane_height_of_the_traders_vertex() {
+        let header = LevelAiHeader {
+            vertex_count: 1,
+            cell_size: 0.7,
+            height_range: 67.247_51,
+            box_min: [-283.5, -37.482_147, -480.9],
+            box_max: [-283.5 + 0.7 * 993.0, 29.765_366, -480.9 + 0.7 * 1696.0],
+            identifier: [0; 16],
+        };
+        assert_eq!((header.row_length(), header.column_count()), (1_697, 994));
+        let ai = LevelAi::with_planes(header, &[(55 * 1_697 + 496, 12_293, 125)]);
+        let v = ai.position(0).unwrap();
+        assert!(
+            (v[0] + 245.0).abs() < 1e-4 && (v[2] + 133.7).abs() < 1e-4,
+            "{v:?}"
+        );
+        let h = ai.plane_height(0, -244.6927, -133.96).unwrap();
+        assert!((h + 24.865_836).abs() < 2e-6, "{h}");
+        // Unpacking: a, b swapped past 126, signs from bits 15, 14, 13.
+        let n = plane_normal(125);
+        assert!((n[0]).abs() < 1e-7 && (n[1] * 125f32.hypot(1.0) - 125.0).abs() < 1e-4);
+        let n = plane_normal(0xE000 | (60 << 7) | 100);
+        let (a, b) = (67.0f32, 27.0f32);
+        let len = (a * a + b * b + 32.0 * 32.0).sqrt();
+        assert!((n[0] + a / len).abs() < 1e-6, "{n:?}");
+        assert!((n[1] + b / len).abs() < 1e-6, "{n:?}");
+        assert!((n[2] + 32.0 / len).abs() < 1e-6, "{n:?}");
+        // A vertical plane gives the vertex's own height.
+        let flat = LevelAi::with_planes(header, &[(0, 0, 63 << 7)]);
+        assert_eq!(flat.plane_height(0, 3.0, 4.0), Some(-37.482_147));
     }
 
     #[test]

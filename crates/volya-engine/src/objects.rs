@@ -35,7 +35,7 @@ use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, skinned_ve
 use volya_engine_formats::bone_physics::UsedShape;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
-use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord};
+use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord, SpawnHeader};
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -788,9 +788,7 @@ pub struct Instance {
 impl Instance {
     pub fn new(object: &LevelObject, visual: String, model: usize, loaded: &LoadedModel) -> Self {
         let h = &object.record.header;
-        let transform = transform(h.position, h.angles);
-        let c = transform_point(&transform, loaded.header.sphere_centre);
-        Self {
+        let mut instance = Self {
             id: object.id,
             index: object.index,
             online: object.online,
@@ -799,9 +797,18 @@ impl Instance {
             kind: object.record.kind(),
             visual,
             model,
-            transform,
-            sphere: [c[0], c[1], c[2], loaded.header.sphere_radius],
-        }
+            transform: Mat4::default(),
+            sphere: [0.0; 4],
+        };
+        instance.place(h, loaded);
+        instance
+    }
+
+    /// Places it at `header`'s position and angles (`OV` 4).
+    pub fn place(&mut self, header: &SpawnHeader, loaded: &LoadedModel) {
+        self.transform = transform(header.position, header.angles);
+        let c = transform_point(&self.transform, loaded.header.sphere_centre);
+        self.sphere = [c[0], c[1], c[2], loaded.header.sphere_radius];
     }
 }
 

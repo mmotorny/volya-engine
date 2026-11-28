@@ -1135,6 +1135,44 @@ fn new_game_simulation(
 /// objects evaluated once while the loading image shows), which brings the
 /// player online: it then receives its bolt (player-state.md 3.2) with the
 /// next id.
+/// The objects of `level_objects` online at the start come online
+/// (object-visual-and-transform.md 4.1, [`Simulation::come_online`]), each
+/// with its model's sphere centre (the player's model's for the player),
+/// their records and instances then placed as the simulation's records
+/// stand. An object without a model is left as stored: its sphere centre
+/// is unestablished (4.1 step 4; our choice).
+fn come_online_at_start(
+    shared: &mut AlifeSimulator,
+    level_objects: &mut [objects::LevelObject],
+    spawned: &mut objects::Spawned,
+    player_centre: [f32; 3],
+) -> io::Result<()> {
+    let sim = earlier(shared.simulation.as_mut(), "simulation")?;
+    for o in level_objects.iter_mut().filter(|o| o.online) {
+        let k = spawned.instances.iter().position(|i| i.id == o.id);
+        let centre = match k {
+            Some(k) => {
+                spawned.models[spawned.instances[k].model]
+                    .header
+                    .sphere_centre
+            }
+            None if o.record.kind() == record::Kind::Player => player_centre,
+            None => continue,
+        };
+        sim.come_online(o.id, centre);
+        let Some(now) = sim.object(o.id) else {
+            continue;
+        };
+        o.record.header.position = now.record.header.position;
+        *o.record.object.object_block_mut() = now.record.object.object_block().clone();
+        if let Some(k) = k {
+            let i = &mut spawned.instances[k];
+            i.place(&o.record.header, &spawned.models[i.model]);
+        }
+    }
+    Ok(())
+}
+
 fn first_switch_pass(
     tree: &dyn Vfs,
     data: &GameData,
@@ -2284,7 +2322,7 @@ impl NewGameLoad {
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
-                let level_objects = std::mem::take(&mut self.level_objects);
+                let mut level_objects = std::mem::take(&mut self.level_objects);
                 let mut pending = Vec::new();
                 let keeper = self.keep_geometry.clone();
                 let mut keep = |c: objects::GeometryChunk| {
@@ -2307,6 +2345,16 @@ impl NewGameLoad {
                     &mut keep,
                 )?;
                 spawned.chunks = pending;
+                // The objects online at the start come online
+                // (object-visual-and-transform.md 4.1): with their models'
+                // spheres, before anything below places them.
+                let player_centre = earlier(self.player_sphere, "player's model")?.0;
+                come_online_at_start(
+                    &mut self.simulation.borrow_mut(),
+                    &mut level_objects,
+                    &mut spawned,
+                    player_centre,
+                )?;
                 // The artefacts online at the start are created as the
                 // client creates its objects (artefact-idle-effects.md 3.1),
                 // with their models' bones, on the effects' clock.
@@ -4056,6 +4104,24 @@ impl LevelScreen {
                 }
             }
         }
+        drop(shared);
+        // object-visual-and-transform.md 4.1: each comes online with its
+        // model's sphere; one without a loaded visual is left as stored.
+        for &id in &changes.online {
+            if let Some(&k) = self.instances.get(&id) {
+                let objects = &self.world.objects;
+                let centre = objects.models[objects.instances[k].model]
+                    .header
+                    .sphere_centre;
+                if let Some(sim) = self.simulation.borrow_mut().simulation.as_mut() {
+                    sim.come_online(id, centre);
+                }
+            }
+        }
+        let shared = self.simulation.borrow();
+        let Some(sim) = shared.simulation.as_ref() else {
+            return;
+        };
         let mut placements = (*self.placements).clone();
         let mut changed = false;
         for &id in &changes.online {

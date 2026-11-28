@@ -433,11 +433,35 @@ fn level_objects_from_game_data() {
             let b = pose[m.bone(bone).unwrap()];
             near3([b[3][0], b[3][1], b[3][2]], want, 1e-4, bone);
         }
+        // Online, his height is corrected (object-visual-and-transform.md
+        // 4.1, 4.5): his vertex 12,442's plane at his x and z plus 0.001,
+        // which raises the box of section 5.2 by 0.0932 m; x and z stay.
+        // Within one unit in the last place: 4.2 leaves the single-precision
+        // values of the direction's length factor open (#1170).
+        let stored = sim.by_name("escape_trader").unwrap();
+        let y = stored.record.header.position[1];
+        assert!((y + 24.864_836).abs() <= 2e-6, "online height {y}");
+        let block = stored.record.object.object_block();
+        assert_eq!(block.level_graph_node, 12_442);
+        let t = trader.transform[3];
+        assert_eq!(t[1], y, "drawn height");
+        near3(
+            [t[0], t[1], t[2]],
+            [-244.6927, -24.864_836, -133.96],
+            1e-4,
+            "p",
+        );
         let (min, max) = world_box(&m, trader);
-        near3(min, [-244.821, -24.9555, -134.8202], 1e-3, "trader box min");
+        let up = 0.0932;
+        near3(
+            min,
+            [-244.821, -24.9555 + up, -134.8202],
+            1e-3,
+            "trader box min",
+        );
         near3(
             max,
-            [-244.4099, -23.2295, -133.1037],
+            [-244.4099, -23.2295 + up, -133.1037],
             1e-3,
             "trader box max",
         );
