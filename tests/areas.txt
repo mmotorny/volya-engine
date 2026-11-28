@@ -248,16 +248,6 @@
     crates/volya-engine/src/footsteps.rs
     crates/volya-engine/src/level_sound.rs
 
-//tests/browser:audio_load_chrome
-    @runner
-    @audio
-    tests/browser/audio-load.*
-    tests/browser/game.js
-    crates/volya-engine-core/src/footsteps.rs
-    crates/volya-engine-core/src/footsteps/**
-    crates/volya-engine/src/footsteps.rs
-    crates/volya-engine/src/level_sound.rs
-
 //tests/browser:render_chrome
     @runner
     @webgl2
@@ -426,12 +416,6 @@
     @simulator
     @audio
     tests/browser/audio.*
-
-//tests/browser:audio_load_iphone
-    @simulator
-    @audio
-    tests/browser/audio-load.*
-    tests/browser/game.js
 
 //tests/browser:render_iphone
     @simulator

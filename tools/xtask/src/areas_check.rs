@@ -148,7 +148,7 @@ fn rows_name_tests_by_label_or_by_suite() {
 |---|---|
 | `//:gamedata` | Nightly |
 | `//:checks`: every test tagged `check` | By area: every change (`**`) |
-| Chrome: `smoke`, `audio-load` | By area |
+| Chrome: `smoke`, `import` | By area |
 | iPhone: every suite | By area: some |
 | The measurements: `//a/b:c`, `:d`, `//e:f` | By area |
 
@@ -163,7 +163,7 @@ fn rows_name_tests_by_label_or_by_suite() {
             "//a/b:c",
             "//a/b:d",
             "//e:f",
-            "//tests/browser:audio_load_chrome",
+            "//tests/browser:import_chrome",
             "//tests/browser:render_iphone",
             "//tests/browser:smoke_chrome",
             "//tests/browser:smoke_iphone",

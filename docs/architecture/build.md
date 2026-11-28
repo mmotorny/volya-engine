@@ -78,7 +78,7 @@ Every manual test (`bazel query 'attr(tags, manual, tests(//...))'`) has exactly
 | `//:gamedata`: every test tagged `gamedata` but the measurements | Nightly |
 | `//tests/browser:game_startup_chrome` (where `smoke_chrome` was), `:game_level_chrome`, `:game_input_chrome`, `:game_memory_chrome` (a report) | Nightly |
 | `//:checks`: every test tagged `check` | By area: every change (`**`) |
-| Chrome: `smoke`, `platform`, `input`, `import`, `audio`, `audio-load`, `render`, `render-screens`, `render-level`, `draw-calls`, `d3d9probes`, `fidelity`, `audio-fidelity`, `game-screens` | By area |
+| Chrome: `smoke`, `platform`, `input`, `import`, `audio`, `render`, `render-screens`, `render-level`, `draw-calls`, `d3d9probes`, `fidelity`, `audio-fidelity`, `game-screens` | By area |
 | iPhone: every suite | By area: the page, input, audio, storage and WebGL 2 path its suite exercises |
 | The measurements and walks: `//crates/volya-engine-core:collision_rays`, `:particles_cost`, `:simulation_cost`, `//crates/volya-engine:level_memory`, `:loading_memory`, `:transcode`, `:visuals` | By area |
 
