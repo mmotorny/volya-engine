@@ -41,7 +41,9 @@ To run locally on macOS:
 
 ## Development
 
-- `bazel test //...`: the tests and static checks that run by default, cached (needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) and Google Chrome).
+- `bazel test //...`: the hermetic unit tests, cached.
+- `bazel test //:checks`: the static checks (formatting, lints, licences; needs [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)).
+- `bazel test //:gamedata`: the tests that read the game data.
 - `bazel test //tests/browser:chrome //tests/browser:iphone`: every browser suite in headless Chrome and Mobile Safari in the iOS Simulator (needs Xcode).
 - `bazel run //tools/xtask -- deploy`: publish to GitHub Pages.
 - `bazel run //tools/xtask -- update`: move to the latest Rust, crates, Bazel and its rules.

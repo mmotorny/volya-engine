@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-load("//build:checks.bzl", "volya_checks")
+load("//build:checks.bzl", "CHECK", "volya_checks")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 
@@ -32,7 +32,7 @@ rust_test(
     name = "spdx",
     srcs = ["spdx_test.rs"],
     data = ["//:all_files"],
-    tags = ["check"],
+    tags = CHECK,
 )
 
 # Build output stays ignored.
@@ -40,7 +40,7 @@ rust_test(
     name = "gitignore",
     srcs = ["gitignore_test.rs"],
     data = ["//:.gitignore"],
-    tags = ["check"],
+    tags = CHECK,
 )
 
 # Versions pinned twice agree.
@@ -51,7 +51,7 @@ rust_test(
         "//:Cargo.lock",
         "//:MODULE.bazel",
     ],
-    tags = ["check"],
+    tags = CHECK,
 )
 
 # Dependencies are permissively licensed (cargo-deny, installed on the
@@ -72,8 +72,7 @@ rust_test(
         "CARGO_DENY": "$(rootpath @local_tools//:cargo-deny)",
         "WORKSPACE_MANIFEST": "$(rootpath //:Cargo.toml)",
     },
-    tags = [
-        "check",
+    tags = CHECK + [
         "no-sandbox",
         "requires-network",
     ],
@@ -92,7 +91,24 @@ rust_test(
     srcs = ["checks_static_test.rs"],
     data = [":unchecked_tests"],
     env = {"UNCHECKED_TESTS": "$(rootpath :unchecked_tests)"},
-    tags = ["check"],
+    tags = CHECK,
+)
+
+# `bazel test //...` runs only hermetic, deterministic tests: no static
+# check, game-data test or browser suite. The query lists those it would
+# run, from every package's `default_tests` (genquery takes no wildcards).
+genquery(
+    name = "default_unwanted",
+    expression = "attr(tags, '[^a-z_-](check|gamedata|browser)[^a-z_-]', tests(//:default_tests))",
+    scope = ["//:default_tests"],
+)
+
+rust_test(
+    name = "default_only",
+    srcs = ["default_only_test.rs"],
+    data = [":default_unwanted"],
+    env = {"DEFAULT_UNWANTED": "$(rootpath :default_unwanted)"},
+    tags = CHECK,
 )
 
 volya_checks(wasm = False)

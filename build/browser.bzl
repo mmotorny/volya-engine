@@ -76,15 +76,14 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
     Args:
         suite: the suite's name (tests/browser/<suite>.js).
         target: `chrome` or `iphone`.
-        tags: tags besides the ones every suite has.
+        tags: tags besides the ones every suite has (`browser`, `manual`).
         timeout: Bazel's timeout (the suite's report timeout is its own).
         gamedata: whether the suite reads the installer.
         references: what the page compares with (the fidelity, d3d9probes and platform suites').
     """
-    # Never in `bazel test //...` by accident: the iOS Simulator and the
-    # measurements run only when named, alone on the machine.
-    if (target == "iphone" or suite in MEASURING) and not ("manual" in tags and "exclusive" in tags):
-        fail("{} on {} must be tagged manual and exclusive".format(suite, target))
+    # The iOS Simulator and the measurements run alone on the machine.
+    if (target == "iphone" or suite in MEASURING) and "exclusive" not in tags:
+        fail("{} on {} must be tagged exclusive".format(suite, target))
     browser = "@local_tools//:chrome_version.txt" if target == "chrome" else "@local_tools//:simulator_runtime.txt"
     browser_suite_test(
         name = "{}_{}".format(suite.replace("-", "_"), target),
@@ -97,8 +96,9 @@ def browser_suite(suite, target, tags = [], timeout = "moderate", gamedata = Tru
         site_next = "//platforms/web:site_next",
         suite = suite,
         suite_files = native.glob(["*.js", "*.html"]),
-        # The real browser and Simulator, profiles outside the execroot; one
+        # Never in `bazel test //...`, only by name or group (manual); the
+        # real browser and Simulator, profiles outside the execroot; one
         # browser suite at a time per invocation (--local_resources).
-        tags = ["browser", "no-sandbox", "resources:browser:1"] + tags,
+        tags = ["browser", "manual", "no-sandbox", "resources:browser:1"] + tags,
         timeout = timeout,
     )

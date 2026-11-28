@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Maksym Motorny
 # SPDX-License-Identifier: BSD-3-Clause
 
-load("//build:checks.bzl", "volya_checks")
+load("//build:checks.bzl", "CHECK", "volya_checks")
 load("//build:notices.bzl", "third_party_notices")
 load("//build:rust.bzl", "LINTS")
 load("//build:web.bzl", "next_site", "web_site")
@@ -50,7 +50,7 @@ third_party_notices(
 
 build_test(
     name = "notices",
-    tags = ["check"],
+    tags = CHECK,
     targets = [":third_party_notices"],
 )
 

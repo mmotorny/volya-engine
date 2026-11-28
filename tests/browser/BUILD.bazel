@@ -6,13 +6,11 @@ load("//build:checks.bzl", "volya_checks")
 
 # The browser suites (docs/architecture/build.md, Browser suites; the list
 # is tools/xtask/src/e2e.rs's SUITES): `bazel test
-# //tests/browser:<suite>_<target>`. In `bazel test //...` only smoke,
-# platform, render and import on Chrome; the rest by name or group.
-
-MANUAL = ["manual"]
+# //tests/browser:<suite>_<target>`, or a group. Every suite is manual
+# (browser_suite): none runs in `bazel test //...`.
 
 # Measurements and the iOS Simulator: alone on the machine.
-ALONE = ["manual", "exclusive"]
+ALONE = ["exclusive"]
 
 # Report timeouts (e2e.rs) of 240 s and of 1500 s.
 SLOW = "long"
@@ -37,14 +35,14 @@ REFERENCES = {"platform": "//tests/odeharness:platform_references"}
         ("platform", [], "moderate", False),
         ("render", [], SLOW, True),
         ("import", [], "moderate", True),
-        ("input", MANUAL, "moderate", False),
-        ("audio", MANUAL, SLOW, True),
+        ("input", [], "moderate", False),
+        ("audio", [], SLOW, True),
         ("audio-load", ALONE, WHOLE_GAME, True),
-        ("game-startup", MANUAL, WHOLE_GAME, True),
-        ("game-input", MANUAL, WHOLE_GAME, True),
-        ("game-screens", MANUAL, WHOLE_GAME, True),
-        ("render-screens", MANUAL, WHOLE_GAME, True),
-        ("render-level", MANUAL, WHOLE_GAME, True),
+        ("game-startup", [], WHOLE_GAME, True),
+        ("game-input", [], WHOLE_GAME, True),
+        ("game-screens", [], WHOLE_GAME, True),
+        ("render-screens", [], WHOLE_GAME, True),
+        ("render-level", [], WHOLE_GAME, True),
         ("game-level", ALONE, WHOLE_GAME, True),
         ("game-memory", ALONE, WHOLE_GAME, True),
         ("draw-calls", ALONE, WHOLE_GAME, True),
@@ -65,7 +63,6 @@ browser_suite(
 browser_suite(
     references = "//tests/fidelity:audio",
     suite = "audio-fidelity",
-    tags = MANUAL,
     target = "chrome",
     timeout = WHOLE_GAME,
 )
@@ -76,7 +73,6 @@ browser_suite(
     gamedata = False,
     references = "//tests/d3d9probes:references",
     suite = "d3d9probes",
-    tags = MANUAL,
     target = "chrome",
 )
 

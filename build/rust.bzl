@@ -78,8 +78,10 @@ def volya_integration_tests(crate, deps = [], rustc_flags = [], compile_data = [
         deps: first-party dependencies besides `crate`.
         rustc_flags: extra rustc flags.
         compile_data: files the tests include (`#[path]`, `include!`).
-        tags: extra tags by test name (the file's stem).
-        common_tags: tags of every test.
+        tags: extra tags by test name (the file's stem); `manual` keeps a
+            game-data test out of the package's `:gamedata`.
+        common_tags: tags of every test; `gamedata` makes them manual and
+            gathers them in the package's `:gamedata`.
         **kwargs: passed to every rust_test.
     """
     gamedata = "gamedata" in common_tags
@@ -93,8 +95,13 @@ def volya_integration_tests(crate, deps = [], rustc_flags = [], compile_data = [
         env = {"VOLYA_GOG_GAME": "$(rootpath @gog_game//:manifest.tsv)"}
         if GOG_INSTALLER:
             env["VOLYA_GOG_INSTALLER"] = GOG_INSTALLER
+    named = []
     for src in native.glob(["tests/*.rs"], allow_empty = True):
         stem = src[len("tests/"):-len(".rs")]
+        extra = tags.get(stem, [])
+        if gamedata and "manual" not in extra:
+            named.append(":" + stem)
+            extra = extra + ["manual"]
         rust_test(
             name = stem,
             crate_name = stem,
@@ -106,6 +113,16 @@ def volya_integration_tests(crate, deps = [], rustc_flags = [], compile_data = [
             compile_data = compile_data,
             data = data,
             env = env,
-            tags = common_tags + tags.get(stem, []),
+            # Game-data tests stay out of `bazel test //...`, run by name
+            # or as the package's `:gamedata` (//:gamedata).
+            tags = common_tags + extra,
             **kwargs
+        )
+    if gamedata:
+        # Manual, naming its tests: those that walk the whole game or
+        # measure (manual in `tags`) run alone, by name.
+        native.test_suite(
+            name = "gamedata",
+            tags = ["manual"],
+            tests = named,
         )

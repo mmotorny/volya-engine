@@ -31,6 +31,7 @@ PACKAGES = [
     "//tools/devserver",
     "//tools/gog-extract",
     "//tools/site",
+    "//tools/wincapture",
     "//tools/xtask",
 ]
 
@@ -50,18 +51,49 @@ filegroup(
     visibility = ["//build:__pkg__"],
 )
 
-# The static checks: `bazel test //:checks`. Each is tagged `check`
-# (//build:checks_static): nothing that builds the engine or runs a browser.
+# Every suite here is manual: `bazel test //...` would run every test a
+# suite it matches names, and it runs only hermetic, deterministic tests
+# (//build:default_only).
+
+# What `bazel test //...` runs: every package's (//build:default_only).
+test_suite(
+    name = "default_tests",
+    tags = ["manual"],
+    tests = [p + ":default_tests" for p in PACKAGES],
+    visibility = ["//build:__pkg__"],
+)
+
+# The tests that read the game data, but those that walk the whole game or
+# measure (docs/architecture/build.md, Native tests): `bazel test
+# //:gamedata`, or a package's `:gamedata`.
+test_suite(
+    name = "gamedata",
+    tags = ["manual"],
+    tests = [
+        "//crates/volya-engine:gamedata",
+        "//crates/volya-engine-core:gamedata",
+        "//crates/volya-engine-formats:gamedata",
+        "//crates/volya-engine-installer:gamedata",
+        "//crates/volya-engine-script:gamedata",
+    ],
+)
+
+# The static checks: `bazel test //:checks`. Each is tagged `check` and
+# `manual` (//build:checks_static, :default_only): nothing that builds the
+# engine or runs a browser.
 test_suite(
     name = "checks",
+    tags = ["manual"],
     tests = [
         ":static_checks",
         "//build:checks_static",
+        "//build:default_only",
     ],
 )
 
 test_suite(
     name = "static_checks",
+    tags = ["manual"],
     tests = [
         "//build:gitignore",
         "//build:licenses",
