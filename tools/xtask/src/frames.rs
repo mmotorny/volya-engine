@@ -5,8 +5,9 @@
 //! (docs/testing.md, The original on Windows) received from the PC over the
 //! local network into one folder of `~/Library/Caches/volya-engine/`
 //! ([`Dest`]): the fidelity suite's frames, the audio-fidelity suite's
-//! captured audio, or the physics harness's results (game assets and
-//! black-box outputs: they go nowhere else).
+//! captured audio, the physics harness's results, the Direct3D 9 probes'
+//! results, or a capture run's text results (game assets and black-box
+//! outputs: they go nowhere else).
 //!
 //! A one-shot HTTP receiver on the Mac's LAN address and a port the system
 //! picks, both printed with a random token: every request carries the token
@@ -46,6 +47,13 @@ pub enum Dest {
     Audio,
     /// `ode-harness`: the physics harness's results.
     OdeHarness,
+    /// `d3d9probes`: the Direct3D 9 probes' results of one adapter,
+    /// `<gpu>/results/<probe>/<case>.png` and the rest.
+    D3d9Probes,
+    /// `results`: a capture run's text results, `<gpu>/<file>.txt` and
+    /// `<gpu>/<mode>-<n>/<file>` (log, events, hashes, frame clock log,
+    /// drrun's output); text only.
+    Results,
 }
 
 impl Dest {
@@ -55,6 +63,8 @@ impl Dest {
             "fidelity" => Some(Self::Fidelity),
             "audio" => Some(Self::Audio),
             "ode-harness" => Some(Self::OdeHarness),
+            "d3d9probes" => Some(Self::D3d9Probes),
+            "results" => Some(Self::Results),
             _ => None,
         }
     }
@@ -65,6 +75,25 @@ impl Dest {
             Self::Fidelity => "original-frames/fidelity",
             Self::Audio => "original-audio/audio-fidelity",
             Self::OdeHarness => "ode-harness",
+            Self::D3d9Probes => "d3d9probes",
+            Self::Results => "wincapture-results",
+        }
+    }
+
+    /// The most parts a path below the folder has.
+    fn depth(self) -> usize {
+        match self {
+            Self::Fidelity | Self::Audio | Self::OdeHarness => 2,
+            Self::Results => 3,
+            Self::D3d9Probes => 4,
+        }
+    }
+
+    /// The extensions a file may have; `None` for any.
+    fn extensions(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::Results => Some(&["txt", "log"]),
+            _ => None,
         }
     }
 }
@@ -103,7 +132,7 @@ pub fn receive(into: Dest, address: Option<&str>) -> Result {
         }
         match listener.accept() {
             Ok((stream, peer)) => {
-                if let Err(e) = serve(stream, &token, &dest, &mut manifest, &mut arrived) {
+                if let Err(e) = serve(stream, &token, into, &dest, &mut manifest, &mut arrived) {
                     println!("{peer}: {e}");
                 }
             }
@@ -161,12 +190,20 @@ fn token() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// A path of the manifest, as it lands below the fidelity folder: one or
-/// two parts of letters, digits, `.`, `_` and `-`, none starting with `.`
-/// (so no `..`, no hidden file), separated by `/`; nothing absolute.
-fn safe_path(path: &str) -> Option<&str> {
+/// A path of the manifest, as it lands below `dest`'s folder: one to
+/// [`Dest::depth`] parts of letters, digits, `.`, `_` and `-`, none starting
+/// with `.` (so no `..`, no hidden file), separated by `/`; nothing
+/// absolute; the file's extension one of [`Dest::extensions`].
+fn safe_path(dest: Dest, path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.split('/').collect();
-    let ok = (1..=2).contains(&parts.len())
+    let extension_ok = dest.extensions().is_none_or(|allowed| {
+        parts
+            .last()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(_, ext)| allowed.contains(&ext))
+    });
+    let ok = extension_ok
+        && (1..=dest.depth()).contains(&parts.len())
         && parts.iter().all(|p| {
             !p.is_empty()
                 && !p.starts_with('.')
@@ -177,7 +214,7 @@ fn safe_path(path: &str) -> Option<&str> {
     ok.then_some(path)
 }
 
-fn manifest_of(text: &str) -> std::result::Result<BTreeMap<String, String>, String> {
+fn manifest_of(dest: Dest, text: &str) -> std::result::Result<BTreeMap<String, String>, String> {
     let mut m = BTreeMap::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let (hash, path) = line
@@ -187,7 +224,8 @@ fn manifest_of(text: &str) -> std::result::Result<BTreeMap<String, String>, Stri
         if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("manifest: {hash:?} is not a SHA-256"));
         }
-        let path = safe_path(path.trim()).ok_or_else(|| format!("manifest: path {path:?}"))?;
+        let path =
+            safe_path(dest, path.trim()).ok_or_else(|| format!("manifest: path {path:?}"))?;
         m.insert(path.to_string(), hash);
     }
     if m.is_empty() {
@@ -200,6 +238,7 @@ fn manifest_of(text: &str) -> std::result::Result<BTreeMap<String, String>, Stri
 fn serve(
     stream: TcpStream,
     token: &str,
+    into: Dest,
     dest: &Path,
     manifest: &mut Option<BTreeMap<String, String>>,
     arrived: &mut BTreeMap<String, usize>,
@@ -256,7 +295,7 @@ fn serve(
     let mut body = vec![0u8; length];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
     match (method.as_str(), target.as_str()) {
-        ("POST", "/manifest") => match manifest_of(&String::from_utf8_lossy(&body)) {
+        ("POST", "/manifest") => match manifest_of(into, &String::from_utf8_lossy(&body)) {
             Ok(m) => {
                 println!("manifest: {} files", m.len());
                 *manifest = Some(m);
@@ -326,26 +365,76 @@ mod tests {
 
     #[test]
     fn paths_stay_below_the_folder() {
-        assert_eq!(safe_path("title-menu.png"), Some("title-menu.png"));
-        assert_eq!(safe_path("display/leaves.png"), Some("display/leaves.png"));
+        let f = Dest::Fidelity;
+        assert_eq!(safe_path(f, "title-menu.png"), Some("title-menu.png"));
+        assert_eq!(
+            safe_path(f, "display/leaves.png"),
+            Some("display/leaves.png")
+        );
         for bad in [
             "../x.png", "/etc/x", "a/../b", ".x", "a\\b", "a/b/c", "", "a//b", "C:x",
         ] {
-            assert_eq!(safe_path(bad), None, "{bad}");
+            assert_eq!(safe_path(f, bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn a_runs_text_results() {
+        let r = Dest::Results;
+        assert_eq!(
+            Dest::parse("results").map(Dest::folder),
+            Some("wincapture-results")
+        );
+        for good in [
+            "rtx-4090/release.txt",
+            "rtx-4090/full-summary.txt",
+            "rtx-4090/full-1/log.txt",
+            "rtx-4090/full-1/frameclock.log",
+            "rtx-4090/check-2/drrun-output.txt",
+        ] {
+            assert_eq!(safe_path(r, good), Some(good), "{good}");
+        }
+        for bad in [
+            "rtx-4090/full-1/fidelity/title-menu.png",
+            "rtx-4090/full-1/title-menu.png",
+            "rtx-4090/full-1/title-menu.user.ltx",
+            "rtx-4090/full-1/audio.raw",
+            "rtx-4090/txt",
+            "rtx-4090/.txt",
+            "rtx-4090/../x.txt",
+            "/rtx-4090/x.txt",
+            "a/b/c/d.txt",
+        ] {
+            assert_eq!(safe_path(r, bad), None, "{bad}");
+        }
+        let h = "a".repeat(64);
+        assert!(manifest_of(r, &format!("{h} rtx-4090/full-1/events.txt")).is_ok());
+        assert!(manifest_of(r, &format!("{h} rtx-4090/full-1/x.png")).is_err());
+    }
+
+    #[test]
+    fn the_d3d9_probes_results() {
+        let d = Dest::D3d9Probes;
+        assert_eq!(
+            safe_path(d, "rtx-4090/results/fog/linear.png"),
+            Some("rtx-4090/results/fog/linear.png")
+        );
+        assert_eq!(safe_path(d, "rtx-4090/log.txt"), Some("rtx-4090/log.txt"));
+        assert_eq!(safe_path(d, "a/b/c/d/e.png"), None);
     }
 
     #[test]
     fn a_manifest() {
         let h = "a".repeat(64);
-        let m = manifest_of(&format!(
-            "{h} title-menu.png\r\n{} display/x.png\n",
-            "B".repeat(64)
-        ))
+        let f = Dest::Fidelity;
+        let m = manifest_of(
+            f,
+            &format!("{h} title-menu.png\r\n{} display/x.png\n", "B".repeat(64)),
+        )
         .unwrap();
         assert_eq!(m["display/x.png"], "b".repeat(64));
-        assert!(manifest_of(&format!("{h} ../x")).is_err());
-        assert!(manifest_of("abc x.png").is_err());
-        assert!(manifest_of("").is_err());
+        assert!(manifest_of(f, &format!("{h} ../x")).is_err());
+        assert!(manifest_of(f, "abc x.png").is_err());
+        assert!(manifest_of(f, "").is_err());
     }
 }

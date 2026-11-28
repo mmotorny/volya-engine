@@ -56,13 +56,14 @@ Tasks:
               The same for the physics library comparison (tests/odeharness).
   wincapture release
               The same for the original's capture on Windows (tools/wincapture).
-  frames-receive [--into fidelity|audio|ode-harness] [ADDRESS]
+  frames-receive [--into fidelity|audio|ode-harness|d3d9probes|results] [ADDRESS]
               Receive a Windows run's files from the PC over the local
               network into ~/Library/Caches/volya-engine/: the fidelity
               suite's frames (the default), the audio-fidelity suite's audio
-              (original-audio/), or the physics harness's results
-              (ode-harness/); prints the address, port and token the PC sends
-              them with.
+              (original-audio/), the physics harness's results
+              (ode-harness/), the Direct3D 9 probes' results (d3d9probes/)
+              or a capture's text results (wincapture-results/); prints the
+              address, port and token the PC sends them with.
   wincapture plan
               Print that capture's plan (from tests/fidelity/views.rs).
   update      Move to the latest Rust, crates, Bazel, its modules and the
@@ -123,8 +124,11 @@ fn main() -> ExitCode {
 fn frames_receive(args: &[&str]) -> Result {
     let (into, rest) = match args {
         ["--into", dest, rest @ ..] => (
-            frames::Dest::parse(dest)
-                .ok_or_else(|| format!("--into {dest}: expected fidelity, audio or ode-harness"))?,
+            frames::Dest::parse(dest).ok_or_else(|| {
+                format!(
+                    "--into {dest}: expected fidelity, audio, ode-harness, d3d9probes or results"
+                )
+            })?,
             rest,
         ),
         rest => (frames::Dest::Fidelity, rest),
