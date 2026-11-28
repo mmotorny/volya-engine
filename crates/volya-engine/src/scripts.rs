@@ -21,7 +21,7 @@ use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::dialogs::Dialogs;
 use crate::core::scripted_motion_channels::{ChannelCall, ChannelEvent, ChannelSounds};
-use crate::core::simulation::ACTOR_ID;
+use crate::core::simulation::{ACTOR_ID, NO_ID};
 use crate::core::vfs::Vfs;
 use crate::core::zones;
 use crate::data::GameData;
@@ -39,6 +39,7 @@ use crate::script::game_object::physics::{LevelQueries, PhysicsEvent, PhysicsShe
 use crate::script::game_object::{
     EngineState, Event, GameObjects, Kinds, ObjectClass, Physics, Restrictor, SpawnData, Visual,
 };
+use crate::script::inventory::Event as InventoryEvent;
 use crate::script::level::{Level, LevelEvent, LevelVertices};
 use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
@@ -362,7 +363,7 @@ pub fn client_spawning(
 /// updates (O 6.1: the door scheme's fast call); the story's frame
 /// ([`story_frame`]); then what the members asked of the engine
 /// ([`apply_events`]; `level.set_time_factor`'s factors set on the game
-/// clock, H 4.2). No system of the app perceives sounds yet, so none
+/// clock, H 4.2; the inventories' update and events, [`inventory_frame`]). No system of the app perceives sounds yet, so none
 /// is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
@@ -444,6 +445,7 @@ pub fn level_frame(
     apply_events(scripts, level);
     apply_physics_events(scripts, level)?;
     apply_simulation_events(scripts, level);
+    inventory_frame(scripts, level)?;
     for factor in scripts.times().borrow_mut().take_time_factors() {
         level.set_time_factor(factor);
     }
@@ -465,6 +467,48 @@ fn apply_simulation_events(scripts: &GameScripts, level: &mut LevelScreen) {
             SimulationEvent::SpawnedOnline { .. } => {}
         }
     }
+}
+
+/// Script API S's engine side in a level frame: the inventories' update
+/// (4.1, 5.4: each pending slot active, the marked items dropped, believed
+/// each frame), then the take and drop events served as the single-player
+/// server (5.1, `use` 9.2) and the rest acted on, in order: event 8
+/// destroys the object (released at once, as K's `release`), event 32
+/// stores a stalker's or trader's money in its record (6), and the
+/// player's `use_object` callback is raised (5.5 step 3, spec O 4, id 15).
+/// A script error is fatal.
+fn inventory_frame(scripts: &mut GameScripts, level: &mut LevelScreen) -> Result<(), Error> {
+    scripts.scripts().update_inventories()?;
+    // TODO(#1190): a served take or drop changes the item's record parent,
+    // a dropped item lies in the world, and event 29 puts it at its
+    // position (5.2).
+    for event in scripts.scripts().serve_inventory_events()? {
+        match event {
+            InventoryEvent::Destroy { object } => level.release_object(object),
+            // TODO(#1189): the player's money is its character state's.
+            InventoryEvent::Money { owner, money } if owner != ACTOR_ID => {
+                level.set_owner_money(owner, money)
+            }
+            InventoryEvent::UseObject { player, item } => {
+                let event = ObjectEvent::UseItem { item: Some(item) };
+                scripts.scripts().raise(player, &event)?;
+            }
+            // TODO(#1119): `buy_supplies`' items are the simulation's to
+            // create, through the server objects.
+            InventoryEvent::Create { .. } => {}
+            // TODO(#1189), TODO(#1191): the eating on the eater's
+            // conditions, the player's character state's or another
+            // character's.
+            InventoryEvent::Eat { .. } => {}
+            // TODO(#1187): the item shown on its holder.
+            InventoryEvent::Attachment { .. } => {}
+            InventoryEvent::Money { .. }
+            | InventoryEvent::PutAt { .. }
+            | InventoryEvent::Take { .. }
+            | InventoryEvent::Drop { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 /// Applies what script API N's functions asked of the engine: a phantom's
@@ -702,7 +746,10 @@ fn channel_call(event: DialogEvent) -> Option<(u16, ChannelCall)> {
 /// `net_Spawn`, an engine entry's as the engine's own kind (the player's
 /// for `O_ACTOR` in the single-player game type). Its visual, physics part
 /// and restrictor shape, and a character's start dialog (CH-7 6.1), are
-/// given as it is made ([`engine_state`]). A spawning that fails is the
+/// given as it is made ([`engine_state`]). An item carried by an object
+/// spawns after it, and only when that object is in the scripts; once
+/// spawned, a carrier that is an inventory owner takes it (script API S
+/// 2.2, a child spawned into an inventory). A spawning that fails is the
 /// scripts' to report (L 5.1); a script error is fatal.
 pub fn spawn_client_object(
     scripts: &mut GameScripts,
@@ -720,6 +767,13 @@ pub fn spawn_client_object(
             let key = crate::player_hint::INVENTORY_BOX_USE.as_bytes().to_vec();
             story.tip_texts.insert(object.id, key);
         }
+    }
+    let parent = object.record.header.parent_id;
+    let carrier = (parent != NO_ID).then_some(parent);
+    if let Some(c) = carrier
+        && scripts.objects().borrow().get(c).is_none()
+    {
+        return Ok(());
     }
     if !binding_runs(system, &object) {
         return Ok(());
@@ -771,6 +825,23 @@ pub fn spawn_client_object(
     // called once its spawn routine succeeds; a failed spawn drops those
     // it requested.
     if spawned {
+        // A stalker's or trader's money as it comes online is its record's
+        // (script API S 6: the server stores what event 32 sends, believed
+        // what the client starts from).
+        if let Some(t) = crate::core::character_identity::trader_like(&object.record)
+            && (scripts.objects().borrow().get(id))
+                .is_some_and(|o| o.kinds.has(Kinds::INVENTORY_OWNER))
+        {
+            scripts.scripts().set_owner_money(id, t.money)?;
+        }
+        let owner = carrier.filter(|&c| {
+            let o = scripts.objects().borrow();
+            o.get(c)
+                .is_some_and(|o| o.kinds.has(Kinds::INVENTORY_OWNER))
+        });
+        if let Some(owner) = owner {
+            scripts.scripts().take_item(owner, id)?;
+        }
         scripts.scripts().client_spawned(id)
     } else {
         scripts.scripts().spawn_requester_gone(id)

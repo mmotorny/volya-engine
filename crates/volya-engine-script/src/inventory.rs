@@ -1254,11 +1254,21 @@ impl Scripts {
         r.map_err(|m| self.stop_with(m))
     }
 
+    /// Sets owner `owner`'s money (6) to `money`, its inventory made on
+    /// first need: the engine's setting as the owner comes online, which
+    /// sends no event.
+    pub fn set_owner_money(&mut self, owner: u16, money: u32) -> Result<(), Error> {
+        let ctx = self.inventory_context()?;
+        let system = ctx.system();
+        let objects = ctx.objects.borrow();
+        let mut state = ctx.state.borrow_mut();
+        let r = make_owner(&ctx, &objects, &mut state, &system, owner).map(|o| o.money = money);
+        r.map_err(|m| self.stop_with(m))
+    }
+
     /// Serves the take and drop events as the game's server does in
     /// single play, in order, and hands their outcome back (5.1, `use`
     /// 9.2); the other events are returned, oldest first, for the engine.
-    // TODO(#1155): the app serves the events each level frame, runs the
-    // update and takes spawned items.
     pub fn serve_inventory_events(&mut self) -> Result<Vec<Event>, Error> {
         let ctx = self.inventory_context()?;
         let events = ctx.state.borrow_mut().take_events();

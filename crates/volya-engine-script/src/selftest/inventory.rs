@@ -730,6 +730,13 @@ pub fn money() -> Result<(), String> {
             }),
         || format!("event 32: {events:?}"),
     )?;
+    // The engine's setting as an owner comes online sends no event.
+    let sent = events.len();
+    t.s.set_owner_money(STALKER, 500).map_err(message)?;
+    t.lua("set", "eq(stalker:money(), 500, 'set by the engine')")?;
+    ensure(t.inventories().borrow().events().len() == sent, || {
+        "the engine's setting sent an event".into()
+    })?;
     let r = t.s.exec("=crash", b"obj(70):money()");
     ensure(r.is_err(), || "money on a non-owner is fatal".into())
 }

@@ -1892,8 +1892,10 @@ impl NewGameLoad {
 
     /// Once `st_client_spawning` has run: the objects online at the start
     /// (offline-simulation.md 9.1) as the scripts' spawning takes them, in
-    /// the level list's order, without those inside a container (as the
-    /// level's visuals); and byte 11 of each level vertex, taken from the
+    /// the level list's order, those inside a container (as the level's
+    /// visuals) left out but for the online items each carries, which
+    /// follow it in increasing id (a child spawns after its parent, script
+    /// API S 2.2); and byte 11 of each level vertex, taken from the
     /// navigation data, with its positions, links and cover values for the
     /// scripts (script-api-level.md 3); the level's name; at the game
     /// clock's time.
@@ -1921,9 +1923,21 @@ impl NewGameLoad {
         let models: HashMap<u16, usize> = (spawned.instances.iter())
             .map(|i| (i.id, i.model))
             .collect();
+        let no_id = crate::core::simulation::NO_ID;
+        let mut carried: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+        for o in sim.objects() {
+            let parent = o.record.header.parent_id;
+            if o.online && parent != no_id {
+                carried.entry(parent).or_default().push(o.id);
+            }
+        }
         let objects = (sim.level_list())
             .filter_map(|id| sim.object(id))
-            .filter(|o| o.online && o.record.header.parent_id == crate::core::simulation::NO_ID)
+            .filter(|o| o.online && o.record.header.parent_id == no_id)
+            .flat_map(|o| {
+                let items = carried.get(&o.id).into_iter().flatten();
+                std::iter::once(o).chain(items.filter_map(|&id| sim.object(id)))
+            })
             .map(|o| ClientObject {
                 id: o.id,
                 record: o.record.clone(),
@@ -3812,6 +3826,19 @@ impl LevelScreen {
             removed,
             ..Changes::default()
         });
+    }
+
+    /// Stalker or trader `id`'s money as the server stores it, its record's
+    /// Trader-like block (script API S 6: event 32, believed the money a
+    /// saved game holds); nothing for another object.
+    pub fn set_owner_money(&mut self, id: u16, money: u32) {
+        let mut shared = self.simulation.borrow_mut();
+        let record = (shared.simulation.as_mut())
+            .and_then(|s| s.object_mut(id))
+            .map(|o| &mut o.record);
+        if let Some(t) = record.and_then(crate::core::character_identity::trader_like_mut) {
+            t.money = money;
+        }
     }
 
     /// The player character's object id (0 without one).

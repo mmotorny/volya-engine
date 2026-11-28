@@ -112,7 +112,8 @@ pub fn trader_like(record: &ObjectRecord) -> Option<&TraderLike> {
     }
 }
 
-fn trader_like_mut(record: &mut ObjectRecord) -> Option<&mut TraderLike> {
+/// [`trader_like`], to change.
+pub fn trader_like_mut(record: &mut ObjectRecord) -> Option<&mut TraderLike> {
     match &mut record.object {
         Object::Stalker(o) => Some(&mut o.trader),
         Object::Trader(o) => Some(&mut o.trader),

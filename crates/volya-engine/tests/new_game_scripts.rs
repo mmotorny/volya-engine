@@ -32,6 +32,7 @@ use volya_engine::data::GameData;
 use volya_engine::player_hint::PlayerHint;
 use volya_engine::script::Value;
 use volya_engine::script::entry_points::EngineCall;
+use volya_engine::script::game_object::Kinds;
 use volya_engine::script::loader::Trees;
 use volya_engine::script::services::GameType;
 use volya_engine_formats::ui::Resolution;
@@ -228,6 +229,11 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         .map(|o| o.id)
         .expect("the trader door");
     let vertices = sim.navigation().unwrap().ai.len();
+    // The online items the online objects carry (script API S 2.2).
+    let carried: Vec<(u16, u16)> = (sim.objects())
+        .filter(|o| o.online && o.record.header.parent_id != NO_ID)
+        .map(|o| (o.record.header.parent_id, o.id))
+        .collect();
     drop(sim);
     let scripts = app.game_scripts().unwrap();
     // TODO(#1077): every one, once the interface their binders call is
@@ -278,6 +284,32 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         spawning.1 / 1024
     );
     assert_eq!(spawned, expected, "the online objects spawned");
+    // Script API S 2.2: an item an inventory owner in the scripts carries
+    // is in its inventory, so `npc:object` finds it; one whose carrier is
+    // left out isn't in the scripts.
+    let inventories = scripts.scripts().inventories().unwrap();
+    let mut held = 0;
+    for &(carrier, item) in &carried {
+        let objects = scripts.objects().borrow();
+        let owner = (objects.get(carrier)).is_some_and(|o| o.kinds.has(Kinds::INVENTORY_OWNER));
+        if owner && objects.get(item).is_some() {
+            held += 1;
+            assert_eq!(
+                inventories.borrow().holder(item),
+                Some(carrier),
+                "item {item}"
+            );
+        } else if objects.get(carrier).is_none() {
+            assert!(
+                objects.get(item).is_none(),
+                "item {item} without its carrier"
+            );
+        }
+    }
+    eprintln!(
+        "carried items: {} online, {held} in a scripts owner's inventory",
+        carried.len()
+    );
     assert!(
         scripts.scripts().attached_binder(door).is_some(),
         "the door's binder"
@@ -390,6 +422,29 @@ end
         scripts.scripts().player_holds("esc_trader_hello_played"),
         "intro1 gave esc_trader_hello_played"
     );
+
+    // Script API S 6: the trader comes online with his record's money, and
+    // what `give_money` sets reaches the record (event 32) with the next
+    // level frame.
+    let money = |app: &App| {
+        let level = app.level().unwrap();
+        let sim = level.simulation().unwrap();
+        let trader = sim.by_story_id(3).and_then(|id| sim.object(id)).unwrap();
+        volya_engine::core::character_identity::trader_like(&trader.record).map(|t| t.money)
+    };
+    let before = money(&app).expect("the trader's money");
+    let scripts = app.game_scripts().unwrap();
+    let given = scripts.scripts().exec(
+        "=money",
+        b"db.trader:give_money(100) return db.trader:money()",
+    );
+    let given = match given.unwrap().as_slice() {
+        [Value::Number(n)] => *n as u32,
+        other => panic!("the trader's money: {other:?}"),
+    };
+    assert_eq!(given, before + 100, "the trader's money in the scripts");
+    step(&mut app, &mut input);
+    assert_eq!(money(&app), Some(given), "the record's money");
 
     // #1171: with his talk on, the touch Use aimed at him starts it, as
     // his use key does (use-action.md 1.2, 6.2; our design, #874).
