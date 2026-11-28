@@ -67,7 +67,7 @@ export const TOUCH_MODES = ["standard", "experimental"];
 const RADIUS = 56;
 /** Sizes in CSS pixels (match style.css): the buttons, the knob, the lock
  * target, and the segmented ring around the stick. */
-const SIZE = { menu: 44, console: 44, inventory: 44, pda: 44, torch: 44, nightVision: 44, jump: 80, crouch: 64, click: 80, rightClick: 64 };
+const SIZE = { menu: 44, console: 44, inventory: 44, pda: 44, torch: 44, nightVision: 44, use: 64, jump: 80, crouch: 64, click: 80, rightClick: 64 };
 const KNOB = 48;
 const TARGET = 44;
 const SEGMENTS = 2 * RADIUS + 6;
@@ -162,8 +162,9 @@ const onTarget = ([x, y], centre) => Math.hypot(x - centre[0], y - centre[1]) <=
  * The controls; `send(message)` posts one input message to the engine, and
  * `call(op, args)` runs an engine op (for the game's textures; without it
  * the approximations stay). `update({ level, crouch, low, sprint, lock,
- * torch, nightVision, pda })` follows the engine's state (`torch` and
- * `nightVision` on or off, or null to hide their buttons), and
+ * torch, nightVision, pda, usable })` follows the engine's state (`torch`
+ * and `nightVision` on or off, or null to hide their buttons; Use shown
+ * while `usable`: an object under the crosshair has a hint), and
  * `trip(at)` the destination's place in the picture (from its centre, in
  * half its height) or null. `setMode(mode)` picks standard or
  * experimental (TOUCH_MODES). `setCursor({ shown, capture, console })`
@@ -232,6 +233,10 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     b.setAttribute("aria-pressed", "false");
     b.hidden = true;
   }
+  // Use: the `use` action on the object under the crosshair (#874), shown
+  // while it has a hint.
+  const use = button("use", "Use");
+  use.hidden = true;
   const actions = element("div", "touch-actions");
   actions.append(crouch, jump);
   // The cursor's buttons (#856): Click at Jump's place, Right-click at
@@ -241,7 +246,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   rightClick.dataset.button = "right_click";
   const cursorActions = element("div", "touch-cursor-actions");
   cursorActions.append(rightClick, click);
-  root.append(move, look, destination, menu, consoleButton, inventory, pda, torch, nightVision, actions, cursorActions);
+  root.append(move, look, destination, menu, consoleButton, inventory, pda, torch, nightVision, use, actions, cursorActions);
   // What the controls show: "hidden", "level", "pda" (the PDA button over
   // the open PDA) or "cursor" (the cursor's controls); set by render.
   let view = "hidden";
@@ -513,7 +518,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
   let crouched = false;
   const releases = new Map(); // button → its release
   const CURSOR_BUTTONS = { menu: "back", click: "click", right_click: "right_click" };
-  for (const b of [menu, inventory, pda, torch, nightVision, jump, crouch, click, rightClick]) {
+  for (const b of [menu, inventory, pda, torch, nightVision, use, jump, crouch, click, rightClick]) {
     const held = new Map(); // pointerId → { start, waiting }
     const drags = b === jump || b === crouch;
     let pressed = null; // the message pressed, its release not yet sent
@@ -613,6 +618,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
       [pda, SIZE.pda],
       [torch, SIZE.torch],
       [nightVision, SIZE.nightVision],
+      [use, SIZE.use],
       [jump, SIZE.jump],
       [crouch, SIZE.crouch],
       [click, SIZE.click],
@@ -646,6 +652,8 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
     const [nightNormal, nightOn] = nightVision.querySelectorAll(".touch-glyph");
     paintGlyph(nightNormal, art.torchIcon, nightGlyph, nightGlyph / 2, grey);
     paintGlyph(nightOn, art.torchIcon, nightGlyph, nightGlyph / 2, tealHi);
+    const useGlyph = SIZE.use * 0.56;
+    paintGlyph(use.querySelector(".touch-glyph"), vectorGlyph("use", Math.round(useGlyph * k)), useGlyph, useGlyph, teal);
     const jumpGlyph = SIZE.jump * 0.56;
     paintGlyph(jump.querySelector(".touch-glyph"), vectorGlyph("jump", Math.round(jumpGlyph * k)), jumpGlyph, jumpGlyph, teal);
     const crouchGlyph = SIZE.crouch * 0.62;
@@ -762,7 +770,7 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
 
   return {
     element: root,
-    update({ level, crouch: on, low, sprint, lock, torch: torchOn, nightVision: nightOn, pda: overPda }) {
+    update({ level, crouch: on, low, sprint, lock, torch: torchOn, nightVision: nightOn, pda: overPda, usable }) {
       crouched = Boolean(on);
       live = level;
       pdaOpen = Boolean(overPda);
@@ -784,6 +792,8 @@ export function createTouchControls(send, { call = null, touch = false, fade = t
         b.hidden = hidden;
         b.setAttribute("aria-pressed", String(Boolean(value)));
       }
+      if (!usable && !use.hidden) releases.get(use)();
+      use.hidden = !usable;
       // The lock where the thumb let go, whatever the page knew then.
       if (lock && !stick) drawLocked(letGo ?? { origin: null, centre: [0, -LOCK_REACH] });
       else if (!lock && ring.classList.contains("locked")) restStick();

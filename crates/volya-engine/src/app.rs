@@ -522,6 +522,9 @@ pub struct LevelControls {
     /// The touch Night vision button: `None` hidden, else whether night
     /// vision is active.
     pub night_vision: Option<bool>,
+    /// The touch Use button shows: an object under the crosshair has a
+    /// hint (trader-door.md 5.1; #874).
+    pub usable: bool,
 }
 
 /// [`App::device_destroyed`], with the fields it takes.
@@ -2438,6 +2441,7 @@ impl App {
                     sprint_lock: level.controls().sprint_lock.locked(),
                     torch,
                     night_vision,
+                    usable: level.doors().hint().is_some(),
                 })
             }
             _ => None,

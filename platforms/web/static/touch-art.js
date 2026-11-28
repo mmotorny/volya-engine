@@ -387,6 +387,13 @@ export const JUMP = [
   [3.5, 11],
 ];
 const GROUND = [4, 20.4, 16, 2.2];
+/** Use: the leaf of a door swung open toward the viewer. */
+const DOOR_AJAR = [
+  [5, 3],
+  [13, 6],
+  [13, 23],
+  [5, 21],
+];
 /** Our Menu glyph: two bars (x, y, width, height in 24 × 24). */
 const BARS = [
   [7.5, 5.5, 3, 13],
@@ -471,6 +478,16 @@ export function vectorGlyph(name, size) {
     g.closePath();
     g.fill();
     g.fillRect(...GROUND);
+  } else if (name === "use") {
+    // A door ajar in its frame (our glyph, #874).
+    g.strokeStyle = "#fff";
+    g.lineWidth = 2;
+    g.lineJoin = "round";
+    g.strokeRect(5, 3, 14, 18);
+    g.beginPath();
+    DOOR_AJAR.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.closePath();
+    g.fill();
   } else if (name === "inventory") {
     g.beginPath();
     g.roundRect(...BAG.loop);

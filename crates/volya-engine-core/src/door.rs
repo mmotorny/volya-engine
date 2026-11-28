@@ -30,6 +30,13 @@ use crate::collision::geometry::{Vec3, normalize};
 pub const SCHEME: &str = "ph_door";
 /// The locked hint id when the section has no `tip_open` (2.1).
 pub const LOCKED_TIP: &str = "tip_door_locked";
+/// The unlocked closed section's hint id (4.3).
+pub const OPEN_TIP: &str = "tip_door_open";
+
+/// The sections the trader's door switches to (4.1, 4.3): unlocked and
+/// closed, then open once used.
+pub const UNLOCKED_SECTION: &str = "ph_door@closed";
+pub const OPEN_SECTION: &str = "ph_door@open";
 
 /// Where the shipped scripts start a logic file (2.1): the logic file a
 /// record's `[logic] cfg` names (relative to the configuration's folder)
@@ -68,6 +75,22 @@ pub const HOLDING: Motor = Motor {
     force: 10_000.0,
     velocity: 1.0,
 };
+/// The motor the opening sets, toward the open stop (4.3).
+pub const OPENING: Motor = Motor {
+    force: 2100.0,
+    velocity: -3.0,
+};
+
+/// What a use of the door did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Used {
+    /// Nothing changed.
+    Nothing,
+    /// The stub unlocked it (TODO(#876)).
+    Unlocked,
+    /// It opened: its leaf leaves the way.
+    Opened,
+}
 
 /// A door scheme section (2.1).
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +176,9 @@ pub struct Door {
     motor: Option<Motor>,
     tip: Option<String>,
     boxes: Vec<BodyBox>,
+    /// The section the unlock switches to (4.3).
+    unlocked: Option<DoorSection>,
+    open: bool,
 }
 
 impl Door {
@@ -166,7 +192,56 @@ impl Door {
             motor: None,
             tip: None,
             boxes,
+            unlocked: None,
+            open: false,
         }
+    }
+
+    /// The section the unlock switches to (4.3): the logic file's
+    /// [`UNLOCKED_SECTION`].
+    pub fn with_unlocked(mut self, section: DoorSection) -> Self {
+        self.unlocked = Some(section);
+        self
+    }
+
+    /// The use action on the door (2.5, 4.3), its scheme started.
+    ///
+    /// TODO(#876): a stub for the trader's dialog, which gives the info
+    /// portion that unlocks the door (4.1): until it exists, using the
+    /// locked door unlocks it, so the bunker can be left. The unlock then
+    /// does what 4.3 says (the section unlocked and closed, closed again,
+    /// the hint `tip_door_open`); its sound is not played. A use of the
+    /// unlocked closed door opens it (4.3): the motor toward the open
+    /// stop, and the leaf, whose swing is not simulated (#873), out of
+    /// the way; its hint none (our choice: the open section's is PH-20's).
+    pub fn use_action(&mut self) -> Used {
+        if !self.started || self.open {
+            return Used::Nothing;
+        }
+        if self.section.locked {
+            let Some(next) = self.unlocked.take() else {
+                return Used::Nothing;
+            };
+            self.section = next;
+            if self.section.closed {
+                self.motor = Some(CLOSING);
+                self.to_block = true;
+            }
+            self.tip =
+                (!self.section.locked && self.section.show_tips).then(|| OPEN_TIP.to_owned());
+            return Used::Unlocked;
+        }
+        self.open = true;
+        self.to_block = false;
+        self.motor = Some(OPENING);
+        self.tip = None;
+        self.section.name = OPEN_SECTION.to_owned();
+        Used::Opened
+    }
+
+    /// Whether it was opened.
+    pub fn is_open(&self) -> bool {
+        self.open
     }
 
     /// The object's update: the first starts the scheme (2.1; believed

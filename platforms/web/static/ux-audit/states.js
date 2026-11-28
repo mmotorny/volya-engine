@@ -156,6 +156,12 @@ export const SECTIONS = [
         level: { torch: null },
         devices: TOUCH,
       },
+      {
+        id: "level-touch-use",
+        name: "Looking at the trader's door within reach: Use shown",
+        level: { usable: true },
+        devices: TOUCH,
+      },
     ],
   },
   // The ergonomic mobile mode (#802, Settings): the whole picture moves
@@ -180,6 +186,12 @@ export const SECTIONS = [
         id: "level-experimental-night-vision",
         name: "Wearing an outfit with night vision: Night vision shown",
         level: { mode: "experimental", nightVision: false },
+        devices: TOUCH,
+      },
+      {
+        id: "level-experimental-use",
+        name: "Looking at the trader's door within reach: Use shown",
+        level: { mode: "experimental", usable: true },
         devices: TOUCH,
       },
       { id: "console-experimental-menu", name: "Main menu: Console at the top left", console: { mode: "experimental", menu: true }, devices: TOUCH },

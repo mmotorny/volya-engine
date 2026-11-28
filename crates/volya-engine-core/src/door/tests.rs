@@ -200,3 +200,35 @@ fn the_crosshair_picks_the_leaf() {
     assert_eq!(door.pick(eye, [0.0, 0.0, -1.0]), None);
     assert_eq!(door.pick([3.0, 1.5, -2.038], [0.0, 0.0, 1.0]), None);
 }
+
+/// TODO(#876): the stub's unlock by a use of the locked door, then the
+/// opening by the next (4.3).
+#[test]
+fn a_use_unlocks_the_locked_door_and_the_next_opens_it() {
+    let mut door = Door::new("trader_door".into(), section("ph_door@locked"), Vec::new())
+        .with_unlocked(section("ph_door@closed"));
+    assert_eq!(door.use_action(), Used::Nothing, "not started");
+    door.update();
+    door.physics_step();
+    assert_eq!(door.use_action(), Used::Unlocked);
+    assert!(!door.section.locked && door.section.name == "ph_door@closed");
+    // Closed again: 200 / 3, then held; the hint tip_door_open.
+    assert_eq!(
+        (door.motor(), door.tip()),
+        (Some(CLOSING), Some("tip_door_open"))
+    );
+    door.physics_step();
+    assert_eq!(door.motor(), Some(HOLDING));
+    assert!(!door.is_open());
+    assert_eq!(door.use_action(), Used::Opened);
+    assert!(door.is_open());
+    assert_eq!((door.motor(), door.tip()), (Some(OPENING), None));
+    door.physics_step();
+    assert_eq!(door.motor(), Some(OPENING));
+    assert_eq!(door.use_action(), Used::Nothing);
+    // Without a section to switch to, the locked door stays locked.
+    let mut locked = Door::new("d".into(), section("ph_door@locked"), Vec::new());
+    locked.update();
+    assert_eq!(locked.use_action(), Used::Nothing);
+    assert_eq!(locked.tip(), Some("tip_door_locked"));
+}

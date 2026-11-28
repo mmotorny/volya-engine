@@ -1689,6 +1689,66 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
+  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap unlocks it (#876's stub), the d-pad right opens it": async () => {
+    needsGame();
+    if ((await state()).phase === "menu") await enterLevel();
+    let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
+    const controls = document.getElementById("touch-controls");
+    const use = controls.querySelector(".touch-button.use");
+    // A touch anywhere shows the controls (a touch device).
+    const t = { pointerType: "touch", pointerId: nextTouch(), isPrimary: true, button: 0 };
+    pointer("pointerdown", client(512, 100), { ...t, buttons: 1 });
+    pointer("pointerup", client(512, 100), { ...t, buttons: 0 });
+    for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
+    assert(!controls.hidden, "the touch controls show");
+    // Facing the start view, nothing to use; the door is behind (a half
+    // turn with the right arrow).
+    assert(!s.level.player.hint && use.hidden, `Use hidden: hint ${s.level.player.hint}`);
+    const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+    const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+    const yaw = s.level.yaw;
+    down("ArrowRight");
+    await until((s) => s.level.yaw > yaw + Math.PI - 0.08, "the right arrow to turn round", 3000);
+    up("ArrowRight");
+    await until((s) => s.level.player.hint === "tip_door_locked", "the door-locked hint");
+    for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
+    assert(!use.hidden, "Use shown");
+    const r = use.getBoundingClientRect();
+    for (const type of ["pointerdown", "pointerup"]) {
+      use.dispatchEvent(
+        new PointerEvent(type, {
+          clientX: (r.left + r.right) / 2,
+          clientY: (r.top + r.bottom) / 2,
+          pointerId: nextTouch(),
+          pointerType: "touch",
+          isPrimary: true,
+          button: 0,
+          buttons: type === "pointerdown" ? 1 : 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }
+    s = await until((s) => s.level.player.hint === "tip_door_open", "Use to unlock the door");
+    assert(!s.level.doors[0].open, "unlocked, still closed");
+    // The gamepad's d-pad right (button 15 of the standard mapping).
+    const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+    const getGamepads = navigator.getGamepads;
+    navigator.getGamepads = () => [pad];
+    try {
+      pad.buttons[15] = { pressed: true, value: 1 };
+      await sleep(100);
+      pad.buttons[15] = { pressed: false, value: 0 };
+      s = await until((s) => s.level.doors[0].open, "the d-pad right to open the door");
+    } finally {
+      navigator.getGamepads = getGamepads;
+    }
+    assert(!s.level.player.hint, "no hint once open");
+    for (let i = 0; i < 50 && !use.hidden; i++) await sleep(20);
+    assert(use.hidden, "Use hidden once nothing has a hint");
+    return "";
+  },
+
   "a gamepad: the left stick runs, the d-pad up switches the torch; where the game shows its cursor the gamepad is a mouse: the stick moves the cursor to a PDA caption and A presses it, the shoulders zoom the map as the wheel, A held drags an inventory item, A presses a menu item; B closes and opens the menu": async () => {
     needsGame();
     // A New Game's level after the touch test's quit to the title menu.

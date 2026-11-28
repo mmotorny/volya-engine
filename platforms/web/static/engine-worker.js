@@ -28,7 +28,7 @@
 // To the page, besides replies: { type: "capture", on } whenever the engine
 // starts or stops owning the screen; the page forwards input only while on.
 // { type: "controls", level, crouch, sprint, low, lock, keys, torch,
-// nightVision, pda } whenever the level's controls go live or stop (level)
+// nightVision, pda, usable } whenever the level's controls go live or stop (level)
 // or their toggles change (crouch toggle engaged, sprint requested, the
 // toggled crouch low, the sprint lock holding; the torch and night vision
 // on, or null while their touch buttons are hidden): the page's touch
@@ -131,6 +131,7 @@ function syncCapture() {
       torch: bits & 64 ? (bits & 128) !== 0 : null,
       nightVision: bits & 256 ? (bits & 512) !== 0 : null,
       pda: (bits & 1024) !== 0,
+      usable: (bits & 2048) !== 0,
     });
   }
   const at = e().trip_marker();

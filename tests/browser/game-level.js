@@ -332,7 +332,7 @@ export const tests = {
     return frames.join(", ");
   },
 
-  "the trader's door: turned to it from the start, running forward stops at it and the HUD shows the door-locked hint": async () => {
+  "the trader's door: turned to it from the start, running forward stops at it and the HUD shows the door-locked hint; Use (#876's stub) unlocks it, a second opens the way": async () => {
     needsGame();
     let s = await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls");
     // docs/behavior/trader-door.md: the locked door, 1.7 m from the start,
@@ -371,7 +371,22 @@ export const tests = {
     const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
     const glyphs = frame.sprites.filter((g) => g.layer === "hud quick info");
     assert(glyphs.length >= 10, `${glyphs.length} glyphs of the hint`);
-    return `stopped ${ran.toFixed(2)} m on, the hint drawn in ${glyphs.length} glyphs`;
+    // #876's stub: Use (F, its default key) unlocks it, a second Use opens
+    // it, and the run goes on through the doorway.
+    key("KeyF");
+    s = await until((s) => s.level.player.hint === "tip_door_open", "Use to unlock the door");
+    assert(!s.level.doors[0].locked && !s.level.doors[0].open, "unlocked, still closed");
+    key("KeyF");
+    s = await until((s) => s.level.doors[0].open, "a second Use to open it");
+    down("KeyW");
+    let through;
+    try {
+      through = await until((s) => flat(s.level.player.position, start) > 2.5, "the run on through the doorway", 5000);
+    } finally {
+      up("KeyW");
+    }
+    const on = flat(through.level.player.position, start);
+    return `stopped ${ran.toFixed(2)} m on, the hint drawn in ${glyphs.length} glyphs; opened by Use, ran ${on.toFixed(2)} m on`;
   },
 
   ...keptTeardown(),

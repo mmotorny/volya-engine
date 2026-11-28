@@ -13,9 +13,10 @@
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
+use volya_engine::controls::MoveAction;
 use volya_engine::core::camera::Angles;
 use volya_engine::core::collision::geometry::{Vec3, sub};
-use volya_engine::core::input::{Event, Input, Key};
+use volya_engine::core::input::{Control, Event, Input, Key};
 use volya_engine::core::vfs::StdVfs;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::data::GameData;
@@ -177,4 +178,49 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
     );
     run.frames(2);
     assert_eq!(run.hint(), None);
+    // A use while turned away does nothing.
+    let press = |run: &mut Run, control: Control| {
+        let Control::Key(key) = control else {
+            panic!("{control:?}")
+        };
+        for pressed in [true, false] {
+            run.input.handle(Event::Key { key, pressed });
+        }
+        run.frames(1);
+    };
+    let use_key = run
+        .level
+        .controls()
+        .bindings
+        .controls(MoveAction::Use)
+        .find(|c| matches!(c, Control::Key(_)))
+        .expect("a key bound to use");
+    eprintln!("use is bound to {use_key:?}");
+    press(&mut run, use_key);
+    assert!(run.level.state().doors[0].locked);
+
+    // TODO(#876): the stub. Facing the door again, a use unlocks it: the
+    // hint tip_door_open (4.3), still in the way; the next use opens it and
+    // the run goes on through the doorway.
+    run.level
+        .set_camera([feet[0], feet[1] + h, feet[2]], angles);
+    run.frames(2);
+    press(&mut run, use_key);
+    let d = &run.level.state().doors[0];
+    assert!(!d.locked && !d.open, "{d:?}");
+    assert_eq!(run.hint().as_deref(), Some("tip_door_open"));
+    run.input.handle(Event::Key {
+        key: Key::W,
+        pressed: true,
+    });
+    run.frames(60);
+    let stopped = across(run.feet(), leaf.centre, n) - leaf.half_size[k];
+    assert!(stopped > 0.25, "{stopped} m from the face");
+    press(&mut run, use_key);
+    assert!(run.level.state().doors[0].open);
+    assert_eq!(run.hint(), None);
+    run.frames(100);
+    let beyond = across(run.feet(), leaf.centre, n);
+    eprintln!("after the door opened: {beyond:.2} m from the leaf's plane");
+    assert!(beyond < -0.5, "{beyond} m: not through the doorway");
 }

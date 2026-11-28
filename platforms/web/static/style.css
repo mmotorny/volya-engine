@@ -582,6 +582,15 @@ button.touch-button.down .touch-edges {
   display: none;
 }
 
+/* Use above Jump (#874), shown while an object under the crosshair has a
+   hint: under the right thumb, clear of Jump and Crouch. */
+#touch-controls button.touch-button.use {
+  right: calc(var(--safe-right) + var(--edge) + 8px);
+  bottom: calc(var(--safe-bottom) + var(--edge) + 100px);
+  width: 64px;
+  height: 64px;
+}
+
 /* Jump, the primary, at the corner; Crouch to its left. */
 .touch-actions {
   position: absolute;

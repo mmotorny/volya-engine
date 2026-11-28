@@ -109,10 +109,11 @@ pub enum MoveAction {
     ActiveJobs,
     Map,
     Contacts,
+    Use,
 }
 
 impl MoveAction {
-    pub const ALL: [MoveAction; 21] = [
+    pub const ALL: [MoveAction; 22] = [
         MoveAction::Forward,
         MoveAction::Back,
         MoveAction::LStrafe,
@@ -134,6 +135,7 @@ impl MoveAction {
         MoveAction::ActiveJobs,
         MoveAction::Map,
         MoveAction::Contacts,
+        MoveAction::Use,
     ];
 
     /// The action's name in `bind` lines.
@@ -160,6 +162,7 @@ impl MoveAction {
             MoveAction::ActiveJobs => "active_jobs",
             MoveAction::Map => "map",
             MoveAction::Contacts => "contacts",
+            MoveAction::Use => "use",
         }
     }
 }
@@ -1312,6 +1315,17 @@ impl Controls {
             MoveAction::NightVision,
             GamepadButton::DpadDown,
             TouchButton::NightVision,
+        )
+    }
+
+    /// Whether the player pressed `use` this frame: a key bound to it, a
+    /// gamepad's d-pad right or the touch Use button (our design, #874).
+    pub fn use_pressed(&self, input: &Input) -> bool {
+        self.command_pressed(
+            input,
+            MoveAction::Use,
+            GamepadButton::DpadRight,
+            TouchButton::Use,
         )
     }
 
@@ -3437,5 +3451,32 @@ bind sprint_toggle kX\nbind wpn_fire mouse1\nbind quit kESCAPE\n";
         tap(&mut i, TouchButton::Torch);
         tap(&mut i, TouchButton::NightVision);
         assert!(!c.torch_pressed(&i) && !c.night_vision_pressed(&i));
+    }
+
+    /// `use` (#874): its key, the gamepad's d-pad right, the touch Use.
+    #[test]
+    fn use_by_key_gamepad_and_touch() {
+        let mut c = controls();
+        c.bindings = Bindings::read(&[DEFAULTS, b"bind use kF\n"]);
+        let mut i = Input::new();
+        key(&mut i, Key::F, true);
+        assert!(c.use_pressed(&i) && !c.torch_pressed(&i));
+        i.end_frame();
+        assert!(!c.use_pressed(&i), "held, not pressed");
+        i.handle(Event::GamepadButton {
+            button: GamepadButton::DpadRight,
+            pressed: true,
+        });
+        assert!(c.use_pressed(&i));
+        i.end_frame();
+        for pressed in [true, false] {
+            i.handle(Event::TouchButton {
+                button: TouchButton::Use,
+                pressed,
+            });
+        }
+        assert!(c.use_pressed(&i));
+        i.end_frame();
+        assert!(!c.use_pressed(&i));
     }
 }

@@ -621,7 +621,8 @@ pub fn input_capture() -> bool {
 /// 64 while the touch Torch button shows and 128 while the torch is on, 256
 /// while the Night vision button shows and 512 while night vision is
 /// active (#363); 1024 while the PDA window is open over the running level
-/// (the touch PDA button shows over it, #730).
+/// (the touch PDA button shows over it, #730); 2048 while an object under
+/// the crosshair has a hint (the touch Use button shows, #874).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
     let keys =
@@ -637,6 +638,7 @@ pub fn level_controls() -> u32 {
             | u32::from(c.sprint_lock) << 4
             | button(c.torch, 6)
             | button(c.night_vision, 8)
+            | u32::from(c.usable) << 11
     })
 }
 
