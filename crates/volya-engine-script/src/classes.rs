@@ -146,6 +146,31 @@ impl Objects<'_> {
         part.downcast_ref::<T>().cloned().map(Operand::Other)
     }
 
+    /// Writes `part` into object argument `value` if its part is a `T`
+    /// other than the storage the method has (a result written into an
+    /// argument, as a vector a getter fills). `false` for anything else.
+    pub fn set<T: Any>(&self, value: &Value, part: T) -> bool {
+        let Value::Object(EnginePart(id)) = value else {
+            return false;
+        };
+        let Ok(target) = self.state.part(*id) else {
+            return false;
+        };
+        if Rc::ptr_eq(&target, self.part) {
+            return false;
+        }
+        let Ok(mut target) = target.try_borrow_mut() else {
+            return false;
+        };
+        match target.downcast_mut::<T>() {
+            Some(t) => {
+                *t = part;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// A new object of engine class `class` holding `part` (a type its
     /// methods take), owned by the script side and collected like a
     /// constructed one.

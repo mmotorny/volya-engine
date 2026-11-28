@@ -18,6 +18,7 @@ mod loading;
 pub mod object_binder;
 pub mod object_callbacks;
 pub mod object_factory;
+pub mod physics;
 pub mod services;
 pub mod values;
 
@@ -59,6 +60,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = object_callbacks::check() {
+        fail(e);
+    }
+    if let Err(e) = physics::check() {
         fail(e);
     }
     if failures.is_empty() {

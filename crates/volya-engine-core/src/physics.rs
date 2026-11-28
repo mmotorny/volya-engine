@@ -306,11 +306,16 @@ impl<O: Object> Action<O> for ConstantForce {
         }
     }
 
+    /// Done when the shell is gone or not active (script-api Y 2.2,
+    /// believed).
     fn act(&mut self, _: u64, objects: &mut Active<'_, O>) -> bool {
-        if let Some(o) = objects.get_mut(self.object) {
-            o.add_force(self.force);
+        match objects.get_mut(self.object) {
+            Some(o) => {
+                o.add_force(self.force);
+                false
+            }
+            None => true,
         }
-        false
     }
 }
 

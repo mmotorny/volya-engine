@@ -88,7 +88,7 @@ struct DxGeom {
 /// ODE's `dMass`: the mass, its centre (`dVector3`) and inertia
 /// (`dMatrix3`, rows of four).
 #[repr(C)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct DMass {
     mass: Real,
     c: [Real; 4],

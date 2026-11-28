@@ -706,3 +706,61 @@ mod object_callbacks {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// Script API Y's checks, one test per section of
+/// docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md (all
+/// of them run in [`selftest`] too, on every target).
+mod physics {
+    use crate::selftest::physics as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn the_members_of_game_object() {
+        section(checks::game_object_members);
+    }
+
+    #[test]
+    fn physics_shell() {
+        section(checks::shell);
+    }
+
+    #[test]
+    fn physics_element() {
+        section(checks::element);
+    }
+
+    #[test]
+    fn physics_joint() {
+        section(checks::joint);
+    }
+
+    #[test]
+    fn holder_and_car() {
+        section(checks::car);
+    }
+
+    #[test]
+    fn helicopter() {
+        section(checks::helicopter);
+    }
+
+    #[test]
+    fn hanging_lamp() {
+        section(checks::lamp);
+    }
+
+    #[test]
+    fn the_door_scheme() {
+        section(checks::door_scheme);
+    }
+}

@@ -8,7 +8,8 @@
 //! `hit`, the class `CGameObject` with the overrides the engine calls, the
 //! engine client classes (with the unlisted `CPhysicObject`) and
 //! `explosive` ([`engine_classes`]); object binders (script API L,
-//! [`object_binder`]).
+//! [`object_binder`]); script API Y's physics, vehicles, helicopter
+//! and lamps ([`physics`], [`vehicles`]).
 //!
 //! What scripts read and change is [`GameObjects`]: the engine objects as
 //! scripts see them ([`GameObject`], made from their spawn data,
@@ -24,6 +25,8 @@ pub mod callbacks;
 mod engine_classes;
 pub mod members;
 pub mod object_binder;
+pub mod physics;
+pub mod vehicles;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -63,6 +66,9 @@ impl Kinds {
     pub const PHYSICAL: Kinds = Kinds(128);
     pub const ANOMALOUS_ZONE: Kinds = Kinds(256);
     pub const RESTRICTOR: Kinds = Kinds(512);
+    /// Script API Y 2: the holder and explosive kinds.
+    pub const HOLDER: Kinds = Kinds(1024);
+    pub const EXPLOSIVE: Kinds = Kinds(2048);
 
     pub const fn with(self, other: Kinds) -> Kinds {
         Kinds(self.0 | other.0)
@@ -204,6 +210,9 @@ impl ObjectClass {
             Kinds::CREATURE.with(Kinds::STALKER)
         } else if CREATURE_CLASSES.contains(&name) {
             Kinds::CREATURE
+        } else if name == "CF1" || name == "CRGD5" {
+            // Script API Y 2: the grenade classes are explosive.
+            Kinds::ITEM_KINDS.with(Kinds::EXPLOSIVE)
         } else if ITEM_CLASSES.contains(&name) {
             Kinds::ITEM_KINDS
         } else if ZONE_CLASSES.contains(&name) {
@@ -212,8 +221,17 @@ impl ObjectClass {
             Kinds::RESTRICTOR
         } else if name == "CPhysicObject" {
             Kinds::PHYSICAL
-        } else if name == "CCar" || name == "CHelicopter" {
-            Kinds::ENTITY.with(Kinds::PHYSICAL)
+        } else if name == physics::CAR {
+            // Script API Y 2: the car is a holder; it and the helicopter
+            // are explosive, the lamps physical.
+            Kinds::ENTITY
+                .with(Kinds::PHYSICAL)
+                .with(Kinds::HOLDER)
+                .with(Kinds::EXPLOSIVE)
+        } else if name == physics::HELICOPTER {
+            Kinds::ENTITY.with(Kinds::PHYSICAL).with(Kinds::EXPLOSIVE)
+        } else if name == physics::HANGING_LAMP {
+            Kinds::PHYSICAL
         } else {
             Kinds::NONE
         }
@@ -725,6 +743,8 @@ pub(crate) struct Context {
     pub factory: Rc<RefCell<Option<ObjectFactory>>>,
     /// The `hit` objects alive, by part, for the copy constructor.
     pub hits: Rc<RefCell<HashMap<EnginePart, Weak<RefCell<HitData>>>>>,
+    /// Script API Y's physics, vehicles and lamps.
+    pub physics: Rc<RefCell<physics::PhysicsState>>,
 }
 
 impl Context {
@@ -765,6 +785,7 @@ pub(crate) struct Registered {
     objects: Rc<RefCell<GameObjects>>,
     services: Rc<RefCell<EngineServices>>,
     files: Rc<RefCell<FileSystem>>,
+    physics: Rc<RefCell<physics::PhysicsState>>,
 }
 
 /// What the player's use action does after the targeted object's scripted
@@ -802,7 +823,9 @@ impl Scripts {
             fatal: self.fatal_flag(),
             factory: Rc::clone(&self.factory),
             hits: Rc::default(),
+            physics: Rc::default(),
         };
+        ctx.physics.borrow_mut().system = Some(Rc::clone(&files.borrow().system));
         self.register_class(members::game_object_class(&ctx))?;
         for class in engine_classes::classes(&ctx) {
             self.register_class(class)?;
@@ -813,8 +836,40 @@ impl Scripts {
             objects: ctx.objects,
             services: ctx.services,
             files,
+            physics: ctx.physics,
         });
         Ok(())
+    }
+
+    /// Registers script API Y's classes (1.2 of
+    /// docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md):
+    /// `physics_shell`, `physics_element`, `physics_joint`, `holder`,
+    /// `CCar`, `CHelicopter` and `hanging_lamp`, after the game object
+    /// basics (whose `game_object` has its members of section 2) and before
+    /// [`Scripts::load_globals`].
+    pub fn register_physics_vehicles_and_lamps(&mut self) -> Result<(), Error> {
+        let r = self.registered()?;
+        let ctx = Context {
+            objects: Rc::clone(&r.objects),
+            services: Rc::clone(&r.services),
+            fatal: self.fatal_flag(),
+            factory: Rc::clone(&self.factory),
+            hits: Rc::default(),
+            physics: Rc::clone(&r.physics),
+        };
+        for class in physics::classes(&ctx)
+            .into_iter()
+            .chain(vehicles::classes(&ctx))
+        {
+            self.register_class(class)?;
+        }
+        Ok(())
+    }
+
+    /// Script API Y's state, for the engine to add shells, give the world
+    /// and take the events.
+    pub fn physics_state(&self) -> Result<Rc<RefCell<physics::PhysicsState>>, Error> {
+        self.registered().map(|r| Rc::clone(&r.physics))
     }
 
     fn registered(&self) -> Result<&Registered, Error> {
@@ -1035,6 +1090,12 @@ impl Scripts {
         if let Some(client) = object.client {
             self.with_part(client, |c: &mut ClientObject| c.object = None);
         }
+        let physics = self.physics_state()?;
+        let mut p = physics.borrow_mut();
+        p.shells.remove(&id);
+        p.cars.remove(&id);
+        p.helicopters.remove(&id);
+        p.exploding.remove(&id);
         Ok(true)
     }
 

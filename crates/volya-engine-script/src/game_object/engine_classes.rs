@@ -278,7 +278,7 @@ fn game_object_base(ctx: &Context) -> EngineClass {
 /// A client class (10.3): `base`, one constructor taking no arguments, no
 /// members of its own; calling it constructs a new, not yet spawned,
 /// engine object of the class.
-fn client_class(name: &'static str, base: &str) -> EngineClass {
+pub(super) fn client_class(name: &'static str, base: &str) -> EngineClass {
     let class = EngineClass::new(name)
         .base(base)
         .constructor(

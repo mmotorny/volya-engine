@@ -68,17 +68,17 @@ type Results = Result<Vec<Value>, String>;
 
 /// What a member gets: the engine objects, its object's id, the
 /// arguments and the objects among them.
-struct Call<'a> {
-    ctx: &'a Context,
-    objects: &'a mut GameObjects,
-    id: u16,
-    args: &'a [Value],
-    o: &'a Objects<'a>,
-    name: &'static str,
+pub(super) struct Call<'a> {
+    pub ctx: &'a Context,
+    pub objects: &'a mut GameObjects,
+    pub id: u16,
+    pub args: &'a [Value],
+    pub o: &'a Objects<'a>,
+    pub name: &'static str,
 }
 
 impl Call<'_> {
-    fn object(&mut self) -> Result<&mut GameObject, String> {
+    pub(super) fn object(&mut self) -> Result<&mut GameObject, String> {
         let id = self.id;
         self.objects
             .get_mut(id)
@@ -90,7 +90,7 @@ impl Call<'_> {
     }
 
     /// A number argument (our wording for a mismatch, depends on A).
-    fn number(&self, i: usize) -> Result<f64, String> {
+    pub(super) fn number(&self, i: usize) -> Result<f64, String> {
         match self.arg(i) {
             Value::Number(n) => Ok(*n),
             _ => Err(format!("{}: number expected", self.name)),
@@ -111,7 +111,7 @@ impl Call<'_> {
         }
     }
 
-    fn vector(&self, i: usize) -> Result<Vector, String> {
+    pub(super) fn vector(&self, i: usize) -> Result<Vector, String> {
         match self.o.get::<Vector>(self.arg(i)) {
             Some(Operand::Other(v)) => Ok(v),
             _ => Err(format!("{}: vector expected", self.name)),
@@ -134,7 +134,7 @@ impl Call<'_> {
     }
 
     /// A fatal error standing for a crash the spec believes (our wording).
-    fn crash(&self, what: &str) -> String {
+    pub(super) fn crash(&self, what: &str) -> String {
         self.ctx.fatal(
             self.name,
             line!(),
@@ -157,7 +157,7 @@ fn boolean(b: bool) -> Vec<Value> {
 }
 
 /// Adds member `name` running `f`.
-fn member(
+pub(super) fn member(
     class: EngineClass,
     ctx: &Context,
     name: &'static str,
@@ -189,6 +189,7 @@ pub(crate) fn game_object_class(ctx: &Context) -> EngineClass {
     let class = fighters(class, ctx);
     let class = zones(class, ctx);
     let class = trade(class, ctx);
+    let class = super::physics::game_object_members(class, ctx);
     CONSTANTS
         .into_iter()
         .fold(class, |class, (name, value)| class.constant(name, value))

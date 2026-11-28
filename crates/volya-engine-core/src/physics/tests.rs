@@ -254,6 +254,20 @@ fn per_step_actions_run_their_steps_and_leave() {
 }
 
 #[test]
+fn a_constant_force_is_done_once_its_shell_is_not_active() {
+    let log = Log::default();
+    let mut w = world(&log);
+    let id = w.add(Fake::new("a", Kind::Shell, &log));
+    w.activate(id).unwrap();
+    w.constant_force(id, [0.0, 1.0, 0.0], 1.0, 1000);
+    w.deactivate(id).unwrap();
+    w.frame(0.01, 0);
+    w.activate(id).unwrap();
+    w.frame(0.01, 0);
+    assert!(w.get(id).unwrap().forces.is_empty());
+}
+
+#[test]
 fn removing_a_shell_removes_its_actions() {
     let log = Log::default();
     let mut w = world(&log);

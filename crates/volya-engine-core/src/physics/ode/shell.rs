@@ -7,7 +7,9 @@
 //! their masses (2.1, 2.3), the elements without geometry fixed (5.1), its
 //! joints made after them (3.3), its fixed bones fixed again (4.4), switched
 //! off when asked (`resting` 1), woken by a joint's motor (`resting` 2), and
-//! the elements' motion parameters at each step (2.4).
+//! the elements' motion parameters at each step (2.4); forces, fixing and
+//! releasing as the scripts ask them (`script` is
+//! docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md).
 
 use std::ffi::c_int;
 
@@ -108,6 +110,10 @@ struct ElementBody {
     centre: Vec3,
     fixed: bool,
     motion: Motion,
+    /// Its mass as set (2.3; 0 without geometry), and the library's mass
+    /// it was given, which releasing it gives back (`script` 4.3).
+    mass: f32,
+    own: Option<DMass>,
 }
 
 /// A shell in the world: its group, bodies and joints.
@@ -158,12 +164,12 @@ impl OdeSolver {
             };
             let at = transform_point(&frame, centre);
             let r = rotation_of(&frame);
+            let own = e.has_geometry().then(|| mass(&e.mass_pieces()));
             // SAFETY: the world is this solver's and live; `r` is a dMatrix3.
             let body = unsafe {
                 let body = dBodyCreate(world);
-                if e.has_geometry() {
-                    let m = mass(&e.mass_pieces());
-                    dBodySetMass(body, &m);
+                if let Some(m) = &own {
+                    dBodySetMass(body, m);
                 }
                 dBodySetPosition(body, at[0], at[1], at[2]);
                 dBodySetRotation(body, r.as_ptr());
@@ -179,6 +185,12 @@ impl OdeSolver {
                 centre,
                 fixed: false,
                 motion: e.motion,
+                mass: if e.has_geometry() {
+                    e.mass_centre().0
+                } else {
+                    0.0
+                },
+                own,
             };
             if !e.has_geometry() {
                 fix(&mut element);
@@ -278,6 +290,15 @@ impl OdeSolver {
                 dJointSetHingeParam(joint.0, param::F_MAX, force);
                 dJointSetHingeParam(joint.0, param::VEL, velocity);
             }
+        }
+    }
+
+    /// Sets a hinge's parameter (`script` 5.2 – 5.6), if the joint is this
+    /// solver's.
+    pub fn set_hinge_param(&mut self, joint: JointId, parameter: i32, value: f32) {
+        if self.joints.contains_key(&joint) {
+            // SAFETY: the joint is this solver's.
+            unsafe { dJointSetHingeParam(joint.0, parameter, value) };
         }
     }
 
@@ -516,6 +537,86 @@ impl OdeShell {
         self.resting = false;
     }
 
+    /// `script` 4.1: a force on an element's body, only when it is not
+    /// fixed: a switched-off body is switched on, and the shell no longer
+    /// rests (believed), then the force is added to the body. How the
+    /// body's accumulated force and torque are then limited is open
+    /// (PH-9; TODO(#990)).
+    pub fn apply_element_force(&mut self, solver: &OdeSolver, element: usize, force: Vec3) {
+        if solver.live(self.serial, self.group) {
+            self.element_force(element, force);
+        }
+    }
+
+    /// [`OdeShell::apply_element_force`] on a live shell.
+    fn element_force(&mut self, element: usize, force: Vec3) {
+        let Some(e) = self.elements.get(element).filter(|e| !e.fixed) else {
+            return;
+        };
+        // SAFETY: the caller checked the body lives.
+        unsafe {
+            if dBodyIsEnabled(e.body) == 0 {
+                dBodyEnable(e.body);
+                self.resting = false;
+            }
+            dBodyAddForce(e.body, force[0], force[1], force[2]);
+        }
+    }
+
+    /// `script` 3.1: a force shared over the elements in proportion to
+    /// their masses (as set, 2.3), each along its direction, then the shell
+    /// woken; nothing below a size of 10⁻⁷.
+    pub fn apply_force(&mut self, solver: &OdeSolver, force: Vec3) {
+        if solver.live(self.serial, self.group) {
+            self.shell_force(force);
+        }
+    }
+
+    /// [`OdeShell::apply_force`] on a live shell.
+    fn shell_force(&mut self, force: Vec3) {
+        let f = (force[0] * force[0] + force[1] * force[1] + force[2] * force[2]).sqrt();
+        if f < 1e-7 {
+            return;
+        }
+        let total: f32 = self.elements.iter().map(|e| e.mass).sum();
+        let direction = force.map(|c| c / f);
+        for i in 0..self.elements.len() {
+            let size = f * self.elements[i].mass / total;
+            self.element_force(i, direction.map(|d| d * size));
+        }
+        for e in &self.elements {
+            // SAFETY: the caller checked the bodies live.
+            unsafe { dBodyEnable(e.body) };
+        }
+        self.resting = false;
+    }
+
+    /// `script` 4.3: fixes an element as 5.1 does.
+    pub fn fix_element(&mut self, solver: &OdeSolver, element: usize) {
+        if !solver.live(self.serial, self.group) {
+            return;
+        }
+        if let Some(e) = self.elements.get_mut(element) {
+            fix(e);
+        }
+    }
+
+    /// `script` 4.3: a fixed element no longer fixed, its body given back
+    /// its own mass; its gravity stays off.
+    pub fn release_fixed(&mut self, solver: &OdeSolver, element: usize) {
+        if !solver.live(self.serial, self.group) {
+            return;
+        }
+        let Some(e) = self.elements.get_mut(element).filter(|e| e.fixed) else {
+            return;
+        };
+        e.fixed = false;
+        if let Some(m) = &e.own {
+            // SAFETY: the body lives while its group does; `m` is a dMass.
+            unsafe { dBodySetMass(e.body, m) };
+        }
+    }
+
     /// 2.4: a switched-on, unfixed body's velocities divided by their
     /// divisors, then a torque −(angular drag) × ω and a force −k × v with
     /// k = (linear drag) × speed, at most mass / h. That the division comes
@@ -622,9 +723,12 @@ impl Object for OdeShell {
         self.gravity = Some(on);
     }
 
-    /// How a force on a shell is spread over its elements is open
-    /// (TODO(#947)); nothing calls it before the scripts.
-    fn add_force(&mut self, _: Vec3) {}
+    /// A constant force's step (`world` 4.3): the shell's own force
+    /// application, [`OdeShell::apply_force`] (`script` 2.2). The world
+    /// calls it on active shells, whose bodies live.
+    fn add_force(&mut self, force: Vec3) {
+        self.shell_force(force);
+    }
 
     /// Its motion parameters act when the groups are solved
     /// ([`Grouped::before_solve`]: "before solving", 2.4).
