@@ -23,7 +23,7 @@ use volya_engine::audio::Silent;
 use volya_engine::controls::MoveAction;
 use volya_engine::core::camera::Angles;
 use volya_engine::core::dialogs::conditions::DialogWorld;
-use volya_engine::core::input::{Control, Event, Input, Key, TouchButton};
+use volya_engine::core::input::{Control, Event, Input, Key, MouseButton, TouchButton};
 use volya_engine::core::memory_manager::GAME_SCRIPTS;
 use volya_engine::core::simulation::NO_ID;
 use volya_engine::core::vfs::db::DbVfs;
@@ -420,6 +420,86 @@ end
         step(&mut app, &mut input);
     }
     assert!(!app.talk_open(), "the quit key ends it");
+    // #1182: his start dialog taken along answer 32 to
+    // `esc_trader_can_leave` (trader-and-crows-scope.md 1.1; talk.md 8),
+    // the questions clicked; Use ends the talk, and Use starts the next.
+    let touch_use = |input: &mut Input| {
+        for pressed in [true, false] {
+            input.handle(Event::TouchButton {
+                button: TouchButton::Use,
+                pressed,
+            });
+        }
+    };
+    let talk_state = |app: &App| match app.state() {
+        AppState::Level { talk, .. } => talk,
+        _ => None,
+    };
+    input.set_screen([1024.0, 768.0]);
+    touch_use(&mut input);
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    assert!(app.talk_open(), "the touch Use starts his talk again");
+    let holds = |app: &mut App| {
+        let scripts = app.game_scripts().unwrap();
+        scripts.scripts().player_holds("esc_trader_can_leave")
+    };
+    let mut time = 0.0;
+    for _ in 0..20 {
+        if holds(&mut app) {
+            break;
+        }
+        let Some(t) = talk_state(&app) else { break };
+        let ids = app.level().unwrap().state().talk.choices;
+        let k = ids.iter().position(|id| "321111".starts_with(id.as_str()));
+        let q = &t.window.questions[k.unwrap_or(0)];
+        let at = [q.at[0] + 20.0, q.at[1] + q.height / 2.0];
+        input.handle(Event::PointerMoved { at });
+        step(&mut app, &mut input);
+        for pressed in [true, false] {
+            time += 50.0;
+            input.handle(Event::PointerButton {
+                at: Some(at),
+                button: MouseButton::Left,
+                pressed,
+                time,
+            });
+            step(&mut app, &mut input);
+        }
+        for _ in 0..3 {
+            step(&mut app, &mut input);
+        }
+    }
+    assert!(holds(&mut app), "esc_trader_can_leave given");
+    if app.talk_open() {
+        press(&mut input, Key::F);
+        for _ in 0..5 {
+            step(&mut app, &mut input);
+        }
+    }
+    assert!(!app.talk_open(), "Use ends it");
+    for _ in 0..30 {
+        step(&mut app, &mut input);
+    }
+    assert!(
+        app.level().unwrap().state().talk.talking.is_empty(),
+        "both sides end"
+    );
+    press(&mut input, Key::F);
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    let talk = app.level().unwrap().state().talk;
+    assert!(
+        app.talk_open(),
+        "the touch Use starts his talk after the dialog: {talk:?}"
+    );
+    press(&mut input, Key::Escape);
+    for _ in 0..5 {
+        step(&mut app, &mut input);
+    }
+    assert!(!app.talk_open(), "the quit key ends it again");
     let scripts = app.game_scripts().unwrap();
 
     // Spec L 5.2, 8: each level frame runs the door's scheduled update,

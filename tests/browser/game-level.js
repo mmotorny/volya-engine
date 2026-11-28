@@ -428,23 +428,30 @@ export const tests = {
         up("KeyW");
       }
       s = await until((s) => picked(s) || !s.level.player.moving, "the walk to end");
-      // He sits behind the desk, below the view's level and, after the
-      // walk along it, off to one side (use-action.md 2.1: the crosshair
-      // meets his bones' shapes): the arrows sweep the view down and
-      // across until it is on him.
-      const nudge = async (code) => {
-        down(code);
-        await sleep(15);
-        up(code);
-        await sleep(60);
-        return state();
-      };
-      const view = { yaw: s.level.yaw, pitch: s.level.pitch };
-      // Nudged one way until at or past `want`.
-      const toward = async (want, read, less, more) => {
-        const sign = Math.sign(want - read(s));
-        for (let i = 0; i < 200 && !picked(s) && sign * (want - read(s)) > 0.01; i++) s = await nudge(sign > 0 ? more : less);
-      };
+    }
+    // He sits behind the desk, below the view's level and, after the walk
+    // along it, off to one side (use-action.md 2.1: the crosshair meets his
+    // bones' shapes): the arrows sweep the view down and across from the
+    // walk's end until it is on him. His idle motions move those shapes
+    // (trader-and-crows-scope.md 1.1), so each talk below sweeps again
+    // when he has left the crosshair.
+    const nudge = async (code) => {
+      down(code);
+      await sleep(15);
+      up(code);
+      await sleep(60);
+      return state();
+    };
+    const view = { yaw: s.level.yaw, pitch: s.level.pitch };
+    // Nudged one way until at or past `want`.
+    const toward = async (want, read, less, more) => {
+      const sign = Math.sign(want - read(s));
+      for (let i = 0; i < 200 && !picked(s) && sign * (want - read(s)) > 0.01; i++) s = await nudge(sign > 0 ? more : less);
+    };
+    let sweeps = 0;
+    const aim = async () => {
+      if (picked(s)) return;
+      sweeps++;
       for (const dp of [0.15, 0.25, 0.32, 0.39, 0.46]) {
         await toward(view.pitch + dp, (s) => s.level.pitch, "ArrowUp", "ArrowDown");
         for (const dy of [0.5, -0.5]) {
@@ -454,23 +461,30 @@ export const tests = {
         searched.push([+s.level.yaw.toFixed(3), +s.level.pitch.toFixed(3)]);
         if (picked(s)) break;
       }
-    }
+    };
+    s = await state();
+    await aim();
     const trader = s.level.talk.picked;
     assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(s.level.player.position)}, searched ${JSON.stringify(searched)}`);
     const at = s.level.player.position;
+    // Use, aimed again while he is off the crosshair, until the talk
+    // screen opens by `deadline`.
+    const talk = async (what, deadline) => {
+      for (;;) {
+        s = await state();
+        await aim();
+        key("KeyF");
+        try {
+          return await until((s) => s.talk, what, 1500);
+        } catch (e) {
+          if (performance.now() > deadline) throw new Error(`${e.message}: ${JSON.stringify(s.level.talk)}, ${sweeps} sweeps`);
+        }
+      }
+    };
     // His talk is off until his scheme reaches mob_trader@new_start_intro3
     // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
     // logic starts: Use until it opens.
-    const deadline = performance.now() + 45000;
-    for (;;) {
-      key("KeyF");
-      try {
-        s = await until((s) => s.talk, "the talk screen", 1500);
-        break;
-      } catch (e) {
-        if (performance.now() > deadline) throw e;
-      }
-    }
+    s = await talk("the talk screen", performance.now() + 45000);
     // 3: both sides talking; his start dialog in progress; the window
     // titled with his name; talk-window-input.md 1.2: the cursor shown.
     assertEqual(s.level.talk.partner, trader, "the partner");
@@ -525,21 +539,19 @@ export const tests = {
     }
     s = await until((s) => s.level.talk.talking.length === 0, "both sides to end");
     // A new talk to check Use and Escape.
-    key("KeyF");
-    await until((s) => s.talk, "the talk screen again");
+    await talk("the talk screen again", performance.now() + 15000);
     // 3.1: Use closes it; 5.2: the player character's side stops, then his.
     key("KeyF");
     s = await until((s) => !s.talk && s.level.talk.talking.length === 0, "Use to end the talk");
     assert(!s.menu, "no menu");
     // 3.2: Escape closes it, and the menu does not open on that press.
-    key("KeyF");
-    await until((s) => s.talk, "the talk screen again");
+    await talk("the talk screen again", performance.now() + 15000);
     key("Escape");
     s = await until((s) => !s.talk, "Escape to end the talk");
     await sleep(200);
     s = await state();
     assert(!s.menu, "Escape opened no menu");
-    return `talked with ${name} (object ${trader})`;
+    return `talked with ${name} (object ${trader}), ${sweeps} sweeps to aim`;
   },
 
   "the physics world: made with the level, stepped 100 times a second of play": async () => {
