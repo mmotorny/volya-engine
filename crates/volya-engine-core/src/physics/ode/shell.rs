@@ -114,6 +114,11 @@ struct ElementBody {
     /// it was given, which releasing it gives back (`script` 4.3).
     mass: f32,
     own: Option<DMass>,
+    /// Its world frame after each of the last two steps, earlier first, and
+    /// whether a step has run since its frame was last read for drawing
+    /// (8.2).
+    steps: [Mat4; 2],
+    stepped: bool,
 }
 
 /// A shell in the world: its group, bodies and joints.
@@ -191,6 +196,8 @@ impl OdeSolver {
                     0.0
                 },
                 own,
+                steps: [frame; 2],
+                stepped: false,
             };
             if !e.has_geometry() {
                 fix(&mut element);
@@ -524,6 +531,46 @@ impl OdeShell {
         Some(m)
     }
 
+    /// 8.2: an element's frame for drawing, brought up to date: blended
+    /// between its states of the last two steps by `fraction` when a step
+    /// has run since it was last read, otherwise read from its body. How
+    /// the two are blended is open (our choice: the origin linearly, the
+    /// rotation along the shorter arc between them).
+    pub fn drawn_frame(
+        &mut self,
+        solver: &OdeSolver,
+        element: usize,
+        fraction: f32,
+    ) -> Option<Mat4> {
+        let body = self.frame(solver, element)?;
+        let e = &mut self.elements[element];
+        if !std::mem::take(&mut e.stepped) {
+            return Some(body);
+        }
+        Some(blend(&e.steps[0], &e.steps[1], fraction))
+    }
+
+    /// 8.1: an element's body re-placed at world frame `frame` (the bone
+    /// callback's first call): its origin at the element's mass centre
+    /// carried by the frame, with the frame's rotation (2.1).
+    pub fn place_element(&mut self, solver: &OdeSolver, element: usize, frame: &Mat4) {
+        if !solver.live(self.serial, self.group) {
+            return;
+        }
+        let Some(e) = self.elements.get_mut(element) else {
+            return;
+        };
+        let at = transform_point(frame, e.centre);
+        let r = rotation_of(frame);
+        // SAFETY: the body lives while its group does; `r` is a dMatrix3.
+        unsafe {
+            dBodySetPosition(e.body, at[0], at[1], at[2]);
+            dBodySetRotation(e.body, r.as_ptr());
+        }
+        e.steps = [*frame; 2];
+        self.read(solver);
+    }
+
     /// Wakes it (`resting` 2): every body switched on. The world makes it
     /// active.
     pub fn wake(&mut self, solver: &OdeSolver) {
@@ -647,6 +694,99 @@ impl OdeShell {
     }
 }
 
+/// `a` blended toward `b` by `f` (8.2): origins linearly, rotations along
+/// the shorter arc between them.
+fn blend(a: &Mat4, b: &Mat4, f: f32) -> Mat4 {
+    let (qa, qb) = (quaternion(a), quaternion(b));
+    let mut c: f32 = (0..4).map(|i| qa[i] * qb[i]).sum();
+    let sign = if c < 0.0 {
+        c = -c;
+        -1.0
+    } else {
+        1.0
+    };
+    let (wa, wb) = if c > 1.0 - 1e-6 {
+        (1.0 - f, f)
+    } else {
+        let theta = c.min(1.0).acos();
+        let s = theta.sin();
+        (((1.0 - f) * theta).sin() / s, (f * theta).sin() / s)
+    };
+    let q: [f32; 4] = std::array::from_fn(|i| wa * qa[i] + sign * wb * qb[i]);
+    let mut m = rotation_matrix(q);
+    for k in 0..3 {
+        m[3][k] = a[3][k] + f * (b[3][k] - a[3][k]);
+    }
+    m
+}
+
+/// The unit quaternion (x, y, z, w) of a frame's rotation (row vectors).
+fn quaternion(m: &Mat4) -> [f32; 4] {
+    let t = m[0][0] + m[1][1] + m[2][2];
+    let q = if t > 0.0 {
+        let s = (t + 1.0).sqrt() * 2.0;
+        [
+            (m[1][2] - m[2][1]) / s,
+            (m[2][0] - m[0][2]) / s,
+            (m[0][1] - m[1][0]) / s,
+            0.25 * s,
+        ]
+    } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
+        let s = (1.0 + m[0][0] - m[1][1] - m[2][2]).sqrt() * 2.0;
+        [
+            0.25 * s,
+            (m[1][0] + m[0][1]) / s,
+            (m[2][0] + m[0][2]) / s,
+            (m[1][2] - m[2][1]) / s,
+        ]
+    } else if m[1][1] > m[2][2] {
+        let s = (1.0 + m[1][1] - m[0][0] - m[2][2]).sqrt() * 2.0;
+        [
+            (m[1][0] + m[0][1]) / s,
+            0.25 * s,
+            (m[2][1] + m[1][2]) / s,
+            (m[2][0] - m[0][2]) / s,
+        ]
+    } else {
+        let s = (1.0 + m[2][2] - m[0][0] - m[1][1]).sqrt() * 2.0;
+        [
+            (m[2][0] + m[0][2]) / s,
+            (m[2][1] + m[1][2]) / s,
+            0.25 * s,
+            (m[0][1] - m[1][0]) / s,
+        ]
+    };
+    let len = q.iter().map(|c| c * c).sum::<f32>().sqrt();
+    q.map(|c| c / len)
+}
+
+/// The frame of rotation `q` ([`quaternion`]'s inverse) at the origin.
+fn rotation_matrix(q: [f32; 4]) -> Mat4 {
+    let len = q.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let [x, y, z, w] = q.map(|c| c / len);
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + w * z),
+            2.0 * (x * z - w * y),
+            0.0,
+        ],
+        [
+            2.0 * (x * y - w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + w * x),
+            0.0,
+        ],
+        [
+            2.0 * (x * z + w * y),
+            2.0 * (y * z - w * x),
+            1.0 - 2.0 * (x * x + y * y),
+            0.0,
+        ],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
 /// An element's body as the library holds it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyState {
@@ -681,6 +821,14 @@ impl Grouped for OdeShell {
 
     fn after_solve(&mut self, solver: &OdeSolver) {
         self.read(solver);
+        // 8.2: the states of the last two steps, for drawing.
+        for e in 0..self.elements.len() {
+            if let Some(frame) = self.frame(solver, e) {
+                let el = &mut self.elements[e];
+                el.steps = [el.steps[1], frame];
+                el.stepped = true;
+            }
+        }
     }
 
     fn class(&self) -> Class {

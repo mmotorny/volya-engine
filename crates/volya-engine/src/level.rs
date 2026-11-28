@@ -1629,6 +1629,10 @@ pub struct NewGameLoad {
     /// The physics world, made under `st_client_spawning`, shared with
     /// the scripts.
     physics: Option<Rc<RefCell<LevelPhysics>>>,
+    /// The startup animations of the physics objects with a shell whose
+    /// model has motions (physics-shells.md 7), read with the objects: the
+    /// instance, its model, the model's motions and the animation's name.
+    startup_animations: Vec<(usize, usize, crate::core::motion_playback::Motions, String)>,
 }
 
 /// The zone objects of `level_objects` (zone-idle-effects.md 1.1: the
@@ -2299,6 +2303,36 @@ impl NewGameLoad {
                             .map_err(invalid)?;
                     }
                 }
+                // physics-shells.md 7: the startup animation of a physics
+                // object with a shell whose model has motions.
+                let physics = physics.borrow();
+                for (k, i) in spawned.instances.iter().enumerate() {
+                    if physics.shell_of(i.id).is_none() {
+                        continue;
+                    }
+                    let Some(o) = level_objects.iter().find(|o| o.id == i.id) else {
+                        continue;
+                    };
+                    let record::Object::PhysicsObject(p) = &o.record.object else {
+                        continue;
+                    };
+                    // An animated skeleton (`ShellModel::has_motions`); one
+                    // without a name stopped the shell's build (9).
+                    let loaded = &spawned.models[i.model];
+                    if loaded.header.kind != 3 {
+                        continue;
+                    }
+                    let name = p.skeleton.startup_animation.to_string();
+                    let motions = crate::level_motions::model_motions(
+                        tree,
+                        data,
+                        &dir,
+                        loaded,
+                        &spawned.names,
+                    )?;
+                    (self.startup_animations).push((k, i.model, motions, name));
+                }
+                drop(physics);
                 self.spawned = Some(spawned);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
@@ -2596,6 +2630,7 @@ impl NewGameLoad {
 
     /// The level after every stage ran, shown from engine clock `now`.
     pub fn finish(mut self, now: u64) -> io::Result<LevelScreen> {
+        let startup_animations = std::mem::take(&mut self.startup_animations);
         let name = earlier(self.name, "level")?;
         let actor = earlier(self.actor, "actor")?;
         let shaders = earlier(self.shaders, "shader table")?;
@@ -2777,6 +2812,7 @@ impl NewGameLoad {
         // first update's target rather than the initial 0.5.
         screen.objects_gathered();
         screen.attach_head_callbacks();
+        screen.spawn_shells(startup_animations)?;
         Ok(screen)
     }
 }
@@ -2944,6 +2980,9 @@ impl LevelScreen {
         // The climbing states' clock is the footsteps' step clock
         // (climbing.md, conventions): the global clock.
         self.player.set_step_clock(self.global_ms as u32);
+        // physics-shells.md 8.2: the objects' frame updates read their
+        // shells before the frame's steps (physics-world.md 2.1).
+        self.shells_frame_update();
         // physics-world.md 2.1, 2.2: the physics world's steps on the
         // movement's display frame time, each with the movement step it
         // meets (the player's body is one of its objects,
@@ -3997,6 +4036,88 @@ impl LevelScreen {
         Ok(true)
     }
 
+    /// physics-shells.md 7, 8.1: the spawn's part of the shells built
+    /// at the start: each startup animation played as a looping cycle (a
+    /// name the model's motions lack plays nothing, TODO(#939)), the bones
+    /// computed at once, the first call of the bone callbacks re-placing
+    /// the bodies at the bones' poses, the object's transform read back
+    /// from an active shell (7); the callbacks attached to the bones drawn
+    /// (8.1). An instance whose shell has one element and whose model
+    /// plays no motion is drawn unposed: its one bone with a callback,
+    /// the root, keeps its pose, and the others are computed from it.
+    fn spawn_shells(
+        &mut self,
+        startup_animations: Vec<(usize, usize, crate::core::motion_playback::Motions, String)>,
+    ) -> io::Result<()> {
+        use crate::core::motion_playback::{Clock, Start};
+        let clock = Clock {
+            time_global: self.global_ms as u32,
+            frame: self.frame as u32,
+        };
+        let mut animated = std::collections::HashSet::new();
+        for (k, model, motions, name) in startup_animations {
+            let Some(cycle) = motions.cycle(&name) else {
+                continue;
+            };
+            let a = self.motions.animate(k, model, || Ok(motions))?;
+            (a.play_cycle(cycle, Start::mixing(None), clock))
+                .map_err(|e| invalid(e.to_string()))?;
+            animated.insert(k);
+        }
+        let objects = &self.world.objects;
+        let mut physics = self.physics.borrow_mut();
+        let shells: Vec<u16> = physics.shell_objects().collect();
+        let mut pose = Vec::new();
+        for id in shells {
+            let Some(&k) = self.instances.get(&id) else {
+                continue;
+            };
+            let loaded = &objects.models[objects.instances[k].model];
+            match self.motions.model(k).filter(|_| animated.contains(&k)) {
+                Some(a) => a.pose(&mut pose),
+                None => {
+                    pose.clear();
+                    pose.extend((0..loaded.bone_count()).map(|b| loaded.bind(b)));
+                }
+            }
+            physics.first_callbacks(id, &pose);
+            let elements = physics.drawn_of(id).map_or(0, |d| d.poses.len());
+            if animated.contains(&k) || elements > 1 {
+                let binds: Arc<[Mat4]> = (0..loaded.bone_count()).map(|b| loaded.bind(b)).collect();
+                let parents: Arc<[Option<usize>]> = (0..loaded.bone_count())
+                    .map(|b| loaded.bone_parent(b))
+                    .collect();
+                self.motions.attach_shell_callbacks(k, binds, parents);
+            }
+        }
+        drop(physics);
+        self.sync_drawn_shells();
+        Ok(())
+    }
+
+    /// physics-shells.md 8.2: the objects' frame updates of the shells,
+    /// before the frame's steps (physics-world.md 2.1).
+    fn shells_frame_update(&mut self) {
+        self.physics.borrow_mut().frame_update();
+        self.sync_drawn_shells();
+    }
+
+    /// The instances of objects with a shell drawn where it holds them
+    /// (physics-shells.md 8): at the object's transform, their bones with
+    /// a callback at their poses. A hidden instance stays hidden.
+    fn sync_drawn_shells(&mut self) {
+        let physics = self.physics.borrow();
+        for d in physics.drawn() {
+            let Some(&k) = self.instances.get(&d.object) else {
+                continue;
+            };
+            if self.placements[k].is_some_and(|p| p != d.transform) {
+                Arc::make_mut(&mut self.placements)[k] = Some(d.transform);
+            }
+            self.motions.set_shell_poses(k, d.poses);
+        }
+    }
+
     /// head-bone-turning.md 2: every object of the trader class attaches
     /// the head callback to its model's bone `bip01_head`, in follow mode,
     /// itself the subject. Attached for offline ones too (our choice: the
@@ -4025,6 +4146,16 @@ impl LevelScreen {
     /// The motions the object instances play.
     pub fn motions(&self) -> &crate::level_motions::LevelMotions {
         &self.motions
+    }
+
+    /// Object `id`'s instance, if its visual is loaded.
+    pub fn instance_of(&self, id: u16) -> Option<usize> {
+        self.instances.get(&id).copied()
+    }
+
+    /// Where instance `k` is drawn (`None`: not drawn).
+    pub fn placement(&self, k: usize) -> Option<Mat4> {
+        self.placements.get(k).copied().flatten()
     }
 
     /// The traders' motion channels (scripted-motion-channels.md).
@@ -4693,7 +4824,10 @@ impl LevelScreen {
             return;
         };
         let h = &o.record.header;
-        let placement = (!hidden && o.online).then(|| model_math::transform(h.position, h.angles));
+        // Where its shell holds it, if it has one (physics-shells.md 8.2).
+        let at = (self.physics.borrow().drawn_of(id)).map(|d| d.transform);
+        let placement = (!hidden && o.online)
+            .then(|| at.unwrap_or_else(|| model_math::transform(h.position, h.angles)));
         if self.placements[k] != placement {
             Arc::make_mut(&mut self.placements)[k] = placement;
         }

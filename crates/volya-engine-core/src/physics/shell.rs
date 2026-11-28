@@ -684,9 +684,9 @@ pub fn physics_object(
     // (TODO(#946)).
     shell.transform = record.transform;
     shell.set_drags(OBJECT_DRAGS);
-    // 7: the startup animation of a model with motions. Playing it is
-    // motion playback's (objects play none, #234); one the model lacks is
-    // open (TODO(#939)).
+    // 7: the startup animation of a model with motions, played at spawn
+    // (`LevelScreen::spawn_shells`); one the model lacks is open
+    // (TODO(#939)).
     if model.has_motions() && record.startup_animation.is_empty() {
         return Err(fatal("no startup animation"));
     }

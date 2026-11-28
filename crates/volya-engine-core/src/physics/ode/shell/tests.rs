@@ -166,3 +166,59 @@ fn motion_2_4_divisors_and_drags_slow_a_falling_shell() {
     }
     assert!((v - want).abs() < 0.01, "{v} vs {want}");
 }
+
+#[test]
+fn drawing_8_2_blends_the_last_two_steps() {
+    // A falling leaf, as above.
+    let mut r = record(3, "", None);
+    r.skeleton_flags = SKELETON_ACTIVE;
+    let mut model = door();
+    model.bones[1].physics.joint = volya_engine_formats::bone_physics::JointType::None;
+    let shell = physics_object(&model, &r, &materials()).unwrap().unwrap();
+    let mut world: World<OdeShell, OdeSolver> =
+        World::new(OdeSolver::new(), INITIAL_STEP, LIBRARY_ITERATIONS, -100.0);
+    let params = *world.params();
+    let s = world.solver_mut().activate_shell(&params, &shell);
+    let id = world.add(s);
+    world.activate(id).unwrap();
+    // No step yet: read from the body.
+    let (s, solver) = world.with_solver(id);
+    let s = s.unwrap();
+    let start = s.drawn_frame(solver, 1, 0.5).unwrap();
+    assert_eq!(start, s.frame(solver, 1).unwrap());
+    world.step(0, 0);
+    let first = world.get(id).unwrap().frame(world.solver(), 1).unwrap();
+    world.step(0, 0);
+    let (s, solver) = world.with_solver(id);
+    let s = s.unwrap();
+    let last = s.frame(solver, 1).unwrap();
+    // Steps ran: halfway between the last two steps' states.
+    let blended = s.drawn_frame(solver, 1, 0.5).unwrap();
+    let mid = 0.5 * (first[3][1] + last[3][1]);
+    assert!((blended[3][1] - mid).abs() < 1e-5, "{blended:?}");
+    assert!(blended[3][1] > last[3][1] && blended[3][1] < first[3][1]);
+    // Read since: from the body again.
+    assert_eq!(s.drawn_frame(solver, 1, 0.5).unwrap(), last);
+}
+
+#[test]
+fn the_blend_turns_along_the_shorter_arc() {
+    let near =
+        |x: &Mat4, y: &Mat4| (0..4).all(|r| (0..4).all(|c| (x[r][c] - y[r][c]).abs() < 1e-5));
+    let a = transform([0.0; 3], [0.0, 0.2, 0.0]);
+    let b = transform([2.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    assert!(near(&blend(&a, &b, 0.0), &a));
+    assert!(near(&blend(&a, &b, 1.0), &b));
+    let half = transform([1.0, 0.0, 0.0], [0.0, 0.6, 0.0]);
+    assert!(near(&blend(&a, &b, 0.5), &half), "{:?}", blend(&a, &b, 0.5));
+    // Every branch of the rotation's reading.
+    for angles in [
+        [2.5, -1.2, 3.0],
+        [3.1, 0.0, 0.0],
+        [0.0, 3.1, 0.0],
+        [0.0, 0.0, 3.1],
+    ] {
+        let c = transform([0.0; 3], angles);
+        assert!(near(&blend(&c, &c, 0.3), &c), "{angles:?}");
+    }
+}

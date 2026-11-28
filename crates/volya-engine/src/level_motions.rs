@@ -20,11 +20,13 @@ use std::sync::Arc;
 
 use crate::core::head_bone_turning::{turn, turning_angle};
 use crate::core::motion_playback::{AnimatedModel, Clock, Motions, Notified};
+use crate::core::physics::bone_callbacks::rigid_pose;
+use crate::core::physics::shell::inverse_rigid;
 use crate::core::vfs::Vfs;
 use crate::data::GameData;
 use crate::objects::{LoadedModel, Names};
 use crate::render::world::{BoneMatrix, bone_matrix};
-use volya_engine_formats::model::Mat4;
+use volya_engine_formats::model::{Mat4, multiply};
 use volya_engine_formats::skeletal_motions::{self, ModelMotions, Motion, MotionParams};
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -127,6 +129,18 @@ pub struct HeadCallback {
     pub transform: Mat4,
 }
 
+/// The bone callbacks of an instance's shell (physics-shells.md 8.1): the
+/// poses of the bones with one, by bone, and for a model without motions
+/// its bones' bind poses *B* and parents, from which the others are
+/// computed, and the *B*⁻¹ of its render matrices.
+#[derive(Clone, Debug, Default)]
+struct ShellCallbacks {
+    poses: Vec<(usize, Mat4)>,
+    binds: Arc<[Mat4]>,
+    parents: Arc<[Option<usize>]>,
+    inverse_binds: Vec<Mat4>,
+}
+
 /// The playbacks of the level's object instances.
 #[derive(Debug, Default)]
 pub struct LevelMotions {
@@ -134,6 +148,10 @@ pub struct LevelMotions {
     animated: Vec<Option<AnimatedModel>>,
     /// By instance: the head callback attached to its head bone.
     head_callbacks: HashMap<usize, HeadCallback>,
+    /// By instance: its shell's bone callbacks, and whether their poses
+    /// changed since the matrices were last computed.
+    shell_callbacks: HashMap<usize, ShellCallbacks>,
+    shells_changed: bool,
     /// The level's controlled object's position (head-bone-turning.md
     /// 3.1), set before each update.
     pub controlled: Option<[f32; 3]>,
@@ -187,6 +205,39 @@ impl LevelMotions {
         self.head_callbacks.insert(instance, callback);
     }
 
+    /// Attaches its shell's bone callbacks to instance `instance`'s bones
+    /// (physics-shells.md 8.1), its model's bind poses `binds` and parents
+    /// `parents` computing the bones without one while it plays no motion.
+    pub fn attach_shell_callbacks(
+        &mut self,
+        instance: usize,
+        binds: Arc<[Mat4]>,
+        parents: Arc<[Option<usize>]>,
+    ) {
+        self.shell_callbacks.insert(
+            instance,
+            ShellCallbacks {
+                poses: Vec::new(),
+                inverse_binds: binds.iter().map(inverse_rigid).collect(),
+                binds,
+                parents,
+            },
+        );
+        self.shells_changed = true;
+    }
+
+    /// The poses of instance `instance`'s bones with a shell callback, by
+    /// bone (physics-shells.md 8.1: the later calls), if it has them.
+    pub fn set_shell_poses(&mut self, instance: usize, poses: &[(usize, Mat4)]) {
+        if let Some(c) = self.shell_callbacks.get_mut(&instance)
+            && c.poses != poses
+        {
+            c.poses.clear();
+            c.poses.extend_from_slice(poses);
+            self.shells_changed = true;
+        }
+    }
+
     /// Instance `instance`'s head callback, if one is attached.
     pub fn head_callback(&self, instance: usize) -> Option<&HeadCallback> {
         self.head_callbacks.get(&instance)
@@ -200,9 +251,11 @@ impl LevelMotions {
     /// The frame's tracks updates (4.1) and the animated instances'
     /// render matrices.
     pub fn update(&mut self, clock: Clock) {
-        if self.animated.iter().all(Option::is_none) {
+        let animated = self.animated.iter().any(Option::is_some);
+        if !animated && !std::mem::take(&mut self.shells_changed) {
             return;
         }
+        self.shells_changed = false;
         let mut poses = BonePoses {
             matrices: Vec::new(),
             first: vec![None; self.animated.len()],
@@ -219,7 +272,13 @@ impl LevelMotions {
             let head = (self.head_callbacks.get(&i))
                 .zip(self.controlled)
                 .map(|(h, target)| (h.bone, turning_angle(target, &h.transform)));
+            // physics-shells.md 7, 8.1: a bone with its shell's callback
+            // follows its body, no longer the motions.
+            let shell = self.shell_callbacks.get(&i).map(|c| &c.poses[..]);
             a.pose_following(&mut self.pose, |bone, t| {
+                if let Some(&(_, p)) = shell.and_then(|s| s.iter().find(|(b, _)| *b == bone)) {
+                    *t = p;
+                }
                 if let Some((head, angle)) = head
                     && bone == head
                 {
@@ -229,6 +288,20 @@ impl LevelMotions {
             a.render_matrices(&self.pose, &mut self.render);
             poses.first[i] = Some(poses.matrices.len() as u32);
             poses.matrices.extend(self.render.iter().map(bone_matrix));
+        }
+        // physics-shells.md 8.1: the shells' bones of models playing no
+        // motion, the others computed from their bind poses (believed, 7).
+        let mut shells: Vec<_> = (self.shell_callbacks.iter())
+            .filter(|(i, _)| self.animated.get(**i).is_some_and(Option::is_none))
+            .collect();
+        shells.sort_by_key(|(i, _)| **i);
+        for (&i, c) in shells {
+            let follow = |bone| c.poses.iter().find(|(b, _)| *b == bone).map(|&(_, p)| p);
+            rigid_pose(&c.binds, &c.parents, follow, &mut self.pose);
+            poses.first[i] = Some(poses.matrices.len() as u32);
+            (poses.matrices).extend(
+                (c.inverse_binds.iter().zip(&self.pose)).map(|(b, t)| bone_matrix(&multiply(b, t))),
+            );
         }
         self.poses = Arc::new(poses);
     }

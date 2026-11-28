@@ -26,6 +26,7 @@ use crate::core::collision::body::PlayerBody;
 use crate::core::collision::geometry::{Vec3, normalize};
 use crate::core::console::{Console, Value};
 use crate::core::movement::StepHook;
+use crate::core::physics::bone_callbacks::{BoneCallbacks, bone_pose};
 use crate::core::physics::contacts::level::LevelState;
 use crate::core::physics::contacts::{Bounds, Class};
 use crate::core::physics::ode::character::OdeCharacter;
@@ -44,7 +45,7 @@ use crate::objects::{LevelObject, locate_model};
 use crate::script::game_object::physics::{Body, PhysicsShell, PhysicsWorld};
 use volya_engine_formats::gamemtl::GameMaterial;
 use volya_engine_formats::ltx;
-use volya_engine_formats::model::{transform, transform_point};
+use volya_engine_formats::model::{Mat4, transform, transform_point};
 use volya_engine_formats::object::{Object as Record, Skeleton};
 
 /// What the level's world steps: shells and the player's body
@@ -137,6 +138,21 @@ struct LevelShell {
     physics: crate::script::game_object::Physics,
     /// The shell as script API Y's members see it (`PhysicsShell::of_shell`).
     script_shell: Rc<PhysicsShell>,
+    /// Its bone callbacks (`shells` 8.1).
+    callbacks: BoneCallbacks,
+    /// The object's transform as the shell holds it (`shells` 8.2), and the
+    /// poses of the bones with a callback, by bone, as last updated.
+    transform: Mat4,
+    poses: Vec<(usize, Mat4)>,
+}
+
+/// What is drawn of a level object's shell (`shells` 8): the object's
+/// transform and the poses (model space) of the bones with a callback.
+#[derive(Clone, Copy, Debug)]
+pub struct DrawnShell<'a> {
+    pub object: u16,
+    pub transform: Mat4,
+    pub poses: &'a [(usize, Mat4)],
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -470,8 +486,93 @@ impl LevelPhysics {
             boxes,
             physics: crate::script::game_object::Physics::of_shell(shell),
             script_shell: Rc::new(PhysicsShell::of_shell(shell, Some(model), step)),
+            callbacks: BoneCallbacks::of(shell),
+            transform: shell.transform,
+            poses: Vec::new(),
         });
         Ok(())
+    }
+
+    /// The objects with a shell, in the order they were built.
+    pub fn shell_objects(&self) -> impl Iterator<Item = u16> + '_ {
+        self.shells.iter().map(|s| s.object)
+    }
+
+    /// `shells` 7, 8.1: the bones of object `object`'s model computed at
+    /// spawn, `pose` every bone's pose (model space): the first call of its
+    /// shell's bone callbacks, each element's body re-placed at its bone's
+    /// pose followed by the shell's transform; then the object's transform
+    /// read back from the shell if it is active (7).
+    pub fn first_callbacks(&mut self, object: u16, pose: &[Mat4]) {
+        let Some(k) = self.shells.iter().position(|s| s.object == object) else {
+            return;
+        };
+        let s = &mut self.shells[k];
+        let placed = s.callbacks.first_call(pose, &s.transform);
+        let id = s.id;
+        if let (Some(LevelBody::Shell(body)), solver) = self.world.with_solver(id) {
+            for (e, frame) in placed {
+                // A body already there is left (the bind pose of a rigid
+                // model: where activation placed it).
+                if body.frame(solver, e).is_some_and(|f| f != frame) {
+                    body.place_element(solver, e, &frame);
+                }
+            }
+        }
+        let active = self.world.is_active(id);
+        self.update_shell(k, active);
+    }
+
+    /// `shells` 8.2: the objects' frame updates, before the frame's steps:
+    /// every shell's elements' frames brought up to date (blended by the
+    /// world's accumulator over the step, `world` 2.2, believed), the
+    /// object's transform from the root element and the bones with a
+    /// callback from their elements (8.1).
+    pub fn frame_update(&mut self) {
+        for k in 0..self.shells.len() {
+            self.update_shell(k, true);
+        }
+    }
+
+    /// Shell `k`'s elements' frames brought up to date and its bones with
+    /// a callback posed from them, the object's transform taken from it
+    /// when `transform`.
+    fn update_shell(&mut self, k: usize, transform: bool) {
+        let params = *self.world.params();
+        let fraction = self.world.accumulator() / params.step;
+        let s = &mut self.shells[k];
+        let (Some(LevelBody::Shell(body)), solver) = self.world.with_solver(s.id) else {
+            return;
+        };
+        let frames: Vec<Option<Mat4>> = (0..body.elements())
+            .map(|e| body.drawn_frame(solver, e, fraction))
+            .collect();
+        let Some(Some(root)) = frames.first() else {
+            return;
+        };
+        if transform {
+            s.transform = s.callbacks.object_transform(root);
+        }
+        s.poses.clear();
+        for (bone, frame) in s.callbacks.bones().iter().zip(&frames) {
+            if let (Some(bone), Some(frame)) = (bone, frame) {
+                s.poses.push((*bone, bone_pose(frame, &s.transform)));
+            }
+        }
+    }
+
+    /// What is drawn of each shell (`shells` 8), as last updated.
+    pub fn drawn(&self) -> impl Iterator<Item = DrawnShell<'_>> {
+        self.shells.iter().map(|s| DrawnShell {
+            object: s.object,
+            transform: s.transform,
+            poses: &s.poses,
+        })
+    }
+
+    /// What is drawn of object `object`'s shell, as last updated.
+    pub fn drawn_of(&self, object: u16) -> Option<DrawnShell<'_>> {
+        self.drawn().find(|d| d.object == object)
     }
 
     fn shell(&self, object: u16) -> Option<&LevelShell> {
