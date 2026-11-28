@@ -1364,3 +1364,71 @@ mod scripted_actions {
         section(checks::act);
     }
 }
+
+/// The window description files' checks, one test per section of
+/// docs/behavior/script-api-window-description-files-fonts-and-textures.md
+/// (all of them run in [`selftest`] too, on every target).
+mod window_files {
+    use crate::selftest::window_files as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn the_reader_and_parse_file() {
+        section(checks::reader);
+    }
+
+    #[test]
+    fn building_and_attaching() {
+        section(checks::attaching);
+    }
+
+    #[test]
+    fn the_24_methods() {
+        section(checks::methods);
+    }
+
+    #[test]
+    fn init_window_and_init_auto_static_group() {
+        section(checks::init_window);
+    }
+
+    #[test]
+    fn the_worked_example() {
+        section(checks::worked_example);
+    }
+
+    #[test]
+    fn get_font() {
+        section(checks::fonts);
+    }
+
+    #[test]
+    fn cgamefont() {
+        section(checks::font_constants);
+    }
+
+    #[test]
+    fn get_argb() {
+        section(checks::get_argb);
+    }
+
+    #[test]
+    fn texture_descriptions() {
+        section(checks::textures);
+    }
+
+    #[test]
+    fn translate_string() {
+        section(checks::translate_string);
+    }
+}

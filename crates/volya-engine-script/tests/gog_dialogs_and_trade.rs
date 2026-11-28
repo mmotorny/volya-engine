@@ -127,6 +127,7 @@ fn start(g: &Game) -> (GameScripts, Rc<RefCell<DialogsAndTrade>>) {
         times: Rc::default(),
         sounds: Rc::default(),
         simulation: Rc::default(),
+        window_files: Rc::default(),
     })
     .unwrap();
     (scripts, dialogs)

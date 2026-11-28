@@ -178,6 +178,7 @@ fn started(trees: Rc<GameTrees>, aliases: &PathAliases) -> (GameScripts, Config)
         sounds: Rc::default(),
         simulation: Rc::default(),
         files,
+        window_files: Rc::default(),
     })
     .unwrap();
     (g, system)

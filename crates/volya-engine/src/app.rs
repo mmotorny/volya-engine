@@ -1201,7 +1201,7 @@ impl App {
     /// ([`crate::scripts`]). A script error is the original's fatal error
     /// at startup.
     pub fn start_scripts(&mut self, trees: Rc<dyn Trees>) -> io::Result<()> {
-        self.scripts = Some(crate::scripts::start(&self.data, trees)?);
+        self.scripts = Some(crate::scripts::start(&self.data, trees, self.video)?);
         Ok(())
     }
 
@@ -1927,6 +1927,9 @@ impl App {
                 if out.video_restart {
                     // `vid_restart` (options-screens.md section 5.4).
                     self.video = video_mode(&self.console);
+                    if let Some(scripts) = &self.scripts {
+                        crate::scripts::set_resolution(scripts, self.video);
+                    }
                     self.supersample = supersample(&self.console);
                     self.full_screen_request =
                         display_mode_request(&self.console, self.page_full_screen);
@@ -2147,6 +2150,9 @@ impl App {
                 }
                 if out.video_restart {
                     self.video = video_mode(&self.console);
+                    if let Some(scripts) = &self.scripts {
+                        crate::scripts::set_resolution(scripts, self.video);
+                    }
                     self.supersample = supersample(&self.console);
                     self.full_screen_request =
                         display_mode_request(&self.console, self.page_full_screen);
@@ -2607,6 +2613,9 @@ impl App {
         self.console
             .exec(&format!("vid_mode {}x{}", mode.width, mode.height));
         self.video = video_mode(&self.console);
+        if let Some(scripts) = &self.scripts {
+            crate::scripts::set_resolution(scripts, self.video);
+        }
         self.supersample = supersample(&self.console);
         self.full_screen_request = display_mode_request(&self.console, self.page_full_screen);
         // A device reset (texture-quality-filtering.md 7.3).

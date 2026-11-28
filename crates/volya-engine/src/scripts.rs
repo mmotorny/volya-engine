@@ -44,12 +44,14 @@ use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
 use crate::script::services::EngineServices;
 use crate::script::simulation::Event as SimulationEvent;
 use crate::script::story::{Icon, SharedInfoPortions, Story};
+use crate::script::window_files::WindowFiles;
 use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::dialog_files::Dialog;
 use volya_engine_formats::model;
 use volya_engine_formats::object::{Kind, Object, ObjectRecord, Shape};
 use volya_engine_formats::patrol_path::PatrolPaths;
+use volya_engine_formats::ui::Resolution;
 
 /// The server options of a New Game from the menu, `start
 /// server(all/single/alife/new)` (level-loading.md section 2.1).
@@ -61,7 +63,11 @@ pub const PRECACHE_FRAMES: u32 = 30;
 
 /// Program start (3.1 step 2): the engine state the script interface
 /// reads, and startup on the first game state, over the game's trees.
-pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
+pub fn start(
+    data: &GameData,
+    trees: Rc<dyn Trees>,
+    resolution: Resolution,
+) -> io::Result<GameScripts> {
     let mut game = Err(io::Error::other("the game's files are unavailable"));
     trees.with_trees(&mut |tree, _| {
         game = config::load_aliased(tree, &data.aliases, "$game_config$", "game.ltx");
@@ -101,8 +107,30 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         times: Rc::default(),
         sounds: Rc::default(),
         simulation: Rc::default(),
+        window_files: Rc::new(RefCell::new(window_files(data, resolution))),
     })
     .map_err(fatal)
+}
+
+/// What script API G3's names read: the texture registry the main menu
+/// filled (5.3), the named colours, the string table, the UI fonts (created
+/// with the title menu's, before scripts start) and the resolution of the
+/// `_16` rule, which [`set_resolution`] keeps current.
+fn window_files(data: &GameData, resolution: Resolution) -> WindowFiles {
+    WindowFiles {
+        resolution,
+        colors: data.colors.clone(),
+        textures: data.descriptions.clone(),
+        strings: Some(Arc::clone(&data.strings)),
+        fonts_created: true,
+        windows: Vec::new(),
+    }
+}
+
+/// The output resolution changed: the `_16` rule of script API G3's
+/// readers follows it (ui-layout.md 1.1).
+pub fn set_resolution(scripts: &GameScripts, resolution: Resolution) {
+    scripts.window_files().borrow_mut().resolution = resolution;
 }
 
 /// The story state before a game: the interface's texture descriptions

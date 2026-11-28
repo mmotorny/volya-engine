@@ -197,6 +197,7 @@ fn started(
         sounds: Rc::default(),
         simulation: Rc::default(),
         files: Rc::clone(&fs),
+        window_files: Rc::default(),
     })
     .map_err(|e| e.message)?;
     Ok((scripts, fs))

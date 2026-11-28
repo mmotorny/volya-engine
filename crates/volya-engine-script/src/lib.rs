@@ -9,7 +9,7 @@
 //! [`classes`] gives scripts classes deriving from engine classes,
 //! [`object_factory`] keeps the class ids and creates objects by them,
 //! [`services`], [`values`], [`files`], [`game_object`], [`story`],
-//! [`dialogs`], [`sound`] and [`simulation`]
+//! [`dialogs`], [`sound`], [`simulation`] and [`window_files`]
 //! register the engine's names of the script API, and [`entry_points`]
 //! calls into scripts as the engine does, in its order. See
 //! docs/architecture/scripts.md.
@@ -41,6 +41,7 @@ pub mod sound;
 pub mod story;
 pub mod time;
 pub mod values;
+pub mod window_files;
 
 use std::collections::HashSet;
 use std::ffi::{CString, c_int, c_void};

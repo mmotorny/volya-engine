@@ -6,7 +6,7 @@
 //! and files, game objects, object binders, object event callbacks, the
 //! story state, the engine's entry points, the dialog files' functions, the
 //! dialogs and trade, time, the sound, the simulation registry and the
-//! scripted actions,
+//! scripted actions and the window description files,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -33,6 +33,7 @@ pub mod sound;
 pub mod story;
 pub mod time;
 pub mod values;
+pub mod window_files;
 
 /// Runs every check; `Err` lists the failures.
 pub fn check() -> Result<(), String> {
@@ -102,6 +103,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = scripted_actions::check() {
+        fail(e);
+    }
+    if let Err(e) = window_files::check() {
         fail(e);
     }
     if failures.is_empty() {

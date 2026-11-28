@@ -295,6 +295,7 @@ fn the_names_on_a_started_game_state() {
         times: Rc::clone(&times),
         sounds: Rc::default(),
         simulation: Rc::default(),
+        window_files: Rc::default(),
     })
     .unwrap();
     times

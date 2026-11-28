@@ -32,6 +32,7 @@ use crate::simulation::AlifeSimulator;
 use crate::sound::ScriptSounds;
 use crate::story::Story;
 use crate::time::GameTimes;
+use crate::window_files::WindowFiles;
 use crate::{Error, ErrorKind, Lua, Value};
 
 /// The registry key of the entry points' function (entry_points.lua).
@@ -131,6 +132,8 @@ pub struct Startup {
     /// The sounds the scripts make (script API T).
     pub sounds: Rc<RefCell<ScriptSounds>>,
     pub simulation: Rc<RefCell<AlifeSimulator>>,
+    /// The window description files' state (script API G3).
+    pub window_files: Rc<RefCell<WindowFiles>>,
 }
 
 impl Startup {
@@ -164,7 +167,7 @@ impl Startup {
     }
 
     /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y,
-    /// K, J, V; A, C and E [`Scripts::new`] registers).
+    /// K, J, V, G3; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -181,7 +184,13 @@ impl Startup {
         scripts.register_sound(Rc::clone(&self.sounds), Rc::clone(&self.trees))?;
         scripts.register_simulation(Rc::clone(&self.simulation))?;
         scripts.register_simulation_objects()?;
-        scripts.register_scripted_actions()
+        scripts.register_scripted_actions()?;
+        scripts.register_window_files(
+            Rc::clone(&self.services),
+            Rc::clone(&self.window_files),
+            Rc::clone(&self.trees),
+            self.aliases.clone(),
+        )
     }
 }
 
@@ -367,6 +376,11 @@ impl GameScripts {
     /// The simulation as scripts reach it (script API K).
     pub fn simulation(&self) -> &Rc<RefCell<AlifeSimulator>> {
         &self.startup.simulation
+    }
+
+    /// The window description files' state (script API G3).
+    pub fn window_files(&self) -> &Rc<RefCell<WindowFiles>> {
+        &self.startup.window_files
     }
 
     /// The engine's calls into scripts so far, oldest first.

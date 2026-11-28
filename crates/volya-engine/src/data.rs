@@ -133,7 +133,8 @@ pub struct GameData {
     pub descriptions: TextureDescriptions,
     pub colors: ColorDefs,
     pub localization: Localization,
-    pub strings: StringTable,
+    /// Shared with the scripts' `game.translate_string` (script API G3).
+    pub strings: Arc<StringTable>,
     /// The particles' effect library `particles.xr`, the same for every
     /// level: read once here rather than with each level (our choice;
     /// docs/architecture/memory.md), empty when the file is absent.
@@ -277,7 +278,7 @@ impl GameData {
             descriptions,
             colors,
             localization,
-            strings,
+            strings: Arc::new(strings),
             effects,
             characters,
             menu,

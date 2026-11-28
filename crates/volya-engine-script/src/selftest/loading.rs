@@ -313,10 +313,24 @@ pub(super) fn scripts_of(
     scripts: &[(&str, &str)],
     prefix: Prefix,
 ) -> Result<(Scripts, Rc<Files>), String> {
+    scripts_with(scripts, &[], prefix)
+}
+
+/// [`scripts_of`] with more game files: paths in `gamedata/` and bytes.
+pub(super) fn scripts_with(
+    scripts: &[(&str, &str)],
+    game_files: &[(&str, &[u8])],
+    prefix: Prefix,
+) -> Result<(Scripts, Rc<Files>), String> {
     let files = Rc::new(Files {
         files: scripts
             .iter()
             .map(|(name, text)| (format!("gamedata/scripts/{name}"), text.as_bytes().to_vec()))
+            .chain(
+                game_files
+                    .iter()
+                    .map(|(path, bytes)| (format!("gamedata/{path}"), bytes.to_vec())),
+            )
             .chain([(
                 "gamedata/config/script.ltx".to_owned(),
                 b"[common]\r\nclass_registrators = class_registrator.register, \
