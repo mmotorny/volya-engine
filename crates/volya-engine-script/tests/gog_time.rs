@@ -293,6 +293,7 @@ fn the_names_on_a_started_game_state() {
         story: Rc::new(RefCell::new(Story::new())),
         dialogs: Rc::default(),
         times: Rc::clone(&times),
+        sounds: Rc::default(),
     })
     .unwrap();
     times

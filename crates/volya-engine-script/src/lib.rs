@@ -8,7 +8,8 @@
 //! behind a thin safe API; [`loader`] loads the game's script files,
 //! [`classes`] gives scripts classes deriving from engine classes,
 //! [`object_factory`] keeps the class ids and creates objects by them,
-//! [`services`], [`values`], [`files`], [`game_object`] and [`story`]
+//! [`services`], [`values`], [`files`], [`game_object`], [`story`],
+//! [`dialogs`] and [`sound`]
 //! register the engine's names of the script API, and [`entry_points`]
 //! calls into scripts as the engine does, in its order. See
 //! docs/architecture/scripts.md.
@@ -33,6 +34,7 @@ pub mod loader;
 pub mod object_factory;
 pub mod selftest;
 pub mod services;
+pub mod sound;
 pub mod story;
 pub mod time;
 pub mod values;

@@ -4,8 +4,8 @@
 //! The runtime's behaviour, the script loader, script classes, the
 //! object factory, the engine services, the value types, configuration
 //! and files, game objects, object binders, object event callbacks, the
-//! story state, the engine's entry points, the dialog files' functions and the
-//! dialogs and trade, and time,
+//! story state, the engine's entry points, the dialog files' functions, the
+//! dialogs and trade, time and the sound,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -25,6 +25,7 @@ pub mod object_callbacks;
 pub mod object_factory;
 pub mod physics;
 pub mod services;
+pub mod sound;
 pub mod story;
 pub mod time;
 pub mod values;
@@ -76,6 +77,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = dialogs::check() {
+        fail(e);
+    }
+    if let Err(e) = sound::check() {
         fail(e);
     }
     if let Err(e) = dialogs_and_trade::check() {

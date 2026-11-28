@@ -98,6 +98,7 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         // The game's clocks as scripts read them, fed by the level
         // ([`client_spawning`], [`level_frame`]).
         times: Rc::default(),
+        sounds: Rc::default(),
     })
     .map_err(fatal)
 }
@@ -175,8 +176,9 @@ pub fn new_game(scripts: &GameScripts) {
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
 /// reading), the game's story forgotten, then the level's call list
 /// emptied, none of it called (spec O 6.5), and the default trade
-/// parameters dropped (script API R 5.2) and the game clock gone (script
-/// API H). A script error is fatal.
+/// parameters dropped (script API R 5.2), the game clock gone (script
+/// API H) and the creatures' sound state forgotten (script API T). A
+/// script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
@@ -198,6 +200,8 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     scripts.story().borrow_mut().new_game();
     // Script API H: no game clock until the next level's.
     scripts.times().borrow_mut().level_ended();
+    // The creatures' sound state goes with them (script API T 6, 7).
+    scripts.sounds().borrow_mut().creatures = Default::default();
     scripts.scripts().clear_level_calls()?;
     scripts.scripts().destroy_default_trade()
 }
@@ -509,7 +513,7 @@ impl ScriptDialogs {
 
 /// The traders' motion channels after the scripts' part of a level frame
 /// (docs/behavior/scripted-motion-channels.md): the calls the trader
-/// members made since (script API R 6), then each trader's check, its
+/// members made since (script API R 6, T 6.6), then each trader's check, its
 /// events raised on the trader (spec O 4, ids 30 to 32) and the calls
 /// their functions made made at once (4.2). A script error is fatal.
 pub fn motion_channels_frame(
@@ -544,7 +548,8 @@ pub fn motion_channels_frame(
     level.motion_channels_check(tree, data, sounds, &mut raise)
 }
 
-/// The call of a trader member's event (script API R 6), with its trader.
+/// The call of a trader member's event (script API R 6, T 6.6), with its
+/// trader.
 fn channel_call(event: DialogEvent) -> Option<(u16, ChannelCall)> {
     match event {
         DialogEvent::TraderMotion {
@@ -569,6 +574,11 @@ fn channel_call(event: DialogEvent) -> Option<(u16, ChannelCall)> {
                 head_anim: head_motion,
             },
         )),
+        // Script API T 6.6.
+        DialogEvent::ExternalSoundStart { trader, sound } => {
+            Some((trader, ChannelCall::ExternalSoundStart(sound)))
+        }
+        DialogEvent::ExternalSoundStop { trader } => Some((trader, ChannelCall::ExternalSoundStop)),
         _ => None,
     }
 }
@@ -593,6 +603,17 @@ pub fn spawn_client_object(
     let data = SpawnData::from_record(object.id, object.record, system).map_err(io_fatal)?;
     let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
+    // The character's voice prefix (script API T 6.5).
+    let voice = characters.voice_prefix(object.record).map_err(io_fatal)?;
+    {
+        let mut sounds = scripts.sounds().borrow_mut();
+        let creatures = &mut sounds.creatures;
+        creatures.forget(object.id);
+        if !voice.is_empty() {
+            let voice = cp1251::encode(&voice).unwrap_or_else(|| voice.into_bytes());
+            creatures.voice_prefixes.insert(object.id, voice);
+        }
+    }
     // Its shell as script API Y sees it, before its binder asks for it.
     if let Some(shell) = object.shell {
         let physics = scripts.scripts().physics_state()?;

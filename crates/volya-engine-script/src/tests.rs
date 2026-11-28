@@ -1027,3 +1027,121 @@ mod time {
         section(checks::profile_timer);
     }
 }
+
+/// The sound's checks, one test per section of
+/// docs/behavior/script-api-sound.md (all of them run in [`selftest`] too,
+/// on every target).
+mod sound {
+    use crate::selftest::sound as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn construction() {
+        section(checks::construction);
+    }
+
+    #[test]
+    fn play_and_play_at_pos() {
+        section(checks::play);
+    }
+
+    #[test]
+    fn play_no_feedback() {
+        section(checks::play_no_feedback);
+    }
+
+    #[test]
+    fn stop() {
+        section(checks::stop);
+    }
+
+    #[test]
+    fn playing_and_length() {
+        section(checks::playing_and_length);
+    }
+
+    #[test]
+    fn positions() {
+        section(checks::positions);
+    }
+
+    #[test]
+    fn properties() {
+        section(checks::properties);
+    }
+
+    #[test]
+    fn a_collected_objects_sound_goes() {
+        section(checks::collection);
+    }
+
+    #[test]
+    fn snd_type() {
+        section(checks::snd_type);
+    }
+
+    #[test]
+    fn the_records() {
+        section(checks::records);
+    }
+
+    #[test]
+    fn the_effects_factor() {
+        section(checks::effects_factor);
+    }
+
+    #[test]
+    fn prefetch_sound() {
+        section(checks::prefetch_sound);
+    }
+
+    #[test]
+    fn iterate_sounds() {
+        section(checks::iterate_sounds);
+    }
+
+    #[test]
+    fn add_sound() {
+        section(checks::add_sound);
+    }
+
+    #[test]
+    fn play_sound() {
+        section(checks::play_sound);
+    }
+
+    #[test]
+    fn masks_and_counts() {
+        section(checks::masks_and_counts);
+    }
+
+    #[test]
+    fn prefixes() {
+        section(checks::prefixes);
+    }
+
+    #[test]
+    fn the_traders_external_sound() {
+        section(checks::external_sound);
+    }
+
+    #[test]
+    fn hearing_and_remembered_sounds() {
+        section(checks::hearing);
+    }
+
+    #[test]
+    fn the_worked_examples() {
+        section(checks::worked_examples);
+    }
+}

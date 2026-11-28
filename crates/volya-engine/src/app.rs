@@ -1386,6 +1386,11 @@ impl App {
             _ => Vec::new(),
         };
         let Some(sounds) = audio.sounds() else {
+            // No sound system: the scripts' sounds play nothing (script API
+            // T, as with the sound system disabled).
+            if let Some(scripts) = &self.scripts {
+                scripts.sounds().borrow_mut().frame_without_system();
+            }
             return Ok(());
         };
         if !self.sound_voices_set {
@@ -1505,6 +1510,19 @@ impl App {
                         level_sounds.door(sounds, sound);
                     }
                 }
+                // What the scripts' sounds asked this frame (script API T),
+                // `$level$` at the level's directory; their emitters that
+                // ended are forgotten.
+                if let Some(scripts) = &self.scripts {
+                    let mut script_sounds = scripts.sounds().borrow_mut();
+                    let dir = &level.world().dir;
+                    if script_sounds.level_dir.as_ref() != Some(dir) {
+                        script_sounds.level_dir = Some(dir.clone());
+                    }
+                    if let Err(e) = script_sounds.frame(sounds, tree, &self.data.aliases) {
+                        fatal = Some(e);
+                    }
+                }
                 // The player's body sounds (S17) on the global clock: the
                 // hits' and death's sounds as they came; the per-update
                 // sounds and the shock's per-frame update while the pause
@@ -1532,6 +1550,9 @@ impl App {
                 level_sounds.discard(sounds);
             }
             self.sound_run.level_left();
+            if let Some(scripts) = &self.scripts {
+                scripts.sounds().borrow_mut().level_left(sounds);
+            }
         }
         self.sound_in_level = in_level;
         if menu_open != self.sound_paused {
@@ -2813,6 +2834,9 @@ impl App {
         if let Some(level_sounds) = self.level_sounds.take() {
             sounds.stop_all();
             level_sounds.discard(sounds);
+        }
+        if let Some(scripts) = &self.scripts {
+            scripts.sounds().borrow_mut().discard_all(sounds);
         }
         sounds.occlusion_mut().level = None;
         self.sound_in_level = false;

@@ -81,6 +81,12 @@ pub enum Event {
         sound: Vec<u8>,
         head_motion: Vec<u8>,
     },
+    /// `external_sound_start` (script API T 6.6; scripted-motion-channels.md
+    /// 2.5): the trader's current sound stopped, the sound file `sound`
+    /// played for it as `set_trader_sound`'s, the head channel marked ended.
+    ExternalSoundStart { trader: u16, sound: Vec<u8> },
+    /// `external_sound_stop` (T 6.6; TC2 2.6): the trader's sound stopped.
+    ExternalSoundStop { trader: u16 },
 }
 
 /// The dialogs and trade's own state.
@@ -106,8 +112,15 @@ impl DialogsAndTrade {
     /// ([`DialogsAndTrade::take_trader_events`]), oldest first; those are
     /// kept.
     pub fn take_other_events(&mut self) -> Vec<Event> {
-        let trader =
-            |e: &Event| matches!(e, Event::TraderMotion { .. } | Event::TraderSound { .. });
+        let trader = |e: &Event| {
+            matches!(
+                e,
+                Event::TraderMotion { .. }
+                    | Event::TraderSound { .. }
+                    | Event::ExternalSoundStart { .. }
+                    | Event::ExternalSoundStop { .. }
+            )
+        };
         let (kept, taken) = std::mem::take(&mut self.events)
             .into_iter()
             .partition(trader);
@@ -121,13 +134,22 @@ impl DialogsAndTrade {
     pub fn take_trader_events(&mut self, trader: Option<u16>) -> Vec<Event> {
         let (taken, kept) = std::mem::take(&mut self.events).into_iter().partition(|e| {
             let of = match e {
-                Event::TraderMotion { trader, .. } | Event::TraderSound { trader, .. } => *trader,
+                Event::TraderMotion { trader, .. }
+                | Event::TraderSound { trader, .. }
+                | Event::ExternalSoundStart { trader, .. }
+                | Event::ExternalSoundStop { trader } => *trader,
                 _ => return false,
             };
             trader.is_none_or(|t| t == of)
         });
         self.events = kept;
         taken
+    }
+
+    /// An event raised by another part of the interface (script API T's
+    /// trader members).
+    pub(crate) fn push_event(&mut self, event: Event) {
+        self.events.push(event);
     }
 }
 
@@ -473,6 +495,11 @@ impl Scripts {
         register(self, &ctx)?;
         self.dialogs_state = Some(Registered { ctx });
         Ok(())
+    }
+
+    /// The dialogs and trade's state, once registered.
+    pub(crate) fn registered_dialogs(&self) -> Option<Rc<RefCell<DialogsAndTrade>>> {
+        self.dialogs_state.as_ref().map(|r| Rc::clone(&r.ctx.state))
     }
 
     fn dialogs_context(&self) -> Result<Context, Error> {

@@ -193,6 +193,7 @@ fn started(
         story: Rc::new(RefCell::new(Story::new())),
         dialogs: Rc::default(),
         times: Rc::default(),
+        sounds: Rc::default(),
         files: Rc::clone(&fs),
     })
     .map_err(|e| e.message)?;

@@ -231,6 +231,17 @@ impl<'a> Characters<'a> {
         }
     }
 
+    /// The voice prefix of `record`'s character as it comes online (script
+    /// API T 6.5): its specific character's `snd_config`
+    /// (character-descriptions.md), as `start_dialog` finds it; empty for
+    /// a record without one.
+    pub fn voice_prefix(&mut self, record: &ObjectRecord) -> io::Result<String> {
+        match trader_like(record).map(|t| t.specific_character.as_str()) {
+            Some(id) if !id.is_empty() => Ok(self.specific_character(id)?.snd_config.clone()),
+            _ => Ok(String::new()),
+        }
+    }
+
     /// The player's Trader-like block's specific character
     /// (player-state.md 2.2): the block's own if named, else its profile's;
     /// none for a profile that names none. A stalker's or trader's is
