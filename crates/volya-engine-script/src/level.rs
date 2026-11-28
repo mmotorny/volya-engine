@@ -293,7 +293,7 @@ fn raw(ctx: &Context, maker: &ObjectMaker, args: &[Value]) -> Results {
             let v = vertices_of(ctx, &state, what)?;
             let found = vertex_index(v, vertex).and_then(|k| {
                 let d = [direction.x, direction.y, direction.z];
-                vertices::vertex_in_direction(&v.ai, &v.links, k, d, distance)
+                vertices::vertex_in_direction(&v.ai, &v.links, k, d, distance, None)
             });
             let found = found.ok_or_else(|| ctx.crash(what, "a level vertex beyond the level"))?;
             one(f64::from(found))

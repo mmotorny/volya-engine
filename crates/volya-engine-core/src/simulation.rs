@@ -18,6 +18,7 @@
 //! one, so nothing travels.
 
 pub mod graph;
+pub mod level_graph;
 pub mod navigation;
 pub mod supplies;
 mod travel;

@@ -15,6 +15,7 @@
 use std::io::{self, BufReader};
 use std::sync::Arc;
 
+use super::level_graph::{Accessibility, LevelGraph};
 use crate::file_cache;
 use crate::vfs::Vfs;
 use volya_engine_formats::cross_table::CrossTable;
@@ -39,6 +40,8 @@ pub struct Navigation {
     /// it, for the scripts (script-api-game-object-basics.md 4); empty
     /// otherwise, or once taken.
     pub vertex_lights: Vec<u8>,
+    /// The vertices' accessibility bits (level-graph.md 2.2).
+    pub accessibility: Accessibility,
     /// Level vertices in increasing packed column and row, when the file
     /// does not store them so; `None` when it does.
     order: Option<Vec<u32>>,
@@ -88,8 +91,27 @@ impl Navigation {
             links: None,
             cross,
             vertex_lights: Vec::new(),
+            accessibility: Accessibility::default(),
             order,
         })
+    }
+
+    /// The level graph (level-graph.md), `None` without links.
+    pub fn graph(&self) -> Option<LevelGraph<'_>> {
+        Some(LevelGraph {
+            ai: &self.ai,
+            links: self.links.as_deref()?,
+            accessibility: &self.accessibility,
+        })
+    }
+
+    /// An online creature's location after it moves (level-graph.md 2.3):
+    /// the vertex search from its current vertex `k0` for `point` (its
+    /// position's x and z, its centre's y) and that vertex's game vertex
+    /// in the cross table.
+    pub fn location(&self, k0: u32, point: [f32; 3]) -> Option<(u32, Option<u16>)> {
+        let k = self.vertex_for_point(k0, point)?;
+        Some((k, self.cross.cell(k).map(|(g, _)| g)))
     }
 
     /// Reads level `level_id`'s `level.ai` and `level.gct` (each as a

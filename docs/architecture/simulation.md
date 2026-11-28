@@ -38,12 +38,19 @@ The level (`volya-engine::level::LevelScreen`) owns what runs while a game is pl
 
 `volya-engine-core::navigation` plans tap-to-move's routes ([input.md](input.md), #805). It is our own addition, built from our movement and collision, not from the original's AI.
 
-- Not over `level.ai`: the specs establish only its vertices' positions, not their links (offline-simulation.md 3), and an AI graph has no ladders, jumps or crawl spaces for the player's body anyway.
+- Not over `level.ai`'s graph (below): it has no ladders, jumps or crawl spaces for the player's body.
 - A grid of 0.3 m columns probed from the collision world while a search runs and dropped when it ends, so nothing is built at load and nothing is kept. One box query per column (0.56 m square, the search's vertical span) gives its floors (the front sides of solid walkable triangles, normal y ≥ 0.707, met by the column's centre line) and each floor's room: the tallest posture whose box (standing 1.8 m, crouch 1.5, low crouch 1.2, `ph_box*_size`) fits above 0.5 m over it, the ladders' boxes counting as walls. The spacing is under the box's width, so a wall between two columns meets one of their boxes.
 - Edges, costed by time at the posture's speed (`walk_accel`, `run_coef`, `crouch_coef`): walking, crouching or crawling to a neighbour (8 ways, diagonals not cutting corners) within a 0.5 m step; walking off an edge down to 2.5 m (half the fall `ph_crash_speed_min` would need); a running jump up onto a ledge to 0.83 m (0.9 × the apex, `jump_speed²/2g` = 0.92 m) and across a gap or over an obstacle lower than 0.64 m (0.7 × the apex), within 1.8 m; and up or down a ladder, between the floor in front of its foot and the floor beyond its top. Measured in the movement on synthetic worlds: 0.7 m ledges are walked up, 0.9 m ones jumped onto from a run or from standing, 1.8 m gaps jumped.
 - A* with the straight distance at running speed as heuristic, weighted 1.3; the target taken 0.3 m back toward the start, so a tap on a wall goes to its near foot. It ends at the first floor within 0.45 m of the target, or after 20,000 expansions or 8,000 without coming nearer (a roof nothing leads to); then the route goes to the nearest floor reached if it lies within 1.5 m of the target and takes at most twice the straight run's time plus 3 s (a tap high on a wall goes to its foot, not round to its far side), and otherwise there is none. The route's legs on foot at one posture are merged where the straight line between passes, and its ends are the feet and the tapped floor point.
 - `Planning::run` expands it by parts, so a long search spreads over frames (tap-to-move gives it 600 expansions a frame).
 - Cost on `l01_escape`, 70 targets 8–25 m around a point 1 m past the trader's locked door (native release, `tests/tap_routes.rs`, measured): median 13 ms, most 112 ms (8,404 expansions, 8,704 columns); the largest search holds 1.3 MB while it runs (native's 8-byte pointers), freed at its end. 59 targets the straight line can't reach are reached (the longest 30.9 m routes for 8 m straight); routes are followed to their ends by the movement on the level's collision world, `clmbl#8` climbed. The doors' leaves' boxes (the locked door's) are walls to the planner, as the ladders' boxes.
+
+## The level graph
+
+`volya-engine-core::simulation::level_graph` is the characters' and monsters' use of `level.ai` (docs/behavior/level-graph.md): `Navigation::graph` views the positions and links `Navigation::read` keeps in the file cache with the accessibility bits beside them; the vertex for a point is `Navigation::vertex_for_point`.
+
+- The accessibility bits are kept as the cleared ones, allocated on the first clearing (a creature's restrictions, CH-9), so nothing is held while every vertex is accessible; then *N*/8 bytes at most (74 KB on `l01_escape`).
+- The level path search and the nearest-vertex search keep the vertices they reach in a map made per search (at most the 65,500 entries of creatures' movement), and their waiting list in a heap with stale entries skipped, which gives the spec's order (least sum, of equals the last entered).
 
 ## Physics
 

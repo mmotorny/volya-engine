@@ -8,6 +8,7 @@
 
 use std::f32::consts::{FRAC_2_PI, FRAC_PI_2, PI};
 
+use volya_engine_core::simulation::level_graph::Accessibility;
 use volya_engine_formats::level_ai::{LevelAi, LevelAiLinks};
 
 type Vec3 = [f32; 3];
@@ -67,12 +68,17 @@ fn crossing(a: Vec3, b: Vec3, centre: Vec3, half: f32) -> Option<[f32; 2]> {
 /// the segment crosses and their crossing points; edge and corner cases
 /// are believed to follow the same rule). The walk never visits more
 /// vertices than the level has (our guard).
+///
+/// With `accessible_only` (docs/behavior/level-graph.md 3.5: the fighter
+/// member `vertex_in_direction`), the walk stops, keeping the vertex it is
+/// at, when the neighbour it would move to is not accessible.
 pub fn vertex_in_direction(
     ai: &LevelAi,
     links: &LevelAiLinks,
     vertex: u32,
     direction: Vec3,
     distance: f32,
+    accessible_only: Option<&Accessibility>,
 ) -> Option<u32> {
     let n = ai.len().min(links.len()) as u32;
     if vertex >= n {
@@ -135,6 +141,9 @@ pub fn vertex_in_direction(
         let Some((next, point)) = best else {
             break;
         };
+        if accessible_only.is_some_and(|a| !a.is_set(next)) {
+            break;
+        }
         came_from = Some(current);
         current = next;
         if distance_xz(xz(start), point) >= span + SLACK {
@@ -170,5 +179,40 @@ pub fn cover_in_direction(cover: [u8; 4], direction: Vec3) -> f32 {
         n[3] + (n[2] - n[3]) * (a - PI) * FRAC_2_PI
     } else {
         n[2] + (n[1] - n[2]) * (a - 3.0 * FRAC_PI_2) * FRAC_2_PI
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use volya_engine_formats::level_ai::{LevelAiHeader, NO_LINK};
+
+    /// The walk with accessible only (level-graph.md 3.5) on three
+    /// vertices in a row along +x.
+    #[test]
+    fn accessible_only_stops_before_an_inaccessible_vertex() {
+        let header = LevelAiHeader {
+            vertex_count: 3,
+            cell_size: 0.7,
+            height_range: 10.0,
+            box_min: [0.0; 3],
+            box_max: [1.4, 10.0, 0.0],
+            identifier: [0; 16],
+        };
+        let ai = LevelAi::new(header, &[(0, 0), (1, 0), (2, 0)]);
+        let links = LevelAiLinks::new(&[
+            ([NO_LINK, NO_LINK, 1, NO_LINK], [0; 4]),
+            ([0, NO_LINK, 2, NO_LINK], [0; 4]),
+            ([1, NO_LINK, NO_LINK, NO_LINK], [0; 4]),
+        ]);
+        let walk = |a: Option<&Accessibility>| {
+            vertex_in_direction(&ai, &links, 0, [1.0, 0.0, 0.0], 1.4, a)
+        };
+        let mut a = Accessibility::default();
+        assert_eq!((walk(None), walk(Some(&a))), (Some(2), Some(2)));
+        a.clear(&[2]);
+        assert_eq!((walk(None), walk(Some(&a))), (Some(2), Some(1)));
+        a.clear(&[1]);
+        assert_eq!(walk(Some(&a)), Some(0));
     }
 }
