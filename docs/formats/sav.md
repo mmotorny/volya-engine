@@ -253,8 +253,8 @@ Each object record:
 | update-packet length `u` | `u16` |
 | update packet | `u` bytes (section 7.3) |
 
-These are the same two packets that `spawns\all.spawn` stores per object (start-position
-specification section 2), without the chunk wrapping.
+These are the same two packets that `spawns\all.spawn` stores per object (section 10.1), without
+the chunk wrapping.
 
 **Which objects are saved.** An object "can be saved" according to its kind:
 
@@ -297,8 +297,8 @@ Read and written in this order:
 | name | `stringZ` | unique object name (all.spawn: e.g. `level_prefix_actor_0001`) |
 | game type | `u8` | 0 in all.spawn; meaning **unestablished** (believed: the game mode the record belongs to) |
 | `u8` | `u8` | 254 in all.spawn; meaning **unestablished** |
-| position | `float3` | world position (start-position specification section 1) |
-| angles | `float3` | orientation (start-position specification section 5) |
+| position | `float3` | world position (world-coordinates specification, section 1) |
+| angles | `float3` | orientation angles `a0, a1, a2` (the player's become its camera's yaw and pitch: world-coordinates specification, section 2) |
 | respawn time | `u16` | 0 in all.spawn; meaning beyond the name **unestablished** |
 | id | `u16` | the object's id (0 … 0xFFFE); 0xFFFF in all.spawn (assigned when the object is created) |
 | parent id | `u16` | id of the containing object (inventory owner, box, …) or 0xFFFF for none |
@@ -322,7 +322,8 @@ Reading: if flags bit 0x20 is clear (no version is read), or the version is 0, t
 read the rest of the record (it treats it as invalid). Versions below 118 have legacy fields not described here; every
 record this game writes has 118, and readers of version 118 records see exactly the fields above.
 (For versions below 70 the script version is absent, below 71 the client-data block, below 80 the
-spawn id; versions 83 … 111 carry further fields before the data size; none occurs.)
+spawn id; versions 83 … 111 carry further fields before the data size; none occurs.) A reader of
+`spawns\all.spawn` and of this game's saves may therefore reject versions below 112.
 
 ### 7.3 Update packet
 
@@ -744,6 +745,80 @@ both are present.
 - The save does not repeat all.spawn's other parts (header, chunks 2 and 3: artefact spawn data and
   patrol paths), which are re-read from the spawn file on load.
 
+Checks of sections 10.1 and 10.2: `checks/start-view/data.py` [S…] in the dirty workspace (run by
+its `run.py`), a throwaway parser of `spawns\all.spawn` written from these sections; all pass.
+
+### 10.1 The spawn file's object list
+
+`spawns\all.spawn` (dbb, 4,474,073 bytes; level-loading specification section 2.2) is a chunk sequence of
+top-level chunks 0, 1, 2, 3 [S1]. Only chunk 1 holds the object records; chunks 0 (header), 2 and 3 can be
+skipped. (Chunk 0 is 44 bytes and begins with `u32 8` [S1]; the level-loading specification, section 5.10,
+describes it.)
+
+Chunk 1 is itself a chunk sequence [S1]:
+
+| Sub-chunk id | Size | Content |
+|---|---|---|
+| 0 | 4 | `u32` object count (8,641) |
+| 1 | 2,552,742 | the objects: one sub-chunk per object, ids 0, 1, 2, … in order (object index) |
+| 2 | 0 | empty |
+
+Each object's sub-chunk (id = object index `i`) is a chunk sequence of exactly two chunks [S2]:
+
+| Chunk id | Size | Content |
+|---|---|---|
+| 0 | 2 | `u16`, equal to `i` in every object |
+| 1 | varies | a chunk sequence of exactly two chunks: id 0 = **spawn packet** (section 7.2), id 1 = update packet (section 7.3) |
+
+Both packets are stored the same way: `u16 n`, then `n` bytes of packet data (`n + 2` equals the chunk size
+in all 17,282 packets) [S2].
+
+In every one of the 8,641 spawn packets the fields of section 7.2 read: message type 1; game type 0 and the
+following byte 254 (bytes `00 FE`); respawn time 0, id, parent id and phantom id 0xFFFF; flags with bit 0x20
+(values `0x0021` × 8,629, `0x0023` × 11, `0x0029` × 1, the player); version 118; script version 6;
+client-data length 0 (a `u16`, as version ≥ 94); spawn id equal to the object index; and the object state
+(`s − 2` bytes) ends exactly at the end of the packet [S3]. So, to skip an object, skip its whole chunk
+(chunk sizes); to skip the object state within a packet, skip `s − 2` bytes.
+
+**The player's record** is the one object whose spawn packet's section is `actor`. Exactly one such object
+exists; it is object index 63 (object name `level_prefix_actor_0001`) [S4].
+
+### 10.2 Worked example: the player's record
+
+The player's spawn packet is 298 bytes (its chunk 300) [S4]. Its fields of section 7.2: message type 1,
+section `actor`, name `level_prefix_actor_0001`, bytes `00 FE`, position and angles below, respawn time 0,
+id, parent id and phantom id 0xFFFF, flags `0x0029`, version 118, script version 6, client-data length 0,
+spawn id 63, data size 222 [S3, S4].
+
+| Field | Value | Bytes |
+|---|---|---|
+| position x | −246.72630 | `EF B9 76 C3` |
+| position y | −24.793261 | `99 58 C6 C1` |
+| position z | −134.43387 | `12 6F 06 C3` |
+| angle a0 | 0.0043165367 | `BC 71 8D 3B` |
+| angle a1 | −1.3962544 | `77 B8 B2 BF` |
+| angle a2 | −0.00068671 | `5D 04 34 BA` |
+
+[S4] The position is that of the player's feet and the angles become its camera's yaw and pitch
+(world-coordinates specification, sections 2 and 4; the eye above it: player-movement specification,
+section 7.1).
+
+Its object state begins with the Object block of section 7.4.1 [S6]:
+
+| Field | Type | Player's value |
+|---|---|---|
+| game-graph vertex | `u16` | 4 |
+| distance | `float` | 0.7 (`33 33 33 3F`) |
+| direct control | `u32` | 1 |
+| level-graph node | `u32` | 11,713 |
+| state flags | `u32` | `0xFFFFFFBF` |
+| custom data | `stringZ` | text beginning `[dont_spawn_character_supplies]` |
+| story id, spawn story id | 2 × `s32` | −1, −1 (`0xFFFFFFFF`, `0xFFFFFFFF`) |
+| visual (Visual block) | `stringZ` | `actors\hero\stalker_novice` |
+
+Vertex 4 is resolved against `game.graph` as in the level-loading specification, sections 2.2 and 5.11 (the
+level to load, `levels\l01_escape\`).
+
 ## 11. Loading
 
 ### 11.1 What loading needs
@@ -897,6 +972,13 @@ From the game data (`spawns\all.spawn`, dbb, 4,474,073 bytes; `config\`; `script
   preference counts are 5 and 4 in all 1,073 stalkers, values 0–2.
 - The player's record: spawn packet 298 bytes, data size 222, game-graph vertex 4, distance 0.7,
   direct control 1, health 1.0, update `m` = 0.
+- `spawns\all.spawn` layout (section 10.1): top-level chunks ids 0, 1, 2, 3 of sizes 44, 2,552,770,
+  850,944, 1,070,283; chunk 1's sub-chunks ids 0, 1, 2 of sizes 4, 2,552,742, 0, sub-chunk 0 holding
+  8,641; 8,641 object sub-chunks, ids 0 … 8,640 in order, each with chunk 0 (2 bytes, value = id) and
+  chunk 1 with exactly two chunks (ids 0, 1); in all 17,282 packets the `u16` length + 2 = chunk size
+  [S1, S2].
+- Sums over all 8,641 records (in file order, double precision): positions (592,183.146, −29,943.946,
+  71,704.991); angles (537.2033, 259.2581, −902.9700) [S5].
 - The configuration's sections use 127 class ids; each is in section 7.4.2 or 7.4.3.
 - `config\system.ltx` (winning copy in dbc) `[script]` `current_server_entity_version = 7`
   (db0: 5, dbb: 6); all.spawn records carry 6, saves written by the game carry 7.
@@ -955,6 +1037,10 @@ a bolt.
   `scripts\se_item.script` for `keep_saved_data_anyway`), `scripts\lua_help.script`,
   `scripts\smart_terrain.script`, `scripts\utils.script`, `scripts\ui_load_dialog.script`,
   `scripts\ui_main_menu.script`, `config\gameplay\game_tasks.xml`.
+- The spawn file's object list and the player's record (sections 10.1 and 10.2) were established on
+  2026-11-23 in the investigation of the start view (static analysis of the reading of spawn records,
+  checked over all 8,641 records by an independent throwaway parser) and moved here on 2026-11-27 without
+  new investigation.
 - The LZO1X description was checked by a decoder written from section 2.1 against the test vector
   and against 306 streams produced by an independent LZO1X-1 compressor (the publicly available LZO
   library) from varied inputs, including all.spawn and inputs of 0–13 bytes; the library reproduces

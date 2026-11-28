@@ -11,9 +11,12 @@ moving (bobbing, landing).
 It builds on:
 
 - `docs/formats/ltx-config.md` (configuration files, sections, keys, value syntax);
-- `docs/behavior/start-position.md` (world coordinate system, units, +y up, left-handed; the camera's
-  **yaw** and **pitch**, positive yaw turning to the viewer's right, **positive pitch looking down**; the
-  start position and eye height; the rising-eye lag of its section 4.2);
+- `docs/behavior/world-coordinates.md` (world coordinate system, units, +y up, left-handed; the camera's
+  **yaw** and **pitch**, positive yaw turning to the viewer's right, **positive pitch looking down**);
+- `docs/behavior/view-projection.md` (the view matrix built from the camera's direction and up, and camera
+  inertia, its section 1.1; the field of view, its section 3.1);
+- `docs/formats/sav.md` (the spawn packet, its section 7.2, and the player's record in
+  `spawns\all.spawn`, its section 10);
 - `docs/behavior/startup.md` section 4 (the effective key bindings are those of
   `config\default_controls.ltx` with `user.ltx` applied on top);
 - `docs/formats/level-cform.md` (cited as `level-cform`): the player's collision body and its boxes, the
@@ -42,8 +45,7 @@ Conventions:
 | `config\default_controls.ltx` (`gamedata.dbb`) | 1,111 | default key bindings |
 | `__support\userdocs\user.ltx` (game root, copied to the user folder by the installer) | 5,028 | console settings and bindings applied on top |
 
-The `[actor]` section is the one named by the actor's spawn record (start-position specification, section
-2). Its parent section `common_ph_friction_params_on_npc_death` (`config\defines.ltx`) holds none of the keys
+The `[actor]` section is the one named by the actor's spawn record (`sav.md` sections 7.2 and 10.1). Its parent section `common_ph_friction_params_on_npc_death` (`config\defines.ltx`) holds none of the keys
 below.
 
 ### 1.1 `[actor]` keys
@@ -83,7 +85,7 @@ applied; `user.ltx` lines have the form `<name> <value>`.
 | `mouse_sens` | 0.12 (range 0.05 … 0.6) | `mouse_sens 0.12` | mouse sensitivity (section 8.1) |
 | `mouse_invert` | off | `mouse_invert off` | vertical mouse inversion (section 8.1) |
 | `ph_frequency` | step 0.01 s | `ph_frequency 100.00000` | physics rate; the step is `1 / ph_frequency` = 0.01 s (`level-cform` section 6.1) |
-| `cam_inert` | 0.7 | `cam_inert 0.` | camera inertia (start-position specification, section 6) |
+| `cam_inert` | 0.7 | `cam_inert 0.` | camera inertia (`view-projection.md` section 1.1) |
 
 ## 2. Actions and default bindings
 
@@ -292,7 +294,7 @@ that frame's update as follows; on air frames see section 3.1.
 
    where `(x̂, ẑ)` is the normalized local direction. `θ` is the heading left by the previous frame: after
    each frame's movement update, if the state then has any direction flag, the heading is set to that
-   frame's camera yaw (start-position specification, section 5); otherwise the heading is the body's own
+   frame's camera yaw (`world-coordinates.md` section 2); otherwise the heading is the body's own
    heading, which follows the camera only once they differ by more than π/4 (body turning, out of scope,
    section 10). So while moving "forward" is `(sin yaw, 0, cos yaw)` and "right" is `(cos yaw, 0, −sin yaw)`
    with the yaw of the previous frame, both horizontal regardless of pitch; on the first moving frame after
@@ -514,12 +516,21 @@ These flags affect the run rule (section 4.1) and the bobbing (section 9.1), not
 
 ## 7. Eye height and posture transitions
 
-The eye is above the character's position (its feet) by
+The eye is directly above the character's position (its feet):
 
-    h = H × camera_height_factor
+    eye = position + (0, h, 0),   h = H × camera_height_factor
 
-where `H` is the height of the current collision box, `2 × ph_boxN_size.y` (start-position specification,
-section 4.2). All three boxes have their bottom at the feet (`center.y − size.y = 0`):
+- `camera_height_factor` is read from the character's configuration section, i.e. the section named in its
+  spawn record (`actor`, in `config\creatures\actor.ltx`, dbb): `camera_height_factor = 0.85` [E1].
+- `H` is the height of the character's current collision box. The section defines three boxes, `ph_box0_*`,
+  `ph_box1_*`, `ph_box2_*`, each by `ph_boxN_center` and `ph_boxN_size` (float3); the box spans
+  `center − size` … `center + size`, so its height is `2 × size.y`. At spawn the box with index 0 is made
+  current (boxes 1 and 2 are only selected later, by the movement, section 4.2), so `H = 2 × ph_box0_size.y`.
+- Values: `ph_box0_center = 0.0, 0.9, 0.0`, `ph_box0_size = 0.35, 0.9, 0.35` → `H = 1.8`, `h = 1.53` [E1].
+
+The vertical offset is not rotated by the character's heading (the heading turns about the y axis only).
+
+All three boxes have their bottom at the feet (`center.y − size.y = 0`):
 
 | Posture | Box | `H` | Eye height `h` |
 |---|---|---|---|
@@ -529,9 +540,18 @@ section 4.2). All three boxes have their bottom at the feet (`center.y − size.
 
 A posture change takes effect in the frame its box switch succeeds (section 4.2), and the eye height changes
 to the new value in that same frame: there is no smoothing of posture changes. The only smoothing of the eye
-height is the lag when the character's position rises (stairs, steps), described in the start-position
-specification, section 4.2 (at most 0.2 m behind, catching up at 1.5 m/s; none while airborne or
-descending). Camera bobbing and the landing effect (section 9) are added on top.
+height is the lag when the character's position rises (stairs, steps): the camera's height follows with a
+lag, at most 0.2 m behind, catching up at 1.5 m/s [B3]; none while airborne or descending; it does not
+apply at spawn. A leaning offset is zero at spawn. Camera bobbing and the landing effect (section 9) are
+added on top.
+
+### 7.1 Worked example: the start of a New Game
+
+The player is placed at the stored position of its record in `spawns\all.spawn` (`sav.md` section 10.2),
+(−246.72630, −24.793261, −134.43387), the position of its feet: the first collision surface of
+`level.cform` below the eye, on the vertical line through the stored position, lies 0.00013 m above the
+stored y, i.e. 1.52987 m below the eye [W1, E2]; the stored position is that close to the floor. Standing
+(box 0, `h = 1.53`), the start eye position is **(−246.72630, −23.263261, −134.43387)** [E1].
 
 ## 8. Looking
 
@@ -547,7 +567,7 @@ first-person camera's yaw and pitch:
 
 - `K` is an engine sensitivity scale with the constant value 1.0 (nothing changes it).
 - `F_view` is the camera's current vertical field of view in degrees: 67.5 when not aiming
-  (start-position specification, section 7), so the factor is 1 then; it is smaller while aiming through a
+  (`view-projection.md` section 3.1), so the factor is 1 then; it is smaller while aiming through a
   zooming weapon (out of scope).
 - `c` is the control-inertia factor of the active inventory item (its configuration key
   `control_inertion_factor`, 1.0 when absent), and 1.0 when no item is active. Which item is active at New
@@ -591,14 +611,13 @@ amplitude and rate chosen from `[bobbing_effector]`:
 
 let `φ = R · k · τ`, `b = B · k`, `δ = |sin φ · b| · w` and `ρ = cos φ · w · b`. The camera's position is
 raised by `δ` (`p.y += δ`), and with the camera's direction `d`, up `u` and `r = u × d` (its right vector,
-start-position specification section 6), the direction and up vector become
+`view-projection.md` section 1.1), the direction and up vector become
 
     d' = cos ρ·cos δ · d − sin ρ·cos δ · r + sin δ · u
     u' = (sin²ρ − cos²ρ·sin δ) · d + cos ρ·cos δ · u + (cos ρ·sin ρ·sin δ + sin ρ·cos ρ) · r
 
-(exactly these combinations; they are not renormalized; the view construction of the start-position
-specification, section 6, then re-orthogonalizes `u'` against `d'`). The effect is a vertical bounce of at
-most `b` (7.5 mm running, 5 mm walking) with a slight sway, twice per period `2π / (R·k)` for the bounce.
+(exactly these combinations; they are not renormalized; the view construction of `view-projection.md`,
+section 1.1, then re-orthogonalizes `u'` against `d'`). The effect is a vertical bounce of at most `b` (7.5 mm running, 5 mm walking) with a slight sway, twice per period `2π / (R·k)` for the bounce.
 
 ### 9.2 Landing effect
 
@@ -670,8 +689,8 @@ Checkable relations:
 
 - Maximum speeds (section 5 table) are `0.1 × walk_accel ×` the products of coefficients: walk 1.7, run
   3.57, sprint 9.282, crouch 1.6065, low crouch 0.765 m/s forward.
-- Eye heights 1.53 / 1.275 / 1.02 m = `0.85 × 1.8 / 1.5 / 1.2`; the standing value equals the start eye
-  height of the start-position specification.
+- Eye heights 1.53 / 1.275 / 1.02 m = `0.85 × 1.8 / 1.5 / 1.2`; the standing value gives the start eye
+  of section 7.1.
 - Jump apex 0.9174 m and flat-ground air time 0.6116 s from `jump_speed 6` and gravity 19.62.
 - Mouse: 0.0024 rad yaw and 0.0018 rad pitch per count at the default sensitivity.
 - Air control: `air_control_param × 1` = 0.1 m/s² straight and `0.1 × √2` = 0.1414 m/s² diagonally on air
@@ -697,6 +716,14 @@ Checkable relations:
   the two frame times (the game's millisecond clock and scheduler, the display frame-time smoothing and
   the physics step accumulator); the configuration values and bindings were read from a fresh extraction of
   the winning copies with an independent throwaway LTX reader written from the LTX specification, which
-  also recomputed every derived number of section 12. Consistency with the approved `level-cform`,
-  `start-position` and `ltx-config` specifications was checked section by section. The program was not
+  also recomputed every derived number of section 12. Consistency with the approved `level-cform`
+  and `ltx-config` specifications and with the start view's camera facts (now in `world-coordinates.md`
+  and `view-projection.md`) was checked section by section. The program was not
   executed.
+- The eye-height rule at spawn, the rising-eye lag constants and the worked example of section 7 were
+  established on 2026-11-23 in the investigation of the start view (static analysis of the actor's eye
+  height; checked against `config\creatures\actor.ltx` and `levels\l01_escape\level.cform` with
+  independent throwaway parsers) and moved here on 2026-11-27 without new investigation. Their checks are
+  `checks/start-view/` of the dirty workspace (`run.py`): `data.py` [E…, W…] reads the game data,
+  `binary_notes.py` [B…] checks constants in the original investigation's static-analysis outputs; all
+  pass.
