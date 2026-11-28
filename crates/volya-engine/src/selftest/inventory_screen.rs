@@ -45,6 +45,7 @@ struct Walk<'a> {
     data: &'a GameData,
     screen: InventoryScreen,
     character: CharacterState,
+    money: u32,
     keys: Keys,
     input: Input,
     now: u64,
@@ -58,6 +59,7 @@ impl Walk<'_> {
             .update(Frame {
                 data: self.data,
                 character: &mut self.character,
+                money: self.money,
                 keys: &self.keys,
                 time_of_day: 5.5 * 3600.0,
                 now: self.now,
@@ -117,7 +119,7 @@ async fn draw(cx: &Context<'_>, walk: &Walk<'_>, name: &str) -> Outcome {
 async fn draws(cx: &Context<'_>, stage: Stage) -> Outcome {
     let tree = cx.tree;
     let data = GameData::read(tree, None, XGA).map_err(|e| format!("game data: {e}"))?;
-    let (_, character) =
+    let (_, trader, character) =
         level::new_game_player(tree, &data).map_err(|e| format!("New Game player: {e}"))?;
     let mut screen =
         InventoryScreen::load(tree, &data, XGA).map_err(|e| format!("inventory screen: {e}"))?;
@@ -125,6 +127,7 @@ async fn draws(cx: &Context<'_>, stage: Stage) -> Outcome {
         .open(
             &data,
             &character,
+            trader.money,
             5.5 * 3600.0,
             0,
             [512.0, 384.0],
@@ -135,6 +138,7 @@ async fn draws(cx: &Context<'_>, stage: Stage) -> Outcome {
         data: &data,
         screen,
         character,
+        money: trader.money,
         keys: Keys {
             inventory: vec![Key::I],
             drop: vec![Key::G],

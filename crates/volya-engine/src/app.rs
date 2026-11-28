@@ -2376,11 +2376,13 @@ impl App {
                     }
                     let font = self.menu_font.as_ref().map(|(_, f)| f);
                     let time_of_day = level.clock().time_of_day();
+                    let money = level.player_trader().map_or(0, |t| t.money);
                     let out = match level.character_mut() {
                         // An error is fatal, as in the original.
                         Some(character) => screen.update(inventory_screen::Frame {
                             data,
                             character,
+                            money,
                             keys: &keys,
                             time_of_day,
                             now,
@@ -2487,7 +2489,9 @@ impl App {
                     // not paused, the character is alive, no other window
                     // is open.
                     let time_of_day = level.clock().time_of_day();
-                    match screen.open(data, character, time_of_day, now, input.cursor_ui(), audio) {
+                    let money = level.player_trader().map_or(0, |t| t.money);
+                    let cursor = input.cursor_ui();
+                    match screen.open(data, character, money, time_of_day, now, cursor, audio) {
                         Ok(()) => {
                             let keys = inventory_keys(data, level.controls());
                             level.controls_mut().keys_only = Some(keys.used());
@@ -3080,9 +3084,9 @@ impl App {
                 crate::core::detector::DetectorSection::read(&self.data.system, section)?;
             level.add_detector_section(detector);
         }
-        if level.character().is_none() {
-            return Err(io::Error::other("no player character"));
-        }
+        // The specific character a PDA keeps (none without the simulation:
+        // the unit tests' levels).
+        let me = level.player_trader().map(|t| t.specific_character);
         let id = level.take_item_id()?;
         let character = level
             .character_mut()
@@ -3092,7 +3096,7 @@ impl App {
             id,
             None,
             character.owner.id,
-            &character.profile.specific_character,
+            me.as_ref().map_or("", |t| t.as_str()),
         );
         character.inventory.take(item);
         Ok(id)

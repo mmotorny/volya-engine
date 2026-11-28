@@ -106,7 +106,7 @@ fn new_game_player_state_from_game_data() {
         assert_eq!(weapons.iter().filter(|w| w.3 == 0).count(), 32);
 
         // The player's record.
-        let (record, state) = level::new_game_player(tree, data).unwrap();
+        let (record, simulated, state) = level::new_game_player(tree, data).unwrap();
         let Object::Player(p) = &record.object else {
             panic!("{:?}", record.kind())
         };
@@ -193,8 +193,9 @@ fn new_game_player_state_from_game_data() {
         assert_eq!(torch, ["device_torch"]);
         assert!(actor.supplies.contains("[spawn]"));
 
-        // Section 2.2: the profile resolved.
-        let pr = &state.profile;
+        // Section 2.2: the profile resolved, in the player's simulation
+        // object (character-identity.md 7: community `actor`'s position).
+        let pr = &simulated;
         assert_eq!(
             (pr.money, pr.specific_character.as_str(), pr.trader_flags),
             (40, "actor", 0)

@@ -446,6 +446,49 @@ fn the_supplies_choice_excludes_the_spawn_file_choice() {
 }
 
 #[test]
+fn the_player_s_record_takes_its_identity() {
+    // Section 7: the player's Trader-like block, read from the spawn file,
+    // makes the same choice; it has no supplies choice (4.1).
+    let actor = SpecificCharacter {
+        id: "actor".into(),
+        no_random: true,
+        name: "actor_name".into(),
+        visual: "actors\\hero\\stalker_novice".into(),
+        community: "actor".into(),
+        rank: 0,
+        reputation: 0,
+        ..SpecificCharacter::default()
+    };
+    let mut w = World::new(vec![explicit("actor")], vec![actor], 1);
+    w.strings = StringTable::new([("actor_name".to_owned(), "Marked".to_owned())]);
+    let mut in_use = InUse::default();
+    let mut r = crate::character::tests::record();
+    let choice = (w.identities().spawn_file_choice(&mut r, &mut in_use))
+        .unwrap()
+        .unwrap();
+    let mut created = crate::character::tests::record();
+    choice.apply(&mut created);
+    let Object::Player(p) = &created.object else {
+        panic!()
+    };
+    let t = p.trader.clone();
+    assert_eq!(t.specific_character.as_str(), "actor");
+    assert_eq!((t.community, t.rank, t.reputation, t.money), (0, 0, 0, 40));
+    assert_eq!(t.character_name.as_str(), "Marked");
+    let model = p.creature.visual.model.as_str();
+    assert_eq!(model, "actors\\hero\\stalker_novice");
+    assert_eq!(in_use.entries().collect::<Vec<_>>(), [("actor", 1)]);
+    let supplied = w.identities().supplies(&mut created, None, &mut in_use);
+    assert_eq!(supplied.unwrap(), None);
+    let Object::Player(p) = &created.object else {
+        panic!()
+    };
+    assert_eq!(p.trader, t);
+    // No draw.
+    assert_eq!(w.random.get(), Generator::new(1));
+}
+
+#[test]
 fn model_names_lose_extensions() {
     assert_eq!(
         model_name("Actors\\Trader\\trader.ogf"),

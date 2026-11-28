@@ -797,6 +797,20 @@ pub struct CharacterReport {
     /// (player-hits.md 5.1, 5.2).
     pub wounds: Vec<f32>,
     pub total_bleeding: f32,
+    /// Its money and identity (2.2): its simulation object's Trader-like
+    /// block, `None` without one.
+    pub identity: Option<IdentityReport>,
+    /// The carried weight (3.4).
+    pub weight: f32,
+    /// `None` for no active slot.
+    pub active_slot: Option<u8>,
+    /// In the order the player lists them.
+    pub items: Vec<ItemReport>,
+}
+
+/// The player's money and identity as the engine interface reports them.
+#[derive(Clone, Debug, Serialize)]
+pub struct IdentityReport {
     pub money: u32,
     pub specific_character: String,
     pub character_profile: String,
@@ -804,12 +818,6 @@ pub struct CharacterReport {
     pub rank: i32,
     pub reputation: i32,
     pub character_name: String,
-    /// The carried weight (3.4).
-    pub weight: f32,
-    /// `None` for no active slot.
-    pub active_slot: Option<u8>,
-    /// In the order the player lists them.
-    pub items: Vec<ItemReport>,
 }
 
 /// One inventory item as the engine interface reports it.
@@ -826,9 +834,10 @@ pub struct ItemReport {
 }
 
 impl CharacterReport {
-    fn of(s: &CharacterState) -> Self {
+    /// State `s` with the player's Trader-like block `p` (its simulation
+    /// object's).
+    fn of(s: &CharacterState, p: Option<&record::TraderLike>) -> Self {
         let c = &s.conditions;
-        let p = &s.profile;
         Self {
             health: c.health,
             max_health: c.max_health,
@@ -844,13 +853,15 @@ impl CharacterReport {
             cant_sprint: c.cant_sprint,
             wounds: c.wounds.0.iter().map(|w| w.size()).collect(),
             total_bleeding: c.total_bleeding(),
-            money: p.money,
-            specific_character: p.specific_character.clone(),
-            character_profile: p.character_profile.clone(),
-            community: p.community,
-            rank: p.rank,
-            reputation: p.reputation,
-            character_name: p.character_name.clone(),
+            identity: p.map(|p| IdentityReport {
+                money: p.money,
+                specific_character: p.specific_character.to_string(),
+                character_profile: p.character_profile.to_string(),
+                community: p.community,
+                rank: p.rank,
+                reputation: p.reputation,
+                character_name: p.character_name.to_string(),
+            }),
             weight: s.inventory.weight(),
             active_slot: s.inventory.active_slot,
             items: s
@@ -1012,10 +1023,8 @@ fn player_record_in(
 }
 
 /// The player character at a New Game (player-state.md sections 2, 3)
-/// from its record `player`: the profile's specific character, the
-/// communities of `[game_relations]` (`config\creatures\game_relations.ltx`
-/// unless the system configuration holds the section) and the name's
-/// translation. Its items take ids from `first_id` on
+/// from its record `player`, whose specific character (its own, else its
+/// profile's) supplies it. Its items take ids from `first_id` on
 /// (offline-simulation.md 8.1).
 pub fn new_game_character(
     tree: &dyn Vfs,
@@ -1038,24 +1047,22 @@ pub fn new_game_character(
             reputation: character::NOT_SET,
             ..SpecificCharacter::default()
         });
-    let communities = characters::communities(tree, data)?;
     CharacterState::new_game(&character::NewGame {
         record: player,
         system: &data.system,
         character: &specific,
-        communities: &communities,
-        character_name: data.strings.get(&specific.name),
         seed: SUPPLY_SEED,
         first_id,
     })
 }
 
-/// The New Game's player record and character, read as a New Game reads
-/// them (tests and debugging).
+/// The New Game's player: its spawn file record, its simulation object's
+/// Trader-like block (its money and identity chosen, character-identity.md
+/// 7) and its character, as a New Game makes them (tests and debugging).
 pub fn new_game_player(
     tree: &dyn Vfs,
     data: &GameData,
-) -> io::Result<(ObjectRecord, CharacterState)> {
+) -> io::Result<(ObjectRecord, record::TraderLike, CharacterState)> {
     let new = read_new_game(tree, data)?;
     let player = player_record(&new.spawn, new.actor.index, &data.system)?;
     let dir = data.aliases.path("$game_levels$", &new.level)?;
@@ -1063,7 +1070,11 @@ pub fn new_game_player(
     let random = Shared::default();
     let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn, new.graph, &random)?;
     first_switch_pass(tree, data, &mut sim, &mut character, &dir, &clock)?;
-    Ok((player, character))
+    let trader = match sim.object(character.owner.id).map(|o| &o.record.object) {
+        Some(record::Object::Player(p)) => p.trader.clone(),
+        _ => return Err(invalid("no player object")),
+    };
+    Ok((player, trader, character))
 }
 
 /// The New Game's offline simulation before its first switch pass, made
@@ -3913,7 +3924,8 @@ impl LevelScreen {
         sides: &dyn TalkSides,
         functions: &mut dyn DialogFunctions,
     ) -> io::Result<Option<crate::talk_window::screen::TalkStart>> {
-        let (Some(c), Some(shared)) = (&self.character, &self.info_portions) else {
+        let me = self.player_trader();
+        let (Some(c), Some(shared), Some(me)) = (&self.character, &self.info_portions, &me) else {
             return Ok(None);
         };
         // The partner's record, copied: the scripts' functions the set-up
@@ -3934,8 +3946,8 @@ impl LevelScreen {
         let portions = shared;
         let player = level_talk::Player {
             id: c.owner.id,
-            name: &c.profile.character_name,
-            specific_character: &c.profile.specific_character,
+            name: me.character_name.as_str(),
+            specific_character: me.specific_character.as_str(),
         };
         let partner = level_talk::Partner {
             id: partner,
@@ -5336,7 +5348,8 @@ impl LevelScreen {
                 }),
                 hint: self.hint().map(|h| h.source().to_owned()),
             },
-            character: self.character.as_ref().map(CharacterReport::of),
+            character: (self.character.as_ref())
+                .map(|c| CharacterReport::of(c, self.player_trader().as_ref())),
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
@@ -5378,6 +5391,17 @@ impl LevelScreen {
     /// The player character's state, to change (the inventory screen).
     pub fn character_mut(&mut self) -> Option<&mut CharacterState> {
         self.character.as_mut()
+    }
+
+    /// The player's Trader-like block, its simulation object's: its money
+    /// and identity (player-state.md 2.2, character-identity.md 7), held
+    /// there only. `None` without the player character or its object.
+    pub fn player_trader(&self) -> Option<record::TraderLike> {
+        let id = self.character.as_ref()?.owner.id;
+        match &self.simulation()?.object(id)?.record.object {
+            record::Object::Player(p) => Some(p.trader.clone()),
+            _ => None,
+        }
     }
 
     /// The player's controls.

@@ -267,14 +267,14 @@ fn the_torch_on_a_new_game_from_game_data() {
         // An outfit with an effect section in slot 6 (15.2 step 4): the on
         // sound once and the idle sound looped, both 2D.
         let id = level.take_item_id().unwrap();
+        let me = level.player_trader().unwrap();
         let c = level.character_mut().unwrap();
         let config = (data.system.sections())
             .filter_map(|s| ItemConfig::read(&data.system, s.name()).ok())
             .find(|c| c.class_id.kind() == Kind::Outfit && c.nightvision_sect.is_some())
             .unwrap();
         let effect = config.nightvision_sect.clone().unwrap();
-        let item =
-            InventoryItem::create(config, id, None, c.owner.id, &c.profile.specific_character);
+        let item = InventoryItem::create(config, id, None, c.owner.id, &me.specific_character);
         c.inventory.take(item);
         assert!(c.inventory.move_to_slot_with_swap(id).succeeded());
         press(&mut level, &mut now, Key::N);

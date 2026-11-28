@@ -13,7 +13,9 @@
 //! through [`Descriptions`]; what the spec calls a **description** and its
 //! **description index** are CH-1's specific character and registration
 //! index. The game here is always single-player (2 step 1). The player's
-//! identity (section 7) is player-state.md's, not made here.
+//! record has a Trader-like block too, and the same reading and choice
+//! apply to it (section 7, believed): its spawn-file choice; it has no
+//! supplies choice (4.1 names stalkers and traders).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -121,10 +123,28 @@ pub fn trader_like_mut(record: &mut ObjectRecord) -> Option<&mut TraderLike> {
     }
 }
 
+/// The Trader-like block of a stalker, trader or the player (section 7):
+/// the objects the choice and the set work on.
+fn chooser(record: &ObjectRecord) -> Option<&TraderLike> {
+    match &record.object {
+        Object::Player(o) => Some(&o.trader),
+        _ => trader_like(record),
+    }
+}
+
+fn chooser_mut(record: &mut ObjectRecord) -> Option<&mut TraderLike> {
+    match &mut record.object {
+        Object::Player(o) => Some(&mut o.trader),
+        Object::Stalker(o) => Some(&mut o.trader),
+        Object::Trader(o) => Some(&mut o.trader),
+        _ => None,
+    }
+}
+
 /// What a spawn-file choice leaves in a record object's packets (4.2 step
-/// 3): its Trader-like block, and a trader's model name (a stalker's
-/// Monster-like block, read after, gives back the record's model and
-/// team).
+/// 3): its Trader-like block, and a trader's or the player's model name (a
+/// stalker's Monster-like block, read after, gives back the record's model
+/// and team; the player's Creature block is read before, sav.md 7.4).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecordChoice {
     pub trader: TraderLike,
@@ -140,6 +160,12 @@ impl RecordChoice {
                 o.trader = self.trader.clone();
                 if let Some(m) = &self.model {
                     o.visual.model = m.clone();
+                }
+            }
+            Object::Player(o) => {
+                o.trader = self.trader.clone();
+                if let Some(m) = &self.model {
+                    o.creature.visual.model = m.clone();
                 }
             }
             _ => {}
@@ -166,8 +192,8 @@ impl Identities<'_> {
         self.random.next_k()
     }
 
-    /// The choice (section 2) on stalker or trader `record` (any other kind
-    /// is left alone): its specific character, made first if unset. A set
+    /// The choice (section 2) on stalker, trader or player `record` (any
+    /// other kind is left alone): its specific character, made first if unset. A set
     /// appends to `masks` (the object's terrain masks, 3 step 4) and
     /// changes `in_use` (the simulation's registry, 2.1) when given.
     pub fn choose(
@@ -176,7 +202,7 @@ impl Identities<'_> {
         masks: Option<&mut Vec<TerrainMask>>,
         in_use: Option<&mut InUse>,
     ) -> io::Result<Option<String>> {
-        let Some(trader) = trader_like(record) else {
+        let Some(trader) = chooser(record) else {
             return Ok(None);
         };
         // Step 2.
@@ -255,7 +281,7 @@ impl Identities<'_> {
         let stalker = matches!(record.object, Object::Stalker(_));
         // Step 1.
         {
-            let Some(trader) = trader_like_mut(record) else {
+            let Some(trader) = chooser_mut(record) else {
                 return Ok(());
             };
             if let Some(u) = in_use {
@@ -271,11 +297,12 @@ impl Identities<'_> {
             match &mut record.object {
                 Object::Stalker(o) => o.monster.creature.visual.model = model,
                 Object::Trader(o) => o.visual.model = model,
+                Object::Player(o) => o.creature.visual.model = model,
                 _ => {}
             }
         }
         // Step 3.
-        let trader = trader_like_mut(record).expect("a stalker or trader");
+        let trader = chooser_mut(record).expect("a stalker, trader or the player");
         let mut team = None;
         if trader.community == NO_COMMUNITY {
             // CH-1 5.5 checked the community is listed.
@@ -360,7 +387,7 @@ impl Identities<'_> {
         record: &mut ObjectRecord,
         in_use: &mut InUse,
     ) -> io::Result<Option<RecordChoice>> {
-        if trader_like(record).is_none() {
+        if chooser(record).is_none() {
             return Ok(None);
         }
         self.choose(record, None, Some(in_use))?;
@@ -372,6 +399,10 @@ impl Identities<'_> {
             Object::Trader(o) => Some(RecordChoice {
                 trader: o.trader.clone(),
                 model: Some(o.visual.model.clone()),
+            }),
+            Object::Player(o) => Some(RecordChoice {
+                trader: o.trader.clone(),
+                model: Some(o.creature.visual.model.clone()),
             }),
             _ => None,
         })

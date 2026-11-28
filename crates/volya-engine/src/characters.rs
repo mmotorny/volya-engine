@@ -242,12 +242,11 @@ impl<'a> Characters<'a> {
         }
     }
 
-    /// The player's Trader-like block's specific character
-    /// (player-state.md 2.2): the block's own if named, else its profile's;
-    /// none for a profile that names none. A stalker's or trader's is
-    /// chosen by docs/behavior/character-identity.md
-    /// ([`crate::core::character_identity`]); the player's is outside it
-    /// (section 7).
+    /// The specific character of a Trader-like block (player-state.md
+    /// 2.2): the block's own if named, else its profile's; none for a
+    /// profile that names none. The choice that sets it in the block is
+    /// docs/behavior/character-identity.md's
+    /// ([`crate::core::character_identity`], the player's too: section 7).
     pub fn for_trader(&mut self, trader: &TraderLike) -> io::Result<Option<&SpecificCharacter>> {
         let id = if trader.specific_character.is_empty() {
             match &self.profile(&trader.character_profile)?.specific_character {

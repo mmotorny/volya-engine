@@ -52,9 +52,10 @@ The level (`volya-engine::level::LevelScreen`) owns what runs while a game is pl
 
 ## The player character
 
-- The character's state (`volya-engine-core::character`, docs/behavior/player-state.md: conditions, profile, inventory) is created with the level on New Game and kept by it.
+- The character's state (`volya-engine-core::character`, docs/behavior/player-state.md: conditions, inventory) is created with the level on New Game and kept by it.
+- Its money and identity (player-state.md 2.2: specific character, profile, community, rank, reputation, name) are held only by the player's simulation object, its record's Trader-like block, which the scripts read and change as a character's (script API Q, S); the New Game's spawn-file choice makes them there, as for the characters (docs/behavior/character-identity.md 7, `character_identity::Identities`, with the community's list position), before the player's supplies, which its specific character names. The level reads them from it (`LevelScreen::player_trader`) for the inventory screen's money, the talk and the engine interface's report.
 - Each frame its thresholds are evaluated once into the movement's limits before the movement update, a started jump takes its power, and the conditions then advance by the game time the frame advanced.
-- It holds what a save writes: it fills the player's record, builds its items' records and writes the client-data condition blocks.
+- It holds what a save writes: it fills the player's record's conditions, builds its items' records and writes the client-data condition blocks.
 - Its supplies take the ids after the player's registration in the offline simulation (offline-simulation.md 8.1); the bolt, which the player receives on coming online (player-state.md 3.2), takes the next id once every New Game record exists.
 
 ## Particles

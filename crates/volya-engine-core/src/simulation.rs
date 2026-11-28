@@ -470,8 +470,10 @@ impl Simulation {
     /// how many ids they took. Other objects' supplies are not created
     /// (their rules are outside the spec). With `identities`, the
     /// characters' identities are chosen (character-identity.md 4.2): every
-    /// character record's spawn-file choice while the spawn file is read,
-    /// then each created stalker's and trader's supplies choice. Then the
+    /// character record's and the player's (7) spawn-file choice while the
+    /// spawn file is read, so the actor's record has its identity when
+    /// `supplies` is called, then each created stalker's and trader's
+    /// supplies choice. Then the
     /// post-registration step runs in increasing id (it changes no
     /// identity, 4.1).
     pub fn new_game(
@@ -507,7 +509,9 @@ impl Simulation {
             spawn::for_each_record_in(spawn_file, |r| {
                 let section = volya_engine_formats::object::section(r.spawn)?;
                 let class = class_of(system, &section)?;
-                if matches!(Kind::from_class_id(class), Ok(Kind::Stalker | Kind::Trader)) {
+                // The player's record too (character-identity.md 7).
+                let kind = Kind::from_class_id(class);
+                if matches!(kind, Ok(Kind::Player | Kind::Stalker | Kind::Trader)) {
                     let mut record = ObjectRecord::parse(r.spawn, r.update, class, true)?;
                     if let Some(c) = identities.spawn_file_choice(&mut record, in_use)? {
                         chosen.insert(r.index, c);

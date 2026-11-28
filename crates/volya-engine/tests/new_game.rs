@@ -106,7 +106,11 @@ fn new_game_start_view_from_game_data() {
     // lower, and paused time counts nothing.
     assert_eq!(state.game_time, 63_471_533_400_000 + 2_050_000);
     let c = state.character.as_ref().unwrap();
-    assert_eq!((c.health, c.power, c.satiety, c.money), (1.0, 1.0, 1.0, 40));
+    assert_eq!((c.health, c.power, c.satiety), (1.0, 1.0, 1.0));
+    // Its money and identity: its simulation object's (character-identity.md 7).
+    let i = c.identity.as_ref().unwrap();
+    assert_eq!((i.money, i.specific_character.as_str()), (40, "actor"));
+    assert_eq!((i.community, i.rank, i.reputation), (0, 0, 0));
     assert_eq!(c.active_slot, Some(4));
     // The level's placed effect (level-placed-effects.md 8): started at
     // the load, on a world clock that stands still while paused.

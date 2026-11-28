@@ -94,6 +94,8 @@ impl Keys {
 pub struct Frame<'a> {
     pub data: &'a GameData,
     pub character: &'a mut CharacterState,
+    /// The player's money (4.7): its record's Trader-like block's.
+    pub money: u32,
     pub keys: &'a Keys,
     /// The game's time of day, seconds (4.7).
     pub time_of_day: f32,
@@ -338,11 +340,13 @@ impl InventoryScreen {
 
     /// Opens the screen with the cursor at `cursor` (1.3): its content
     /// rebuilt, the selection cleared, the per-frame values set at once,
-    /// `snd_open`.
+    /// `snd_open`. `money` is the player's record's (4.7).
+    #[allow(clippy::too_many_arguments)]
     pub fn open(
         &mut self,
         data: &GameData,
         character: &CharacterState,
+        money: u32,
         time_of_day: f32,
         now: u64,
         cursor: [f32; 2],
@@ -359,7 +363,7 @@ impl InventoryScreen {
         // The protection lines keep their order of first appearance for the
         // screen's whole life, the level's (4.8).
         self.last_update = Some(now);
-        self.per_frame(data, character, time_of_day, 0.0)?;
+        self.per_frame(data, character, money, time_of_day, 0.0)?;
         self.exit.frame(self.layout.exit.rect, cursor);
         // TODO(#111): the information portion `ui_inventory` (scripts), the
         // HUD hidden (#101), the pause key (1.4).
@@ -495,6 +499,7 @@ impl InventoryScreen {
         let Frame {
             data,
             character,
+            money,
             keys,
             time_of_day,
             now,
@@ -537,7 +542,7 @@ impl InventoryScreen {
                 return Ok(a.out);
             }
         }
-        self.per_frame(a.data, a.character, time_of_day, dt)?;
+        self.per_frame(a.data, a.character, money, time_of_day, dt)?;
         self.exit.frame(self.layout.exit.rect, self.cursor);
         Ok(a.out)
     }
@@ -971,6 +976,7 @@ impl InventoryScreen {
         &mut self,
         data: &GameData,
         c: &CharacterState,
+        money: u32,
         time_of_day: f32,
         dt: f32,
     ) -> io::Result<()> {
@@ -980,7 +986,7 @@ impl InventoryScreen {
             let d = self.layout.bars[i].clone();
             self.bars[i].set(&d, v * 100.0, dt);
         }
-        self.money = format!("{} RU", c.profile.money);
+        self.money = format!("{money} RU");
         let t = time_of_day.max(0.0) as u64;
         self.time = format!("{:02}:{:02}", (t / 3600) % 24, (t / 60) % 60);
         // 4.8.

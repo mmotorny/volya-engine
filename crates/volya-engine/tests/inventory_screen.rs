@@ -232,13 +232,14 @@ fn inventory_screen_from_game_data() {
     assert_eq!(outside, ["mp_wpn_colt1911", "wpn_colt1911"]);
 
     // A New Game's character (player-state.md) on the screen.
-    let (_, mut character) = level::new_game_player(tree, &data).unwrap();
+    let (_, trader, mut character) = level::new_game_player(tree, &data).unwrap();
     let mut screen = InventoryScreen::load(tree, &data, XGA).unwrap();
     let mut audio = Sounds::default();
     screen
         .open(
             &data,
             &character,
+            trader.money,
             5.5 * 3600.0,
             0,
             [512.0, 384.0],
@@ -267,6 +268,7 @@ fn inventory_screen_from_game_data() {
             .update(Frame {
                 data: &data,
                 character,
+                money: trader.money,
                 keys: &keys,
                 time_of_day: 5.5 * 3600.0,
                 now,

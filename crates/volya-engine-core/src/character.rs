@@ -20,7 +20,7 @@ pub mod inventory;
 
 use std::io;
 
-use volya_engine_formats::object::{Object, ObjectRecord, Q8, TraderLike};
+use volya_engine_formats::object::{Object, ObjectRecord, Q8};
 use volya_engine_formats::packet::Writer;
 
 use crate::config::Config;
@@ -60,84 +60,15 @@ pub fn communities(value: &str) -> Vec<(String, i32)> {
         .collect()
 }
 
-/// Money, profile, community, rank, reputation and name: the player
-/// record's Trader-like block (2.2, 6).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Profile {
-    pub money: u32,
-    pub specific_character: String,
-    pub trader_flags: u32,
-    pub character_profile: String,
-    pub community: i32,
-    pub rank: i32,
-    pub reputation: i32,
-    pub character_name: String,
-}
-
-impl Profile {
-    pub fn from_record(t: &TraderLike) -> Self {
-        Self {
-            money: t.money,
-            specific_character: t.specific_character.to_string(),
-            trader_flags: t.trader_flags,
-            character_profile: t.character_profile.to_string(),
-            community: t.community,
-            rank: t.rank,
-            reputation: t.reputation,
-            character_name: t.character_name.to_string(),
-        }
-    }
-
-    /// Fills the unset values from specific character `c` (2.2): its id, the
-    /// community's number among `communities` (the number after the name:
-    /// our choice, whether it is that or the list position is
-    /// unestablished; an unlisted community stays unset), its rank and
-    /// reputation, and its name translated as `name`. A name already set is
-    /// kept (our reading).
-    pub fn resolve(&mut self, c: &SpecificCharacter, communities: &[(String, i32)], name: &str) {
-        if self.specific_character.is_empty() {
-            self.specific_character = c.id.clone();
-        }
-        if self.community == NO_COMMUNITY
-            && let Some((_, n)) = communities.iter().find(|(n, _)| *n == c.community)
-        {
-            self.community = *n;
-        }
-        if self.rank == NOT_SET {
-            self.rank = c.rank;
-        }
-        if self.reputation == NOT_SET {
-            self.reputation = c.reputation;
-        }
-        if self.character_name.is_empty() {
-            self.character_name = name.to_owned();
-        }
-    }
-
-    pub fn apply(&self, t: &mut TraderLike) {
-        t.money = self.money;
-        t.specific_character = self.specific_character.clone().into();
-        t.trader_flags = self.trader_flags;
-        t.character_profile = self.character_profile.clone().into();
-        t.community = self.community;
-        t.rank = self.rank;
-        t.reputation = self.reputation;
-        t.character_name = self.character_name.clone().into();
-    }
-}
-
 /// What a New Game reads for the player (sections 2, 3).
 pub struct NewGame<'a> {
     /// The player's `all.spawn` record.
     pub record: &'a ObjectRecord,
     /// The system configuration.
     pub system: &'a Config,
-    /// The specific character the profile resolves to (2.2 item 1).
+    /// The specific character the profile resolves to (2.2 item 1): what
+    /// it supplies (3.1) and the PDA's specific character.
     pub character: &'a SpecificCharacter,
-    /// `[game_relations] communities` ([`communities`]).
-    pub communities: &'a [(String, i32)],
-    /// The character's name translated (2.2 item 5).
-    pub character_name: &'a str,
     /// Seeds the supply's generator (the game seeds it from a timer, 3.1).
     pub seed: u32,
     /// The first id the items take from the simulation's id pool
@@ -146,12 +77,13 @@ pub struct NewGame<'a> {
     pub first_id: u16,
 }
 
-/// The player character's state.
+/// The player character's state. Its money and identity (2.2) are not
+/// here: the player's record's Trader-like block holds them, the
+/// simulation's object (character-identity.md 7) the one source of them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CharacterState {
     /// The player's object, as its items' records take it (3.1).
     pub owner: Owner,
-    pub profile: Profile,
     pub conditions: Conditions,
     pub condition_config: ConditionConfig,
     pub inventory: Inventory,
@@ -200,14 +132,12 @@ impl CharacterState {
     /// 0, 4.1).
     pub fn new(
         owner: Owner,
-        profile: Profile,
         conditions: Conditions,
         condition_config: ConditionConfig,
         inventory: Inventory,
     ) -> Self {
         Self {
             owner,
-            profile,
             conditions,
             condition_config,
             inventory,
@@ -219,8 +149,8 @@ impl CharacterState {
         }
     }
 
-    /// The state after a New Game (sections 2, 3): the record's health and
-    /// profile resolved, the conditions of 2.3, the items supplied by the
+    /// The state after a New Game (sections 2, 3): the record's health,
+    /// the conditions of 2.3, the items supplied by the
     /// simulation (3.1) taken by the online character in their order. The
     /// items take consecutive ids from `first_id`. The bolt (3.2) comes
     /// later, when the player comes online: [`CharacterState::receive_bolt`].
@@ -239,8 +169,6 @@ impl CharacterState {
             .ok_or_else(|| invalid(format!("[{section}] has no condition_sect")))?;
         let condition_config = ConditionConfig::read(n.system, condition_sect.trim())?;
         let hits = HitConfig::read(n.system, section, condition_sect.trim())?;
-        let mut profile = Profile::from_record(&player.trader);
-        profile.resolve(n.character, n.communities, n.character_name);
         let block = &player.creature.object;
         let owner = Owner {
             id: PLAYER_ID,
@@ -262,7 +190,7 @@ impl CharacterState {
                             ids.take()?,
                             Some(e),
                             owner.id,
-                            &profile.specific_character,
+                            &n.character.id,
                         ));
                     }
                 }
@@ -294,7 +222,6 @@ impl CharacterState {
         }
         Ok(Self {
             owner,
-            profile,
             conditions: Conditions::new_game(player.creature.health),
             condition_config,
             inventory,
@@ -400,7 +327,8 @@ impl CharacterState {
             id,
             None,
             self.owner.id,
-            &self.profile.specific_character,
+            // A bolt is no PDA: it keeps no specific character.
+            "",
         ));
         Ok(())
     }
@@ -512,8 +440,9 @@ impl CharacterState {
     }
 
     /// Writes the state into the player's record (section 6): its id (2.1),
-    /// health in the Creature block and update, the Trader-like block, and
-    /// the update's radiation (believed to carry the condition's).
+    /// health in the Creature block and update, and the update's radiation
+    /// (believed to carry the condition's). The Trader-like block is the
+    /// record's own already.
     pub fn apply_to_record(&self, record: &mut ObjectRecord) -> io::Result<()> {
         let Object::Player(p) = &mut record.object else {
             return Err(invalid(format!(
@@ -525,7 +454,6 @@ impl CharacterState {
         p.creature.health = self.conditions.health;
         p.update.creature.health = self.conditions.health;
         p.update.radiation = self.conditions.radiation;
-        self.profile.apply(&mut p.trader);
         Ok(())
     }
 

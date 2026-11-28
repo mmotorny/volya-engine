@@ -7,7 +7,7 @@
 use volya_engine_formats::ltx;
 use volya_engine_formats::object::{
     ClassId, CompressedVector, Creature, CreatureUpdate, ObjectBlock, Player, PlayerPhysics,
-    PlayerUpdate, Skeleton, Visual,
+    PlayerUpdate, Skeleton, TraderLike, Visual,
 };
 
 use super::inventory::Place;
@@ -170,13 +170,10 @@ fn actor() -> SpecificCharacter {
 }
 
 pub(crate) fn new_game(record: &ObjectRecord, system: &Config) -> CharacterState {
-    let communities = communities("actor, 0, actor_dolg, 1, actor_freedom, 2");
     CharacterState::new_game(&NewGame {
         record,
         system,
         character: &actor(),
-        communities: &communities,
-        character_name: "Меченый",
         seed: 1,
         first_id: 1,
     })
@@ -197,39 +194,6 @@ fn reads_communities() {
             ("actor_dolg".to_owned(), 1),
             ("stalker".to_owned(), 4)
         ]
-    );
-}
-
-#[test]
-fn a_new_game_resolves_the_profile() {
-    let system = system();
-    let s = new_game(&record(), &system);
-    let p = &s.profile;
-    assert_eq!(
-        (p.money, p.specific_character.as_str(), p.trader_flags),
-        (40, "actor", 0)
-    );
-    assert_eq!(
-        (
-            p.character_profile.as_str(),
-            p.community,
-            p.rank,
-            p.reputation
-        ),
-        ("actor", 0, 0, 0)
-    );
-    assert_eq!(p.character_name, "Меченый");
-    // Values already set are kept.
-    let mut set = Profile {
-        community: 3,
-        rank: 7,
-        character_name: "x".into(),
-        ..p.clone()
-    };
-    set.resolve(&actor(), &communities("actor, 0"), "y");
-    assert_eq!(
-        (set.community, set.rank, set.character_name.as_str()),
-        (3, 7, "x")
     );
 }
 
@@ -338,8 +302,13 @@ fn records_for_a_save() {
     let Object::Player(p) = &player.object else {
         panic!()
     };
-    assert_eq!((p.trader.community, p.trader.rank), (0, 0));
-    assert_eq!(p.trader.character_name, "Меченый");
+    // The Trader-like block is the record's own.
+    assert_eq!(p.trader, {
+        let Object::Player(r) = &record().object else {
+            panic!()
+        };
+        r.trader.clone()
+    });
     let (spawn, update) = player.write().unwrap();
     assert_eq!(
         ObjectRecord::parse(&spawn, &update, "O_ACTOR", true).unwrap(),

@@ -9,7 +9,6 @@
 use super::*;
 use crate::core::character::condition::{ConditionConfig, Conditions, Hysteresis};
 use crate::core::character::inventory::{InventoryConfig, ItemConfig, Owner};
-use crate::core::character::{NO_COMMUNITY, NOT_SET, Profile};
 use crate::core::config::Config;
 use crate::core::input::{Event, GamepadAxis, GamepadButton};
 use crate::fixture::{self, FakeAudio, MemVfs};
@@ -97,29 +96,13 @@ pub(crate) fn character(stored: &[(&str, u16, u8)]) -> CharacterState {
         );
         inv.take_stored(item, code);
     }
-    let profile = Profile {
-        money: 40,
-        specific_character: "actor".into(),
-        trader_flags: 0,
-        character_profile: "actor".into(),
-        community: NO_COMMUNITY,
-        rank: NOT_SET,
-        reputation: NOT_SET,
-        character_name: String::new(),
-    };
     let owner = Owner {
         id: 0,
         position: [0.0; 3],
         game_graph_vertex: 0,
         level_graph_node: 0,
     };
-    let mut c = CharacterState::new(
-        owner,
-        profile,
-        Conditions::new_game(1.0),
-        condition_config(),
-        inv,
-    );
+    let mut c = CharacterState::new(owner, Conditions::new_game(1.0), condition_config(), inv);
     c.conditions.satiety = 0.5;
     c
 }
@@ -148,6 +131,7 @@ impl Run {
             .open(
                 &data,
                 &character,
+                40,
                 3600.0 * 7.25,
                 0,
                 [512.0, 384.0],
@@ -185,6 +169,7 @@ impl Run {
             .update(Frame {
                 data: &self.data,
                 character: &mut self.character,
+                money: 40,
                 keys: &self.keys,
                 time_of_day: 3600.0 * 7.25,
                 now: self.now,
