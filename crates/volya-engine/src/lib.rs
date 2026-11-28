@@ -19,6 +19,7 @@ pub mod audio;
 pub mod characters;
 pub mod console_window;
 pub mod controls;
+pub mod crosshair;
 pub mod data;
 pub mod detector;
 pub mod dialog;

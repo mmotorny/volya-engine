@@ -443,7 +443,7 @@ end
     };
     step(&mut app, &mut input);
     step(&mut app, &mut input);
-    assert_eq!(app.level().unwrap().doors().picked_object(), Some(door));
+    assert_eq!(app.level().unwrap().crosshair().id(), Some(door));
     press(&mut input, use_key);
     step(&mut app, &mut input);
     let scripts = app.game_scripts().unwrap();

@@ -193,11 +193,9 @@ impl TalkWorld for Talking<'_, '_> {
 /// The level's talks.
 #[derive(Default)]
 pub struct LevelTalk {
-    /// `[inventory] take_dist` (use-action.md 2.2).
-    take_dist: f32,
-    /// The character under the crosshair and its distance (use-action.md
-    /// 2.2).
-    picked: Option<(u16, f32)>,
+    /// The character under the crosshair (use-action.md 2.2), from the
+    /// level's crosshair record.
+    picked: Option<u16>,
     /// The talk sides as last synced ([`LevelTalk::sync`]): the
     /// characters talking and the player character's partner.
     talking: Vec<u16>,
@@ -209,20 +207,6 @@ pub struct LevelTalk {
     actor_dialogs: Vec<String>,
     /// The speakers and their names in the answer log (talk-window.md 6.1).
     names: Vec<(u16, String)>,
-}
-
-/// The ray from `eye` along unit `dir` meeting sphere `[x, y, z, r]`: the
-/// distance to its near side (0 from inside), if ahead.
-fn ray_sphere(eye: Vec3, dir: Vec3, [x, y, z, r]: [f32; 4]) -> Option<f32> {
-    let oc = [eye[0] - x, eye[1] - y, eye[2] - z];
-    let b = oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2];
-    let c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] - r * r;
-    let disc = b * b - c;
-    if disc < 0.0 {
-        return None;
-    }
-    let (near, far) = (-b - disc.sqrt(), -b + disc.sqrt());
-    (far >= 0.0).then_some(near.max(0.0))
 }
 
 /// A panel's character (talk-window.md 5): its name and its specific
@@ -243,29 +227,14 @@ fn panel(id: u16, name: &str, specific: Option<&SpecificCharacter>) -> Character
 }
 
 impl LevelTalk {
-    pub fn new(data: &GameData) -> io::Result<Self> {
-        Ok(Self {
-            take_dist: crate::core::config::value::float(
-                data.system.read("inventory", "take_dist")?,
-            ),
-            ..Self::default()
-        })
+    /// The character under the crosshair (use-action.md 2.2), as the
+    /// level's crosshair record holds it ([`crate::crosshair`]).
+    pub fn set_picked(&mut self, picked: Option<u16>) {
+        self.picked = picked;
     }
 
-    /// The crosshair's character (use-action.md 2.1, 2.2): the nearest of
-    /// `candidates` whose sphere the ray from `eye` along `dir` meets closer
-    /// than `take_dist`. Which shapes the pick tests, and the level mesh in
-    /// front, are not specified for characters (our choice, as the doors'):
-    /// the model's bounding sphere, nothing hidden.
-    pub fn pick(&mut self, eye: Vec3, dir: Vec3, candidates: &[Candidate]) {
-        self.picked = (candidates.iter())
-            .filter_map(|c| Some((c.id, ray_sphere(eye, dir, c.sphere)?.max(0.5))))
-            .filter(|&(_, t)| t < self.take_dist)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-    }
-
-    /// The character under the crosshair and its distance.
-    pub fn picked(&self) -> Option<(u16, f32)> {
+    /// The character under the crosshair.
+    pub fn picked(&self) -> Option<u16> {
         self.picked
     }
 
@@ -450,7 +419,7 @@ impl LevelTalk {
     /// The talk as tests see it.
     pub fn report(&self) -> TalkReport {
         TalkReport {
-            picked: self.picked.map(|(id, _)| id),
+            picked: self.picked,
             talking: self.talking.clone(),
             partner: self.partner,
             dialog: self.flow.current().map(|d| d.dialog().id.clone()),
@@ -481,38 +450,6 @@ pub struct TalkReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_pick_meets_a_sphere_ahead() {
-        let eye = [0.0, 1.5, 0.0];
-        assert_eq!(
-            ray_sphere(eye, [0.0, 0.0, 1.0], [0.0, 1.5, 2.0, 0.5]),
-            Some(1.5)
-        );
-        assert_eq!(
-            ray_sphere(eye, [0.0, 0.0, -1.0], [0.0, 1.5, 2.0, 0.5]),
-            None
-        );
-        assert_eq!(ray_sphere(eye, [1.0, 0.0, 0.0], [0.0, 1.5, 2.0, 0.5]), None);
-        assert_eq!(
-            ray_sphere(eye, [0.0, 0.0, 1.0], [0.0, 1.5, 0.2, 0.5]),
-            Some(0.0)
-        );
-        let mut t = LevelTalk {
-            take_dist: 2.0,
-            ..LevelTalk::default()
-        };
-        let c = |id, z| Candidate {
-            id,
-            sphere: [0.0, 1.5, z, 0.5],
-            position: [0.0, 0.0, z],
-            health: 1.0,
-        };
-        t.pick(eye, [0.0, 0.0, 1.0], &[c(3, 2.2), c(4, 1.0), c(5, 3.0)]);
-        assert_eq!(t.picked(), Some((4, 0.5)), "the nearest, at least 0.5 m");
-        t.pick(eye, [0.0, 0.0, 1.0], &[c(5, 3.0)]);
-        assert_eq!(t.picked(), None, "2 m or farther");
-    }
 
     /// talk.md 5.1, 5.2: hiding stops the player character's side, the
     /// partner's at its scheduled update; beyond 3 m the window closes.

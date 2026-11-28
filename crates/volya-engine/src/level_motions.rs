@@ -158,6 +158,9 @@ pub struct LevelMotions {
     /// The motions of each model (by its index) read so far.
     loaded: HashMap<usize, Arc<Motions>>,
     pose: Vec<Mat4>,
+    /// By instance: its bones' model-space matrices of the latest frame
+    /// (empty while at rest), for the crosshair's pick.
+    bone_poses: Vec<Vec<Mat4>>,
     render: Vec<Mat4>,
     /// The latest frame's matrices, shared with its scene.
     poses: Arc<BonePoses>,
@@ -286,6 +289,10 @@ impl LevelMotions {
                 }
             });
             a.render_matrices(&self.pose, &mut self.render);
+            if self.bone_poses.len() <= i {
+                self.bone_poses.resize_with(i + 1, Vec::new);
+            }
+            self.bone_poses[i].clone_from(&self.pose);
             poses.first[i] = Some(poses.matrices.len() as u32);
             poses.matrices.extend(self.render.iter().map(bone_matrix));
         }
@@ -317,6 +324,13 @@ impl LevelMotions {
     /// next frame.
     pub fn take_notifications(&mut self) -> Vec<(usize, Notified)> {
         std::mem::take(&mut self.notified)
+    }
+
+    /// Instance `instance`'s bones' model-space matrices of the latest
+    /// frame, once it has played a motion.
+    pub fn bone_poses(&self, instance: usize) -> Option<&[Mat4]> {
+        let p = self.bone_poses.get(instance)?;
+        (!p.is_empty()).then_some(p.as_slice())
     }
 
     /// The latest frame's render matrices.

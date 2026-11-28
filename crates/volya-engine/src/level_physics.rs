@@ -658,35 +658,48 @@ impl LevelPhysics {
     /// The boxes of object `object`'s shell where its bodies hold them
     /// (`shells` 2.1, 2.2).
     pub fn boxes(&self, object: u16) -> Vec<BodyBox> {
-        let Some(s) = self.shell(object) else {
-            return Vec::new();
-        };
+        let mut out = Vec::new();
+        if let Some(s) = self.shell(object) {
+            self.shell_boxes(s, |b| out.push(b));
+        }
+        out
+    }
+
+    /// Every shell's boxes where its bodies hold them, with its object's
+    /// id (`shells` 2.1, 2.2).
+    pub fn each_box(&self, mut visit: impl FnMut(u16, BodyBox)) {
+        for s in &self.shells {
+            self.shell_boxes(s, |b| visit(s.object, b));
+        }
+    }
+
+    fn shell_boxes(&self, s: &LevelShell, mut visit: impl FnMut(BodyBox)) {
         let Some(LevelBody::Shell(body)) = self.world.get(s.id) else {
-            return Vec::new();
+            return;
         };
         let solver = self.world.solver();
-        (s.boxes.iter())
-            .filter_map(|&(e, shape, material)| {
-                let Shape::Box {
-                    axes,
-                    centre,
-                    half_size,
-                } = shape
-                else {
-                    return None;
-                };
-                let frame = body.frame(solver, e)?;
-                Some(BodyBox {
-                    centre: transform_point(&frame, centre),
-                    axes: axes.map(|a| {
-                        let w = turn(&frame, a);
-                        normalize(w).unwrap_or(w)
-                    }),
-                    half_size,
-                    material,
-                })
-            })
-            .collect()
+        for &(e, shape, material) in &s.boxes {
+            let Shape::Box {
+                axes,
+                centre,
+                half_size,
+            } = shape
+            else {
+                continue;
+            };
+            let Some(frame) = body.frame(solver, e) else {
+                continue;
+            };
+            visit(BodyBox {
+                centre: transform_point(&frame, centre),
+                axes: axes.map(|a| {
+                    let w = turn(&frame, a);
+                    normalize(w).unwrap_or(w)
+                }),
+                half_size,
+                material,
+            });
+        }
     }
 }
 

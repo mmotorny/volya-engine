@@ -2877,7 +2877,7 @@ impl App {
                 let windows = inventory.as_ref().is_some_and(|i| i.is_open())
                     || pda.as_ref().is_some_and(|p| p.is_open())
                     || talk.as_ref().is_some_and(|t| t.is_open());
-                if let Some((id, start)) = level.doors().hint().filter(|_| !windows) {
+                if let Some((id, start)) = level.hint().filter(|_| !windows) {
                     if !self.quick_info.as_ref().is_some_and(|q| q.fits(resolution)) {
                         let animations = level.level_lights().animations();
                         self.quick_info = Some(QuickInfo::load(&ctx, resolution, animations)?);
@@ -2945,7 +2945,7 @@ impl App {
                     night_vision,
                     // The touch Use button shows for a character under
                     // the crosshair too (our design, #874).
-                    usable: level.doors().hint().is_some() || level.talk().picked().is_some(),
+                    usable: level.usable(),
                 })
             }
             _ => None,

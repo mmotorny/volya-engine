@@ -71,6 +71,7 @@ use crate::core::vfs::{self, Vfs};
 use crate::core::visibility::{Frustum, Sectors};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
 use crate::core::zones::{Behaviour, SoundEvent, Target, ZoneRecord, ZoneSection, Zones};
+use crate::crosshair::{self, CrosshairRecord, PickObject, PickShape};
 use crate::data::GameData;
 use crate::detector::{DetectorReport, DetectorSound, PlayerDetectors};
 use crate::footsteps::{self, MaterialPairs, PlayerFootsteps};
@@ -386,6 +387,14 @@ pub struct LevelScreen {
     /// The object the player's use action targeted since last taken
     /// ([`LevelScreen::take_used`]).
     used: Option<u16>,
+    /// The crosshair record from this frame's pick (use-action.md 2.1,
+    /// 2.2).
+    crosshair: CrosshairRecord,
+    /// `[inventory] take_dist` (use-action.md 2.2).
+    take_dist: f32,
+    /// The usable parts' hint texts the scripts set (script API P 8), by
+    /// object id.
+    tip_texts: BTreeMap<u16, String>,
     /// What the dialogs and trade asked of the talk and the trader since
     /// last taken ([`LevelScreen::take_dialog_events`]).
     dialog_events: Vec<DialogEvent>,
@@ -1622,6 +1631,8 @@ pub struct NewGameLoad {
     /// The doors under the door scheme ([`LevelDoors`]), found with the
     /// objects.
     doors: Option<LevelDoors>,
+    /// `[inventory] take_dist` (use-action.md 2.2), read with the objects.
+    take_dist: Option<f32>,
     /// The characters' talks (docs/behavior/talk.md), made with the
     /// objects.
     talk: Option<LevelTalk>,
@@ -2267,7 +2278,9 @@ impl NewGameLoad {
                 )?;
                 let doors = LevelDoors::load(tree, data, &self.level_objects, &physics.borrow())?;
                 self.doors = Some(doors);
-                self.talk = Some(LevelTalk::new(data)?);
+                self.talk = Some(LevelTalk::default());
+                let take_dist = data.system.read("inventory", "take_dist")?;
+                self.take_dist = Some(volya_engine_formats::ltx::value::float(take_dist));
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
@@ -2664,6 +2677,7 @@ impl NewGameLoad {
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
         let mut doors = earlier(self.doors, "objects")?;
+        let take_dist = earlier(self.take_dist, "objects")?;
         let talk = earlier(self.talk, "objects")?;
         let physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
@@ -2753,6 +2767,9 @@ impl NewGameLoad {
             fatal: None,
             script_changes: Changes::default(),
             used: None,
+            crosshair: CrosshairRecord::default(),
+            take_dist,
+            tip_texts: BTreeMap::new(),
             dialog_events: Vec::new(),
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
@@ -3003,35 +3020,28 @@ impl LevelScreen {
         self.player
             .frame_with(&self.collision, now, &request, &mut physics.steps(now));
         physics.end_frame();
-        // The leaves where their shells hold them, for the pick.
+        // The leaves where their shells hold them, for the route planner.
         self.doors.sync(&physics);
         drop(physics);
-        // use-action.md 2.2: the player's update picks the object under
-        // the crosshair; the use action on it is the scripts' (script API
-        // M 6.3; the door scheme's use callback, use-action.md 4.1).
-        let view = self.player.view();
-        self.doors.pick(view.eye, view.direction, now);
-        let candidates = self.talk_candidates();
-        self.talk.pick(view.eye, view.direction, &candidates);
+        // use-action.md 2.1, 2.2: the crosshair's pick and the player's
+        // record of it (the HUD's pick and the player's update, in an
+        // order that is unestablished: ours, after the physics steps); the
+        // talk's character under the crosshair is the record's.
+        self.update_crosshair(now);
+        let character = (self.crosshair.object).filter(|o| o.character);
+        self.talk.set_picked(character.map(|o| o.id));
         // use-action.md 1.2: the press while the player character is alive
-        // (while it talks the talk screen takes the input); 3: the object
-        // under the crosshair is the nearer picked, a door (trader-door.md
-        // 2.5) or a character (6.2), used through the scripts (script API M
-        // 6.3), which offer it the talk (script API R 4.2).
+        // (while it talks the talk screen takes the input); 3: the use
+        // action on the object under the crosshair, whatever it is, is the
+        // scripts' (script API M 6.3: its use callback, use-action.md 4;
+        // the door scheme's, 4.1), which offer a living character the talk
+        // (6.2; script API R 4.2).
         let health = (self.character.as_ref()).map_or(0.0, |c| c.conditions.health);
-        if self.controls.use_pressed(input) && health > 0.0 {
-            let door = self.doors.picked_distance();
-            match self.talk.picked() {
-                Some((id, t)) if door.is_none_or(|d| t < d) => {
-                    if candidates
-                        .iter()
-                        .any(|c| c.id == id && LevelTalk::usable(c))
-                    {
-                        self.used = Some(id);
-                    }
-                }
-                _ => self.used = self.doors.picked_object().or(self.used),
-            }
+        if self.controls.use_pressed(input)
+            && health > 0.0
+            && let Some(id) = self.crosshair.id()
+        {
+            self.used = Some(id);
         }
         self.fall_hit();
         if let Some(c) = &mut self.character {
@@ -3396,10 +3406,111 @@ impl LevelScreen {
         &self.doors
     }
 
-    /// The usable parts' hint texts the scripts set (script API P 8), for
-    /// the player's hint (use-action.md 2.2).
+    /// The usable parts' hint texts the scripts hold (script API P 8, in
+    /// the scripts' Windows-1251), for the player's hint (use-action.md
+    /// 2.2), when they changed.
     pub fn set_tip_texts(&mut self, texts: &BTreeMap<u16, Vec<u8>>) {
-        self.doors.set_tip_texts(texts);
+        use volya_engine_formats::cp1251;
+        let same = texts.len() == self.tip_texts.len()
+            && (texts.iter().zip(&self.tip_texts))
+                .all(|((a, t), (b, u))| a == b && cp1251::decode(t) == *u);
+        if !same {
+            self.tip_texts = (texts.iter())
+                .map(|(&id, t)| (id, cp1251::decode(t)))
+                .collect();
+        }
+    }
+
+    /// The crosshair record (use-action.md 2.2).
+    pub fn crosshair(&self) -> &CrosshairRecord {
+        &self.crosshair
+    }
+
+    /// The player's hint id and the engine clock its object came under the
+    /// crosshair (`hud-scope` 13): the usable part's hint text of the
+    /// object under the crosshair (use-action.md 2.2), as the scripts set
+    /// it (script API P 8); none while it is empty (our reading).
+    pub fn hint(&self) -> Option<(&str, u64)> {
+        let o = self.crosshair.object?;
+        let tip = self.tip_texts.get(&o.id)?;
+        (!tip.is_empty()).then_some((tip.as_str(), o.since))
+    }
+
+    /// Whether the use action has something to act on that the player
+    /// sees: a hint, or a character under the crosshair (use-action.md 3
+    /// step 7), for the touch controls' use button.
+    pub fn usable(&self) -> bool {
+        self.hint().is_some() || self.crosshair.object.is_some_and(|o| o.character)
+    }
+
+    /// The crosshair's pick (use-action.md 2.1) from the player's view
+    /// against the level mesh and the online objects other than the
+    /// player, and the crosshair record from it (2.2) at engine clock
+    /// `now`. The objects are those with a physics shell, by their shell's
+    /// boxes, and the characters (stalkers, traders, monsters), by their
+    /// models' bone shapes in the current pose ([`crosshair`]); which
+    /// other objects have a collision form the pick meets is TODO(#1114).
+    fn update_crosshair(&mut self, now: u64) {
+        let view = self.player.view();
+        let length = crosshair::RAY_LENGTH * self.environment.far_plane;
+        let shared = self.simulation.borrow();
+        let sim = shared.simulation.as_ref();
+        let online = |id: u16| {
+            id != crate::core::simulation::ACTOR_ID
+                && sim.and_then(|s| s.object(id)).is_none_or(|o| o.online)
+        };
+        let mut objects: Vec<PickObject> = Vec::new();
+        self.physics.borrow().each_box(|id, b| {
+            if !online(id) {
+                return;
+            }
+            match objects.last_mut() {
+                Some(o) if o.id == id => o.shapes.push(PickShape::Box(b)),
+                _ => objects.push(PickObject {
+                    id,
+                    sphere: None,
+                    shapes: vec![PickShape::Box(b)],
+                }),
+            }
+        });
+        let world = &self.world.objects;
+        for (k, i) in world.instances.iter().enumerate() {
+            if !is_character(i.kind) || !online(i.id) {
+                continue;
+            }
+            let Some(placement) = self.placements[k] else {
+                continue;
+            };
+            let model = &world.models[i.model];
+            let poses = self.motions.bone_poses(k);
+            let shapes = (0..model.bone_count())
+                .filter_map(|b| {
+                    let shape = model.bone_shape(b)?;
+                    let bone = poses.and_then(|p| p.get(b).copied());
+                    let bone = bone.unwrap_or_else(|| model.bind(b));
+                    Some(PickShape::of_bone(shape, &bone, &placement))
+                })
+                .collect();
+            let h = &model.header;
+            let c = model_math::transform_point(&placement, h.sphere_centre);
+            objects.push(PickObject {
+                id: i.id,
+                sphere: Some([c[0], c[1], c[2], h.sphere_radius]),
+                shapes,
+            });
+        }
+        drop(shared);
+        let pick = crosshair::pick(
+            Some(&self.collision),
+            view.eye,
+            view.direction,
+            length,
+            objects,
+        );
+        let instances = &self.instances;
+        let character =
+            |id: u16| (instances.get(&id)).is_some_and(|&k| is_character(world.instances[k].kind));
+        self.crosshair.update(&pick, self.take_dist, now, character);
     }
 
     pub fn detectors(&self) -> &PlayerDetectors {
@@ -5075,14 +5186,14 @@ impl LevelScreen {
                     };
                     (how, d)
                 }),
-                hint: self.doors.hint().map(|(id, _)| id.to_owned()),
+                hint: self.hint().map(|(id, _)| id.to_owned()),
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
             detectors: self.detectors.report(&self.zones),
-            doors: self.doors.report(&self.physics.borrow()),
+            doors: self.doors.report(&self.physics.borrow(), &self.tip_texts),
             physics: self.physics.borrow().report(),
             talk: self.talk.report(),
             portions: self.info_portions.as_ref().map_or_else(Vec::new, |p| {
@@ -5147,6 +5258,15 @@ impl LevelScreen {
         self.controls.settings = controls.settings;
         self.player.settings = controls.settings;
     }
+}
+
+/// Whether an object of kind `kind` is a character (use-action.md
+/// conventions: it has an inventory of its own; the player aside).
+fn is_character(kind: record::Kind) -> bool {
+    matches!(
+        kind,
+        record::Kind::Stalker | record::Kind::Trader | record::Kind::Monster
+    )
 }
 
 #[cfg(test)]
@@ -5271,6 +5391,9 @@ impl LevelScreen {
             fatal: None,
             script_changes: Changes::default(),
             used: None,
+            crosshair: CrosshairRecord::default(),
+            take_dist: 2.0,
+            tip_texts: BTreeMap::new(),
             dialog_events: Vec::new(),
             footsteps: None,
             sky_visibility: SkyVisibility::default(),

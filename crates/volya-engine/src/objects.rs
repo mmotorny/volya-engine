@@ -32,6 +32,7 @@ use crate::core::simulation::{NO_ID, Simulation};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, skinned_vertex};
+use volya_engine_formats::bone_physics::UsedShape;
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
 use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord};
@@ -230,6 +231,10 @@ pub struct LoadedModel {
     binds: Box<[Mat4]>,
     /// Each bone's parent (skeleton-ogf.md 4); empty when not given.
     parents: Box<[Option<u16>]>,
+    /// Each bone's used shape in its own bind space (skeleton-ogf.md 4,
+    /// bone-physics.md 2.2), for the crosshair's pick; empty when not
+    /// given.
+    shapes: Box<[Option<UsedShape>]>,
 }
 
 impl LoadedModel {
@@ -261,7 +266,19 @@ impl LoadedModel {
                 .collect(),
             binds,
             parents: Box::default(),
+            shapes: Box::default(),
         }
+    }
+
+    /// The model with its bones' used shapes.
+    pub fn with_shapes(mut self, shapes: Box<[Option<UsedShape>]>) -> Self {
+        self.shapes = shapes;
+        self
+    }
+
+    /// Bone `i`'s used shape, if it has one (and the shapes were given).
+    pub fn bone_shape(&self, i: usize) -> Option<&UsedShape> {
+        self.shapes.get(i)?.as_ref()
     }
 
     /// The model with its bones' parents.
@@ -383,9 +400,13 @@ pub fn add_model(
     let parents = (model.bones.iter())
         .map(|b| b.parent.map(|p| p as u16))
         .collect();
+    let shapes = (model.bones.iter())
+        .map(|b| b.physics.shape.used())
+        .collect();
     Ok(
         LoadedModel::new(names.add(path), model.header, meshes.into(), &bones)
-            .with_parents(parents),
+            .with_parents(parents)
+            .with_shapes(shapes),
     )
 }
 
