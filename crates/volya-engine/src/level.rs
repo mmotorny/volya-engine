@@ -1799,7 +1799,8 @@ impl NewGameLoad {
     /// level's visuals); and byte 11 of each level vertex, taken from the
     /// navigation data; at the game clock's time.
     pub fn client_objects(&mut self) -> io::Result<ClientSpawning<'_>> {
-        let game_time = earlier(self.clock.as_ref(), "game clock")?.time();
+        let clock = earlier(self.clock.as_ref(), "game clock")?;
+        let (game_time, time_factor) = (clock.time(), clock.time_factor());
         let sim = earlier(self.simulation.as_mut(), "simulation")?;
         let lights = (sim.navigation_mut())
             .map(|n| std::mem::take(&mut n.vertex_lights))
@@ -1829,6 +1830,7 @@ impl NewGameLoad {
             objects,
             vertex_lights: lights,
             game_time,
+            time_factor,
             physics: Rc::clone(shared),
             collision: Arc::clone(collision),
             paths: sim.paths.clone(),
@@ -4448,6 +4450,11 @@ impl LevelScreen {
     /// The game clock.
     pub fn clock(&self) -> &GameClock {
         &self.clock
+    }
+
+    /// Sets the game clock's time factor (script API H 4.2).
+    pub fn set_time_factor(&mut self, factor: f32) {
+        self.clock.set_time_factor(factor);
     }
 
     /// Whether the player asked for the menu since the last call

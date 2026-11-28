@@ -124,6 +124,7 @@ fn game() -> Option<Game> {
         files,
         story: Rc::clone(&story),
         dialogs: Rc::default(),
+        times: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

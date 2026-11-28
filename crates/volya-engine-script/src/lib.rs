@@ -34,6 +34,7 @@ pub mod object_factory;
 pub mod selftest;
 pub mod services;
 pub mod story;
+pub mod time;
 pub mod values;
 
 use std::collections::HashSet;

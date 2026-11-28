@@ -959,3 +959,71 @@ mod character_talk_state {
         section(checks::start_dialog);
     }
 }
+
+/// The time names' checks, one test per section of
+/// docs/behavior/script-api-time.md (all of them run in [`selftest`] too,
+/// on every target).
+mod time {
+    use crate::selftest::time as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn game_time_values() {
+        section(checks::game_time_values);
+    }
+
+    #[test]
+    fn the_clocks() {
+        section(checks::clocks);
+    }
+
+    #[test]
+    fn the_level_time_functions() {
+        section(checks::level_functions);
+    }
+
+    #[test]
+    fn ctime_constructors() {
+        section(checks::constructors);
+    }
+
+    #[test]
+    fn ctime_setting_and_reading() {
+        section(checks::setting_and_reading);
+    }
+
+    #[test]
+    fn ctime_arithmetic() {
+        section(checks::arithmetic);
+    }
+
+    #[test]
+    fn ctime_operators() {
+        section(checks::operators);
+    }
+
+    #[test]
+    fn ctime_texts() {
+        section(checks::texts);
+    }
+
+    #[test]
+    fn time_global() {
+        section(checks::time_global);
+    }
+
+    #[test]
+    fn profile_timer() {
+        section(checks::profile_timer);
+    }
+}

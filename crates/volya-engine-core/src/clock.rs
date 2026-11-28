@@ -84,6 +84,12 @@ impl GameClock {
         self.time.time_factor
     }
 
+    /// Sets the time factor (script API H 4.2): the time goes on from where
+    /// it is at the new factor; the normal time factor is unchanged.
+    pub fn set_time_factor(&mut self, factor: f32) {
+        self.time.time_factor = factor;
+    }
+
     /// The time of day, seconds (0 … 86,400).
     pub fn time_of_day(&self) -> f32 {
         ((self.time.time % DAY_MS) as f64 / 1000.0) as f32

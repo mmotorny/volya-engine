@@ -29,6 +29,7 @@ use crate::loader::{Common, Prefix, Scripts, Trees};
 use crate::object_factory::{CreatedObject, class_id, id_text, keeps_lua};
 use crate::services::EngineServices;
 use crate::story::Story;
+use crate::time::GameTimes;
 use crate::{Error, ErrorKind, Lua, Value};
 
 /// The registry key of the entry points' function (entry_points.lua).
@@ -114,7 +115,7 @@ pub enum EngineCall {
 
 /// What startup makes and registers a game state from: the game's trees
 /// and path aliases, the namespace prefix, and the engine state the
-/// interface's names read (script APIs B, F, M, P, R).
+/// interface's names read (script APIs B, F, H, M, P, R).
 pub struct Startup {
     pub trees: Rc<dyn Trees>,
     pub aliases: PathAliases,
@@ -124,6 +125,7 @@ pub struct Startup {
     pub objects: Rc<RefCell<GameObjects>>,
     pub story: Rc<RefCell<Story>>,
     pub dialogs: Rc<RefCell<DialogsAndTrade>>,
+    pub times: Rc<RefCell<GameTimes>>,
 }
 
 impl Startup {
@@ -156,7 +158,7 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, M, P, R, Y; A,
+    /// The engine interface of the specs implemented (B, F, H, M, P, R, Y; A,
     /// C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
@@ -169,7 +171,8 @@ impl Startup {
         )?;
         scripts.register_physics_vehicles_and_lamps()?;
         scripts.register_story(Rc::clone(&self.story))?;
-        scripts.register_dialogs_and_trade(Rc::clone(&self.dialogs))
+        scripts.register_dialogs_and_trade(Rc::clone(&self.dialogs))?;
+        scripts.register_time(Rc::clone(&self.services), Rc::clone(&self.times))
     }
 }
 
@@ -340,6 +343,11 @@ impl GameScripts {
     /// The dialogs and trade's own state (script API R).
     pub fn dialogs(&self) -> &Rc<RefCell<DialogsAndTrade>> {
         &self.startup.dialogs
+    }
+
+    /// The game's clocks as scripts read them (script API H).
+    pub fn times(&self) -> &Rc<RefCell<GameTimes>> {
+        &self.startup.times
     }
 
     /// The engine's calls into scripts so far, oldest first.

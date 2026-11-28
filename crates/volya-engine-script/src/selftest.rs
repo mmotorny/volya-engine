@@ -5,7 +5,7 @@
 //! object factory, the engine services, the value types, configuration
 //! and files, game objects, object binders, object event callbacks, the
 //! story state, the engine's entry points, the dialog files' functions and the
-//! dialogs and trade,
+//! dialogs and trade, and time,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -26,6 +26,7 @@ pub mod object_factory;
 pub mod physics;
 pub mod services;
 pub mod story;
+pub mod time;
 pub mod values;
 
 /// Runs every check; `Err` lists the failures.
@@ -78,6 +79,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = dialogs_and_trade::check() {
+        fail(e);
+    }
+    if let Err(e) = time::check() {
         fail(e);
     }
     if let Err(e) = character_talk_state::check() {

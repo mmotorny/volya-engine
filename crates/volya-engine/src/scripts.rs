@@ -95,6 +95,9 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         // spawning ([`client_spawning`]).
         story: Rc::new(RefCell::new(story(data))),
         dialogs: Rc::default(),
+        // The game's clocks as scripts read them, fed by the level
+        // ([`client_spawning`], [`level_frame`]).
+        times: Rc::default(),
     })
     .map_err(fatal)
 }
@@ -172,7 +175,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
 /// reading), the game's story forgotten, then the level's call list
 /// emptied, none of it called (spec O 6.5), and the default trade
-/// parameters dropped (script API R 5.2). A script error is fatal.
+/// parameters dropped (script API R 5.2) and the game clock gone (script
+/// API H). A script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
@@ -192,6 +196,8 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
         p.take_events();
     }
     scripts.story().borrow_mut().new_game();
+    // Script API H: no game clock until the next level's.
+    scripts.times().borrow_mut().level_ended();
     scripts.scripts().clear_level_calls()?;
     scripts.scripts().destroy_default_trade()
 }
@@ -218,12 +224,14 @@ pub struct ClientObject<'a> {
 
 /// What the level's spawning gives the scripts (3.3 step 11.4): the
 /// objects online at the start, byte 11 of each level vertex (M 4), the
-/// game time, the level's physics world, collision and patrol paths
-/// (script API Y) and the game's information portions (script API P).
+/// game time and its factor, the level's physics world, collision and
+/// patrol paths (script API Y) and the game's information portions
+/// (script API P).
 pub struct ClientSpawning<'a> {
     pub objects: Vec<ClientObject<'a>>,
     pub vertex_lights: Vec<u8>,
     pub game_time: u64,
+    pub time_factor: f32,
     pub physics: Rc<RefCell<LevelPhysics>>,
     pub collision: Arc<CollisionWorld>,
     pub paths: PatrolPaths,
@@ -251,6 +259,8 @@ pub fn client_spawning(
         o.server_time = now as u32;
         o.game_time = spawning.game_time;
     }
+    // Script API H's clocks, before the objects spawn.
+    (scripts.times().borrow_mut()).level_frame(spawning.game_time, spawning.time_factor);
     {
         // Script API Y's engine side: the level's physics world and its
         // queries, before the objects spawn. The player is in no vehicle
@@ -272,7 +282,7 @@ pub fn client_spawning(
 }
 
 /// The scripts' part of a level frame, after the level's update: the
-/// server and game times; the player's placement, its feet and its body's
+/// server and game times and the game clock (script API H); the player's placement, its feet and its body's
 /// heading (our reading of M 4); unless the game is `paused`, each
 /// object's scheduled update ([`scheduled_updates`]); the objects that
 /// went offline or were removed released and destroyed (L 5.5), those
@@ -284,7 +294,8 @@ pub fn client_spawning(
 /// level's call list updated, after the physics steps and the objects'
 /// updates (O 6.1: the door scheme's fast call); the story's frame
 /// ([`story_frame`]); then what the members asked of the engine
-/// ([`apply_events`]). No system of the app perceives sounds yet, so none
+/// ([`apply_events`]; `level.set_time_factor`'s factors set on the game
+/// clock, H 4.2). No system of the app perceives sounds yet, so none
 /// is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
@@ -303,6 +314,8 @@ pub fn level_frame(
             player.placement = model::transform(p.state().position, [0.0, -p.heading(), 0.0]);
         }
     }
+    let clock = level.clock();
+    (scripts.times().borrow_mut()).level_frame(clock.time(), clock.time_factor());
     if !paused {
         scheduled_updates(scripts, now as u32)?;
     }
@@ -347,6 +360,9 @@ pub fn level_frame(
     story_frame(scripts, level)?;
     apply_events(scripts, level);
     apply_physics_events(scripts, level)?;
+    for factor in scripts.times().borrow_mut().take_time_factors() {
+        level.set_time_factor(factor);
+    }
     Ok(())
 }
 
