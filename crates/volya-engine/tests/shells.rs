@@ -3,7 +3,7 @@
 
 //! The shells of `l01_escape`'s objects at a New Game on the Russian
 //! edition's data (BYOA), against docs/behavior/physics-shells.md (10, the
-//! trader's door) and physics-shell-shapeless-root.md: the door's two
+//! trader's door), physics-joints.md 3 and physics-resting.md 4: the door's two
 //! bodies, its hinge and masses, resting until its scheme's motor wakes it
 //! and held closed after. Measures the heap the level's shells take (the
 //! engine's and the library's) and the cost of a physics step with them.
@@ -147,13 +147,13 @@ fn the_bunkers_shells_and_the_trader_door() {
     let physics = level.physics();
     let (shell, active) = physics.shell_of(door.id).expect("the door's shell");
     let solver = physics.world().solver();
-    // 10, item 2 (`root` 1.2, 1.3): two bodies, the frame's fixed.
+    // 10, item 2 (3.5, 5.1): two bodies, the frame's fixed.
     assert_eq!(shell.elements(), 2);
     assert!(shell.fixed(0) && !shell.fixed(1));
     let frame = shell.body(solver, 0).unwrap();
     let leaf = shell.body(solver, 1).unwrap();
     assert_eq!((frame.mass, frame.gravity), (1e8, false));
-    // `root` 6: the leaf has the bone data's mass, not the record's.
+    // 4.5: the leaf has the bone data's mass, not the record's.
     assert!((leaf.mass - 100.0).abs() < 1e-3, "{}", leaf.mass);
     assert!(leaf.gravity);
     // 10, item 3: switched off, resting, its leaf's origin at its centre of
@@ -177,7 +177,7 @@ fn the_bunkers_shells_and_the_trader_door() {
     let hinge = |n| solver.hinge_param(joint, n).unwrap();
     assert!((hinge(param::LO_STOP) + 1.9199).abs() < 1e-4);
     assert_eq!(hinge(param::HI_STOP), 0.0);
-    // `root` 2.3: no motor before the scheme.
+    // physics-joints.md 1: no motor before the scheme.
     assert_eq!((hinge(param::F_MAX), hinge(param::VEL)), (0.0, 0.0));
     // 10, item 4: the exact solver requested.
     assert!(solver.marked_exact(shell.group()));
@@ -189,7 +189,7 @@ fn the_bunkers_shells_and_the_trader_door() {
     }
     let start = boxes[0].centre;
 
-    // The scheme's start wakes it (`root` 3.1); held closed after.
+    // The scheme's start wakes it (physics-resting.md 2); held closed after.
     let mut input = Input::new();
     let mut now = 0;
     let mut frames = |level: &mut LevelScreen, n: u32| {

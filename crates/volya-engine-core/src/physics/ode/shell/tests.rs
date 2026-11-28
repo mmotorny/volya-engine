@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! Activated shells against physics-shells.md 2 and
-//! physics-shell-shapeless-root.md 1 – 3, on a synthetic door.
+//! Activated shells against physics-shells.md 2, 3.3, 3.5 and 5.1,
+//! physics-joints.md and physics-resting.md, on a synthetic door.
 
 use volya_engine_formats::model::transform;
 
@@ -54,12 +54,12 @@ fn activation_2_1_places_bodies_at_their_mass_centres() {
             1e-5
         ));
     }
-    // `root` 1.3: the shapeless frame is fixed, 10⁸, gravity off.
+    // physics-shells.md 5.1: the shapeless frame is fixed, 10⁸, gravity off.
     let f = s.body(&solver, 0).unwrap();
     assert!(s.fixed(0) && !s.fixed(1));
     assert_eq!((f.mass, f.gravity), (FIXED_MASS, false));
     assert!(leaf.gravity);
-    // `root` 3.1: skeleton flags 0, switched off.
+    // physics-resting.md 1: skeleton flags 0, switched off.
     assert!(!leaf.enabled && !f.enabled && s.resting);
 }
 
@@ -80,7 +80,7 @@ fn hinge_root_2_joins_the_leaf_to_the_static_environment() {
     assert!((p(param::STOP_ERP) - world.erp).abs() < 1e-6);
     assert!((p(param::CFM) / world.cfm - 1.0).abs() < 1e-5);
     assert_eq!(solver.hinge_angle(j), Some(0.0));
-    // `root` 1.4: naming a fixed bone requests the exact solver.
+    // physics-shells.md 3.5: naming a fixed bone requests the exact solver.
     assert!(solver.marked_exact(s.group()));
 }
 

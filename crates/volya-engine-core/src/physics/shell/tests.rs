@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The build against physics-shells.md and physics-shell-shapeless-root.md,
-//! by section, on synthetic models.
+//! The build against physics-shells.md, by section, on synthetic models.
 
 use volya_engine_formats::bone_physics::{
     AxisLimits, BonePhysics, BoxShape, Cylinder, JointType, Shape as BoneShape, ShapeType, Sphere,
@@ -256,7 +255,7 @@ fn bone_state_3_1_without_saved_state_all_visible_root_0() {
 fn walk_3_2_the_door_gets_a_shapeless_root_and_its_leaf() {
     let model = door();
     let (s, ended) = from_bones(&model, BoneState::default(), &materials()).unwrap();
-    // `root` 1.2: two elements; the latch has no physics and adds nothing.
+    // 3.5: two elements; the latch has no physics and adds nothing.
     assert_eq!(s.elements.len(), 2);
     assert_eq!(ended, [Some(0), Some(1), Some(1)]);
     let (frame, leaf) = (&s.elements[0], &s.elements[1]);
@@ -328,7 +327,7 @@ fn types_4_1_type_3_with_fixed_bones_requests_the_exact_solver() {
             .iter()
             .all(|e| (e.motion.linear_drag, e.motion.angular_drag) == OBJECT_DRAGS)
     );
-    // `root` 6: the record's mass is not read; the bone data's is.
+    // 4.5: the record's mass is not read; the bone data's is.
     assert_eq!(s.elements[1].mass_centre().0, 50.0);
     // Without fixed bones no request; flag 0x01 set: not switched off.
     let mut r = record(3, "", None);

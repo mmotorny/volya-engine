@@ -58,7 +58,7 @@ pub enum Program {
     SelfLight,
     /// `base_lplanes` (`effects\lightplanes`).
     LightPlanes,
-    /// `model_def_lq` (class `MODEL   `, element 1; level-objects.md 5.2).
+    /// `model_def_lq` (class `MODEL   `, element 1; model-shading.md 4).
     Model,
     /// `model_env_lq` (class `MODELEbB`, element 1).
     ModelEnv,
@@ -69,7 +69,7 @@ pub enum Program {
 }
 
 /// The vertex layout a program reads: one of `level.geom`'s, or the
-/// objects' models' (level-objects.md section 4.7: position as `s16` × 3
+/// objects' models' (model-shading.md 1: position as `s16` × 3
 /// and one unused, normal as `u8` × 3 and one unused, texture coordinate as
 /// `s16` × 2; 16 bytes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +82,7 @@ pub enum VertexLayout {
 pub const MODEL_VERTEX_BYTES: usize = 16;
 
 /// One model vertex as stored for drawing: the quantized position, normal
-/// and texture coordinate of level-objects.md section 4.7.
+/// and texture coordinate of model-shading.md 1.
 pub fn model_vertex(position: [i16; 3], normal: [u8; 3], uv: [i16; 2]) -> [u8; MODEL_VERTEX_BYTES] {
     let mut v = [0; MODEL_VERTEX_BYTES];
     for (i, c) in position.iter().enumerate() {
@@ -302,7 +302,7 @@ pub struct Surface<T> {
     pub object_lod: bool,
     /// Base, second (light map), hemi map, detail.
     pub textures: [Option<T>; 4],
-    /// The cube environment map (`MODELEbB`, level-objects.md 5.2).
+    /// The cube environment map (`MODELEbB`, model-shading.md 4).
     pub env: Option<T>,
     /// The light elements, if the shader has them.
     pub light: Option<LightElement>,
@@ -359,7 +359,7 @@ pub struct WorldDraw {
     /// Bounding sphere: centre, radius.
     pub sphere: [f32; 4],
     pub tree: Option<TreeLight>,
-    /// An object's `L_dynamic_props` (level-objects.md 5.4).
+    /// An object's `L_dynamic_props` (model-shading.md 6).
     pub object: Option<[f32; 4]>,
     /// A draw's detail windows: `[first, count]` of
     /// [`ObjectGeometry::windows`], each window within the draw's range;
@@ -1181,7 +1181,7 @@ mod tests {
 
     #[test]
     fn fog_plane_and_ssa_min() {
-        // A camera at the origin looking along +z (start-position.md 7).
+        // A camera at the origin looking along +z (view-projection.md 2).
         let (n, z) = (0.2, 300.0);
         let mut p: Mat4 = [[0.0; 4]; 4];
         p[0][0] = 1.0;

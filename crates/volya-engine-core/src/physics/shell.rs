@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Shells from models and level records (docs/behavior/physics-shells.md,
-//! cited by section; `root` is docs/behavior/physics-shell-shapeless-root.md,
+//! cited by section; `resting` is docs/behavior/physics-resting.md,
 //! `bone` docs/formats/bone-physics.md): what a shell is made of (2), the
 //! build from the bone data (3), the physics types of physics objects (4),
 //! fixed bones and the physics keys (5), the hanging lamps' shells (5.3) and
@@ -23,7 +23,7 @@ use volya_engine_formats::model::{Bone, Header, Mat4, multiply, transform, trans
 use crate::collision::geometry::Vec3;
 
 /// Skeleton flags bit 0x01: when clear, the shell is activated switched
-/// off (1, 4.4; `root` 3.1).
+/// off (1, 4.4; `resting` 1).
 pub const SKELETON_ACTIVE: u8 = 0x01;
 /// The hanging lamp's light flag giving it a shell (5.3; `lamps` 3.4).
 pub const LAMP_PHYSICS: u16 = 0x01;
@@ -373,11 +373,11 @@ pub struct Shell {
     pub joints: Vec<Joint>,
     /// The object's transform as the shell holds it (conventions).
     pub transform: Mat4,
-    /// Activated switched off (`root` 3.1).
+    /// Activated switched off (`resting` 1).
     pub switched_off: bool,
-    /// Elements fixed after activation (`root` 1.4, 5.1, 5.2), in order.
+    /// Elements fixed after activation (4.4, 5.1, 5.2), in order.
     pub fixed: Vec<usize>,
-    /// The request for the exact solver (`root` 1.4).
+    /// The request for the exact solver (3.5).
     pub exact_solver: bool,
     /// No contacts with the level's static mesh (5.2).
     pub ignore_static: bool,
@@ -453,7 +453,7 @@ impl ShellModel {
     }
 
     /// Whether the model has motions: an animated skeleton (visual type 3,
-    /// `objects` 4.1; believed the condition of section 7).
+    /// docs/formats/skeleton-ogf.md 1; believed the condition of section 7).
     pub fn has_motions(&self) -> bool {
         self.header.kind == 3
     }
@@ -506,7 +506,7 @@ impl BoneState {
     }
 }
 
-/// The plain build from the bone data (3.2, 3.3; `root` 1.2): the shell
+/// The plain build from the bone data (3.2, 3.3, 3.5): the shell
 /// and, for each bone walked, the element it ended in.
 pub fn from_bones(
     model: &ShellModel,
@@ -531,7 +531,7 @@ pub fn from_bones(
         if !state.visible(i) {
             // 1: nothing of its own.
         } else if above.is_none() || (used.is_some() && physics.joint != JointType::Rigid) {
-            // 2: an element of its own (`root` 1.2: always for the root).
+            // 2: an element of its own (3.5: always for the root).
             let index = elements.len();
             let mut e = Element::new(at, Some(i), above, model.material(i, materials)?);
             if let Some(shape) = &used {

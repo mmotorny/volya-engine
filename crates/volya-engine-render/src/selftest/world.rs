@@ -492,8 +492,8 @@ pub async fn sky_shows_where_the_world_does_not(make: Make<'_>) -> Outcome {
 
 /// One object: a screen-covering triangle in model space at z = 0, moved
 /// to z = 1 by its transform, with the stored normal bytes `normal` and
-/// texture coordinate (0.75, 0.25), quantized as level-objects.md section
-/// 4.7 stores them.
+/// texture coordinate (0.75, 0.25), quantized as model-shading.md 1 stores
+/// them.
 fn object_geometry(normal: [u8; 3]) -> ObjectGeometry {
     let q = |v: f32| (v * 32767.0 / 12.0).floor() as i16;
     let uv = [

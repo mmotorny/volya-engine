@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Standalone model files (`.ogf`) of the level's spawned objects
-//! (docs/behavior/level-objects.md section 4): skeleton models (visual types
-//! 10 and 3) holding skinned meshes (types 5 and 4) with 1-link or 2-link
-//! vertices, bones with their bind pose, how the first renderer stores the
-//! vertices (4.7), and the object transform of section 3.4, whose rotation
-//! the bind pose shares.
+//! (docs/formats/skeleton-ogf.md, cited by section): skeleton models (visual
+//! types 10 and 3) holding skinned meshes (types 5 and 4) with 1-link or
+//! 2-link vertices, bones with their bind pose, how the first renderer
+//! stores the vertices (docs/behavior/model-shading.md 1), and the object
+//! transform of docs/behavior/object-visual-and-transform.md 4, whose
+//! rotation the bind pose shares.
 //!
 //! Chunks a model needs for drawing at rest are required; the description
 //! and motions (chunks 14, 15, 18, 19) are not read, the user data (chunk
@@ -19,7 +20,7 @@ use crate::chunks::Chunks;
 use crate::level_geom::{ProgressiveMesh, parse_progressive_mesh};
 use crate::packet::{Reader, invalid};
 
-/// Top-level and child chunk ids (sections 4.3, 4.5).
+/// Top-level and child chunk ids (sections 3, 5).
 pub const HEADER_CHUNK: u32 = 1;
 pub const TEXTURE_CHUNK: u32 = 2;
 pub const VERTICES_CHUNK: u32 = 3;
@@ -28,10 +29,10 @@ pub const DETAIL_WINDOWS_CHUNK: u32 = 6;
 pub const CHILDREN_CHUNK: u32 = 9;
 pub const BONE_NAMES_CHUNK: u32 = 13;
 pub const BONE_DATA_CHUNK: u32 = 16;
-/// LTX text (section 4.3; read by torches, docs/behavior/torch.md 1.2).
+/// LTX text (section 3; read by torches, docs/behavior/torch.md 1.2).
 pub const USER_DATA_CHUNK: u32 = 17;
 
-/// Vertex formats of skinned meshes (section 4.6).
+/// Vertex formats of skinned meshes (section 6).
 pub const ONE_LINK: u32 = 0x1207_1980;
 pub const TWO_LINK: u32 = 0x240E_3300;
 
@@ -44,16 +45,16 @@ const TWO_LINK_SIZE: usize = 64;
 /// Row-vector convention (`[p 1] · M`), rows stored in order.
 pub type Mat4 = [[f32; 4]; 4];
 
-/// Visual types of a model file (section 4.1).
+/// Visual types of a model file (section 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ModelType {
-    /// Type 3: draws exactly like a skeleton model at rest (section 4.3).
+    /// Type 3: draws exactly like a skeleton model at rest (model-shading.md 2).
     AnimatedSkeleton = 3,
     /// Type 10.
     Skeleton = 10,
 }
 
-/// Visual types of a skeleton model's child meshes (section 4.1).
+/// Visual types of a skeleton model's child meshes (section 1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MeshType {
     /// Type 4: with detail windows (chunk 6).
@@ -63,12 +64,12 @@ pub enum MeshType {
 }
 
 /// Chunk 1 of a model file or a child mesh, the layout of ogf.md section 2.
-/// Bounds are in model space (bind pose, section 4.2).
+/// Bounds are in model space (bind pose, section 2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Header {
     /// Byte 1 as stored.
     pub kind: u8,
-    /// Bytes 2–3: 0 in every model file and not used (section 4.1).
+    /// Bytes 2–3: 0 in every model file and not used (section 1).
     pub shader: u16,
     pub box_min: [f32; 3],
     pub box_max: [f32; 3],
@@ -96,7 +97,7 @@ impl Header {
     }
 }
 
-/// Which bones a mesh's vertices link to (section 4.6).
+/// Which bones a mesh's vertices link to (section 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Links {
     /// Format 0x12071980: one bone per vertex.
@@ -105,7 +106,7 @@ pub enum Links {
     Two,
 }
 
-/// One vertex of a skinned mesh as stored (section 4.6). 1-link vertices
+/// One vertex of a skinned mesh as stored (section 6). 1-link vertices
 /// have `bones = [b, b]` and weight 0.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SkinnedVertex {
@@ -122,7 +123,7 @@ pub struct SkinnedVertex {
     pub weight: f32,
 }
 
-/// A child mesh of a skeleton model (section 4.5).
+/// A child mesh of a skeleton model (section 5).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SkinnedMesh {
     pub header: Header,
@@ -140,7 +141,7 @@ pub struct SkinnedMesh {
 
 impl SkinnedMesh {
     /// The indices of the full-detail mesh: all of them (type 5), or the
-    /// window of detail level 0 (type 4, section 4.9).
+    /// window of detail level 0 (type 4, model-shading.md 3).
     pub fn full_detail_indices(&self) -> &[u16] {
         match self.windows.as_ref().and_then(|w| w.steps.first()) {
             Some(s) => {
@@ -179,7 +180,7 @@ impl SkinnedMesh {
             .unwrap_or(0)
     }
 
-    /// How the first renderer stores the mesh's vertices (section 4.7) on a
+    /// How the first renderer stores the mesh's vertices (model-shading.md 1) on a
     /// device reporting `constants` vertex shader constants. Software
     /// skinning replaces the hardware 1-link and 2-link modes only (our
     /// reading of "instead of either hardware mode").
@@ -202,7 +203,7 @@ impl SkinnedMesh {
     }
 }
 
-/// The modes of section 4.7.
+/// The modes of model-shading.md 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RenderMode {
     SingleBone,
@@ -214,7 +215,7 @@ pub enum RenderMode {
     Software,
 }
 
-/// A bone of chunks 13 and 16 (section 4.4).
+/// A bone of chunks 13 and 16 (section 4).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bone {
     /// Lower-case in the data.
@@ -233,7 +234,7 @@ pub struct Bone {
     pub physics: BonePhysics,
 }
 
-/// A skeleton model (types 10 and 3, section 4.3).
+/// A skeleton model (types 10 and 3, section 3).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub header: Header,
@@ -245,7 +246,7 @@ pub struct Model {
 
 impl Model {
     /// Parses a model file. Types other than 10 and 3 are not models of
-    /// spawned objects (section 4.1: no record references them).
+    /// spawned objects (section 1: no record references them).
     pub fn parse(file: &[u8]) -> io::Result<Self> {
         let chunks = Chunks::parse(file)?;
         let header = Header::parse(&chunks.require(HEADER_CHUNK, "model")?.content()?)?;
@@ -293,7 +294,7 @@ impl Model {
         self.bones.iter().position(|b| b.name == name)
     }
 
-    /// Each bone's model-space bind matrix `B` (section 4.4).
+    /// Each bone's model-space bind matrix `B` (section 4).
     pub fn bind_pose(&self) -> io::Result<Vec<Mat4>> {
         bind_pose(&self.bones)
     }
@@ -331,7 +332,7 @@ pub fn user_data(file: &[u8]) -> io::Result<Option<Vec<u8>>> {
 }
 
 impl SkinnedMesh {
-    /// Parses one child mesh (section 4.5).
+    /// Parses one child mesh (section 5).
     pub fn parse(data: &[u8]) -> io::Result<Self> {
         let chunks = Chunks::parse(data)?;
         let header = Header::parse(&chunks.require(HEADER_CHUNK, "skinned mesh")?.content()?)?;
@@ -389,7 +390,7 @@ impl SkinnedMesh {
     }
 }
 
-/// Chunk 3: `u32` format, `u32` count, then the records (section 4.6).
+/// Chunk 3: `u32` format, `u32` count, then the records (section 6).
 fn parse_vertices(b: &[u8]) -> io::Result<(Links, Vec<SkinnedVertex>)> {
     let mut r = Reader::new(b);
     let format = r.u32()?;
@@ -478,7 +479,7 @@ fn parse_indices(b: &[u8]) -> io::Result<Vec<u16>> {
         .collect())
 }
 
-/// Chunks 13 and 16 (section 4.4): one root, every parent named, chunk 16
+/// Chunks 13 and 16 (section 4): one root, every parent named, chunk 16
 /// one record per bone consumed exactly.
 fn parse_bones(names: &[u8], data: &[u8]) -> io::Result<Vec<Bone>> {
     let mut r = Reader::new(names);
@@ -546,7 +547,7 @@ fn check_breakable(bones: &mut [Bone], meshes: &[SkinnedMesh]) {
     bone_physics::check_breakable(&parents, &mut physics, used);
 }
 
-/// The rotation of section 3.4 for angles `a` = (a₀, a₁, a₂), as rows.
+/// The rotation of object-visual-and-transform.md 4 for angles `a` = (a₀, a₁, a₂), as rows.
 pub fn rotation(a: [f32; 3]) -> [[f32; 3]; 3] {
     let (sx, cx) = a[0].sin_cos();
     let (sy, cy) = a[1].sin_cos();
@@ -559,8 +560,8 @@ pub fn rotation(a: [f32; 3]) -> [[f32; 3]; 3] {
 }
 
 /// `[[R, 0], [p, 1]]` with `R` = [`rotation`] of `angles`: an object's
-/// transform from its spawn position and angles (section 3.4), and a bone's
-/// local bind matrix at negated angles (section 4.4).
+/// transform from its spawn position and angles (object-visual-and-transform.md 4), and a bone's
+/// local bind matrix at negated angles (section 4).
 pub fn transform(position: [f32; 3], angles: [f32; 3]) -> Mat4 {
     let r = rotation(angles);
     [
@@ -582,7 +583,7 @@ pub fn transform_point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
 }
 
 /// Each bone's model-space bind matrix: `B = L · B(parent)`, `B(root) =
-/// L(root)`, `L = [[R(−r₀, −r₁, −r₂), 0], [t, 1]]` (section 4.4). Fails on
+/// L(root)`, `L = [[R(−r₀, −r₁, −r₂), 0], [t, 1]]` (section 4). Fails on
 /// a parent cycle.
 pub fn bind_pose(bones: &[Bone]) -> io::Result<Vec<Mat4>> {
     let local: Vec<Mat4> = bones
@@ -618,17 +619,17 @@ pub fn bind_pose(bones: &[Bone]) -> io::Result<Vec<Mat4>> {
         .collect())
 }
 
-/// 32767 / 12 and 32767 / 16 in single precision (section 4.7).
+/// 32767 / 12 and 32767 / 16 in single precision (model-shading.md 1).
 const POSITION_SCALE: f32 = 32767.0 / 12.0;
 const UV_SCALE: f32 = 32767.0 / 16.0;
-/// The smallest normal f32, the normalisation threshold of section 4.7.
+/// The smallest normal f32, the normalisation threshold of model-shading.md 1.
 const TINY: f32 = 1.175_494_4e-38;
 
 fn clamp_i16(v: f32) -> i16 {
     v.floor().clamp(-32768.0, 32767.0) as i16
 }
 
-/// A position component as the hardware modes store it (section 4.7).
+/// A position component as the hardware modes store it (model-shading.md 1).
 pub fn quantize_position(p: f32) -> i16 {
     clamp_i16(p * POSITION_SCALE)
 }
@@ -891,7 +892,7 @@ mod tests {
 
     #[test]
     fn rotation_rows() {
-        // Section 7.2, object 79: angles (0, 4.712372, 0).
+        // object-visual-and-transform.md 5.2, object 79: angles (0, 4.712372, 0).
         let r = rotation([0.0, 4.712_372, 0.0]);
         assert!((r[0][0] - -0.000_017).abs() < 1e-6 && (r[0][2] - -1.0).abs() < 1e-6);
         assert!((r[2][0] - 1.0).abs() < 1e-6 && (r[2][2] - -0.000_017).abs() < 1e-6);

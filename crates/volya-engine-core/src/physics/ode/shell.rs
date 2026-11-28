@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A [`Shell`] activated in an [`OdeSolver`] (docs/behavior/physics-shells.md,
-//! cited by section; `root` is docs/behavior/physics-shell-shapeless-root.md):
-//! its elements' bodies placed and given their masses (2.1, 2.3), the
-//! elements without geometry fixed (`root` 1.3), its joints made after them
-//! (`root` 2.1), its fixed bones fixed again (`root` 1.4), switched off when
-//! asked (`root` 3.1), woken by a joint's motor (`root` 3.1), and the
-//! elements' motion parameters at each step (2.4).
+//! cited by section; `joints` is docs/behavior/physics-joints.md, `resting`
+//! docs/behavior/physics-resting.md): its elements' bodies placed and given
+//! their masses (2.1, 2.3), the elements without geometry fixed (5.1), its
+//! joints made after them (3.3), its fixed bones fixed again (4.4), switched
+//! off when asked (`resting` 1), woken by a joint's motor (`resting` 2), and
+//! the elements' motion parameters at each step (2.4).
 
 use std::ffi::c_int;
 
@@ -72,11 +72,11 @@ pub mod param {
     pub const STOP_CFM: i32 = 8;
 }
 
-/// A fixed element's mass (`root` 1.3).
+/// A fixed element's mass (5.1).
 pub const FIXED_MASS: f32 = 1e8;
 /// The sphere a fixed element's mass is made from before it is adjusted:
 /// its radius is open (TODO(#947)); nothing acts on a fixed body
-/// (`root` 1.3), so it changes nothing seen.
+/// (5.1), so it changes nothing seen.
 const FIXED_SPHERE: (f32, f32) = (1.0, 1.0);
 
 /// `bone` 3.3: a joint's (or its stops') error reduction and constraint
@@ -137,11 +137,11 @@ pub struct OdeShell {
 }
 
 impl OdeSolver {
-    /// Activates `shell` in a group of its own (2.1; `root` 2.1, 1.4, 3.1):
+    /// Activates `shell` in a group of its own (2.1; 3.3, 4.4, `resting` 1):
     /// every element's body first, then the joints, then the fixed bones'
     /// elements fixed again, with the world's parameters `params` in force
     /// for the joints' defaults (`library` 5.2, item 3). The group requests
-    /// the exact solver when the shell does (`root` 1.4).
+    /// the exact solver when the shell does (3.5).
     pub fn activate_shell(&mut self, params: &Params, shell: &Shell) -> OdeShell {
         let group = self.add_group();
         let world = self.group_mut(group.0).world;
@@ -198,7 +198,7 @@ impl OdeSolver {
             let mut dir = [0.0; 3];
             dir[axis as usize] = 1.0;
             let mut along = turn(frame, dir);
-            // `root` 2.1: a first element fixed (or without a body) gives no
+            // 3.3: a first element fixed (or without a body) gives no
             // first body and the negated axis.
             let first = &elements[j.first];
             let first = if first.fixed {
@@ -225,7 +225,7 @@ impl OdeSolver {
                 dJointSetHingeParam(joint, param::STOP_CFM, stop_cfm);
                 // The joint's own error reduction is PH-7's (TODO(#750)).
                 dJointSetHingeParam(joint, param::CFM, cfm);
-                // `root` 2.3: no motor at creation.
+                // `joints` 1: no motor at creation.
                 dJointSetHingeParam(joint, param::F_MAX, 0.0);
                 dJointSetHingeParam(joint, param::VEL, 0.0);
                 joint
@@ -303,7 +303,7 @@ impl OdeSolver {
         })
     }
 
-    /// A hinge's angle (the library's getter, `root` 2.2).
+    /// A hinge's angle (the library's getter, `joints` 2.2).
     pub fn hinge_angle(&self, joint: JointId) -> Option<f32> {
         self.joints.contains_key(&joint).then(|| {
             // SAFETY: the joint is this solver's.
@@ -379,7 +379,7 @@ fn basis(z: Vec3) -> [Vec3; 3] {
     [x, cross(z, x), z]
 }
 
-/// Fixes an element (`root` 1.3): a sphere mass adjusted to
+/// Fixes an element (5.1): a sphere mass adjusted to
 /// [`FIXED_MASS`], gravity off, zero velocities, force and torque.
 fn fix(e: &mut ElementBody) {
     e.fixed = true;
@@ -503,7 +503,7 @@ impl OdeShell {
         Some(m)
     }
 
-    /// Wakes it (`root` 3.1): every body switched on. The world makes it
+    /// Wakes it (`resting` 2): every body switched on. The world makes it
     /// active.
     pub fn wake(&mut self, solver: &OdeSolver) {
         if !solver.live(self.serial, self.group) {
@@ -617,7 +617,7 @@ impl Object for OdeShell {
     }
 
     /// Takes effect at its next solving (a resting shell is not stepped
-    /// before); a fixed element keeps its gravity off (`root` 1.3).
+    /// before); a fixed element keeps its gravity off (5.1).
     fn set_gravity(&mut self, on: bool) {
         self.gravity = Some(on);
     }

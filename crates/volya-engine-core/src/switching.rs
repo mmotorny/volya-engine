@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Which of the level's objects are online at the first frame of a New
-//! Game (docs/behavior/level-objects.md section 2): the switch distances of
+//! Game (docs/behavior/offline-simulation.md 6.5): the switch distances of
 //! `[alife]`, each object's switch capability (the engine's predicates and
 //! the shipped scripts' replacements) and the rule, evaluated once at the
-//! start positions (section 2.4).
+//! start positions (6.5.3).
 //!
 //! No scripts run here. The scripts' inputs at a New Game are taken as
-//! section 2.5 states them: no job-online value is set, the actor holds no
+//! section 9.1 states them: no job-online value is set, the actor holds no
 //! information portion, so no `[spawner]` condition holds.
 
 use std::io;
@@ -21,7 +21,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// State flags bit: the object can switch online (section 2.3).
+/// State flags bit: the object can switch online (6.5.2).
 pub const STATE_SWITCH_ONLINE: u32 = 0x02;
 /// State flags bit: the object can switch offline.
 pub const STATE_SWITCH_OFFLINE: u32 = 0x04;
@@ -29,20 +29,20 @@ pub const STATE_SWITCH_OFFLINE: u32 = 0x04;
 pub const LAMP_FIRST_RENDERER: u16 = 0x04;
 /// … for the second renderer.
 pub const LAMP_SECOND_RENDERER: u16 = 0x08;
-/// Job-online mode meaning "not set" (section 2.5: 2 in every record).
+/// Job-online mode meaning "not set" (9.1: 2 in every record).
 const JOB_ONLINE_NOT_SET: u8 = 2;
 /// Job-online mode followed by a condition list.
 const JOB_ONLINE_CONDITION_LIST: u8 = 3;
-/// The sections of the scripted artefacts with their own rule (2.5).
+/// The sections of the scripted artefacts with their own rule (6.5.4).
 const ELECTRA_ARTEFACTS: [&str; 3] = [
     "af_electra_flash",
     "af_electra_moonlight",
     "af_electra_sparkler",
 ];
-/// The electra artefacts' distance threshold, metres (2.5).
+/// The electra artefacts' distance threshold, metres (6.5.4).
 const ELECTRA_DISTANCE: f32 = 50.0;
 
-/// The online and offline distances (section 2.2).
+/// The online and offline distances (6.5.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitchDistances {
     pub online: f32,
@@ -69,7 +69,7 @@ impl SwitchDistances {
     }
 }
 
-/// What the scripted replacements read at the start (section 2.5).
+/// What the scripted replacements read at the start (9.1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StartState {
     /// The actor's position.
@@ -78,8 +78,8 @@ pub struct StartState {
     pub hour: u32,
 }
 
-/// Whose scripted replacement of the predicates a record takes (section
-/// 2.5), by its class id and section.
+/// Whose scripted replacement of the predicates a record takes
+/// (6.5.4), by its class id and section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scripted {
     /// `AI_STL_S`.
@@ -155,7 +155,7 @@ impl Candidate {
         }
     }
 
-    /// The renderer match `m` of section 2.3 with the first renderer in
+    /// The renderer match `m` of 6.5.2 with the first renderer in
     /// use: true except for a hanging lamp whose light flags lack bit 0x04.
     /// A lamp with neither renderer bit is the game's fatal error (the
     /// owner names the object).
@@ -170,17 +170,17 @@ impl Candidate {
     }
 
     /// One of the electra artefacts, with a scripted *on* of their own
-    /// (section 2.5).
+    /// (6.5.4).
     pub fn is_electra(&self) -> bool {
         self.scripted == Scripted::Electra
     }
 
-    /// The engine's "can switch online" (section 2.3).
+    /// The engine's "can switch online" (6.5.2).
     pub fn engine_on(&self, m: bool) -> bool {
         m && self.state_flags & STATE_SWITCH_ONLINE != 0
     }
 
-    /// The engine's "can switch offline" (section 2.3).
+    /// The engine's "can switch offline" (6.5.2).
     pub fn engine_off(&self, m: bool) -> bool {
         use Kind::*;
         let base = !m || self.state_flags & STATE_SWITCH_OFFLINE != 0;
@@ -196,7 +196,7 @@ impl Candidate {
     }
 
     /// Both predicates `(on, off)` of an offline object at a New Game: the
-    /// engine's, or the shipped scripts' replacements (section 2.5), with
+    /// engine's, or the shipped scripts' replacements (6.5.4), with
     /// the scripts' distances from the record's position.
     pub fn predicates(&self, start: &StartState) -> io::Result<(bool, bool)> {
         self.predicates_in(start, false, self.position)
@@ -204,8 +204,8 @@ impl Candidate {
 
     /// Both predicates `(on, off)` of the object, `online` or not, the
     /// scripts' distances measured from `node`, the position of its
-    /// level-graph node (section 2.5). A `[spawner]` condition never holds
-    /// (section 2.5: each requires an information portion the actor lacks
+    /// level-graph node (6.5.4). A `[spawner]` condition never holds
+    /// (9.1: each requires an information portion the actor lacks
     /// at the start; we do not evaluate condition lists, and take any for
     /// false). The actor exists and is alive (our choice: the player's
     /// death is not modelled).
@@ -224,7 +224,7 @@ impl Candidate {
             // The job value if set; else the engine's without a spawner;
             // else the condition (false), which while offline also needs
             // the engine's. A stalker's `dont_spawn_online` field is a
-            // script variable no shipped script sets (section 2.5), so it
+            // script variable no shipped script sets (6.5.4), so it
             // is taken as false (our omission: no scripts run here).
             let on = match job {
                 Some(j) => j,
@@ -261,7 +261,7 @@ impl Candidate {
     }
 
     /// Whether the object, of the actor's level and offline at the start,
-    /// is online at the first visible frame: one evaluation of section 2.4
+    /// is online at the first visible frame: one evaluation of 6.5.3
     /// at the stored positions, `on` and (not `off` or distance ≤ the
     /// online distance).
     pub fn online_at_start(
@@ -274,7 +274,7 @@ impl Candidate {
     }
 }
 
-/// The rule of section 2.4: whether an object, `online` or not, is online
+/// The rule of 6.5.3: whether an object, `online` or not, is online
 /// after one evaluation with predicates `on` and `off` at `distance` from
 /// the actor.
 pub fn switched(
@@ -292,7 +292,7 @@ pub fn switched(
 
 /// A stalker's or monster's job-online value: `None` when not set. Modes
 /// 0 and 1 are taken for false and true, and a condition list for false
-/// (our reading and choice: section 2.5 names the values, not their codes,
+/// (our reading and choice: 6.5.4 names the values, not their codes,
 /// and no record at a New Game has one set).
 fn job_online(object: &Object) -> Option<bool> {
     let script = match object {

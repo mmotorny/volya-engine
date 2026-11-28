@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! Environment modifiers, `levels\<level>\level.env_mod`, only as far as the
-//! camera's far plane needs (docs/behavior/start-position.md, section 7.1):
+//! camera's far plane needs (docs/behavior/view-projection.md 2.1):
 //! one 76-byte chunk of 19 floats per modifier (docs/behavior/sky.md 9.1).
 
 use std::io;

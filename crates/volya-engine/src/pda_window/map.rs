@@ -272,7 +272,7 @@ pub struct MapPlayer<'a> {
     pub level: &'a str,
     /// World x and z.
     pub position: [f32; 2],
-    /// The camera's yaw (start-position.md).
+    /// The camera's yaw (world-coordinates.md 2).
     pub yaw: f32,
 }
 

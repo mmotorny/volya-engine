@@ -217,8 +217,8 @@ impl<'a> Characters<'a> {
         Ok(&self.specific_characters[&index])
     }
 
-    /// A Trader-like block's specific character (level-objects.md 3.2,
-    /// item 3; player-state.md 2.2): the block's own if named, else its
+    /// A Trader-like block's specific character (object-visual-and-transform.md
+    /// 2, item 3; player-state.md 2.2): the block's own if named, else its
     /// profile's. A profile that names none chooses at random among the
     /// specific characters of its class (CH-2); we give none then.
     // TODO(#338): the random choice.

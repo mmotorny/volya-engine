@@ -379,7 +379,7 @@ pub fn write_plan(out: &Path) -> Result {
 
 /// The view matrix of steering-the-original.md section 4.2, `[r 0; u 0;
 /// d 0; e 1]` inverted, with the direction `d` and up `u` of yaw and pitch
-/// (start-position.md section 5: `R · (0, 0, 1)` and `R · (0, 1, 0)`, roll
+/// (world-coordinates.md 3: `R · (0, 0, 1)` and `R · (0, 1, 0)`, roll
 /// 0) and `r = u × d`.
 fn view_matrix(e: [f32; 3], yaw: f32, pitch: f32) -> [[f32; 4]; 4] {
     let (sy, cy) = yaw.sin_cos();

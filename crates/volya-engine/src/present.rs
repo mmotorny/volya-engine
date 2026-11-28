@@ -41,7 +41,7 @@ use volya_engine_formats::ui::{UI_HEIGHT, UI_WIDTH};
 use volya_engine_formats::video::TheoraVideo;
 
 /// `r1_lmodel_lerp` before set: the shipped `user.ltx`'s and the console's
-/// default (level-objects.md 5.5).
+/// default (model-shading.md 7).
 pub const LMODEL_LERP: f32 = 0.1;
 
 /// Most video frames decoded per video in one call when playback lags.

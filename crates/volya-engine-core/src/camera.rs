@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The player's first-person camera at the start of a game
-//! (docs/behavior/start-position.md, sections 1 and 4–7): eye height, heading
-//! and pitch from the spawn angles, view and projection matrices, far plane.
+//! The player's first-person camera at the start of a game: eye height
+//! (docs/behavior/player-movement.md 7), heading and pitch from the spawn
+//! angles (docs/behavior/world-coordinates.md 1 – 3), view and projection
+//! matrices and far plane (docs/behavior/view-projection.md 1.1, 2).
 //!
-//! World coordinates are the level's: metres, +y up, left-handed (section 1).
+//! World coordinates are the level's: metres, +y up, left-handed (world-coordinates.md 1).
 //! Matrices use the row-vector convention, `p · M`, stored row by row.
 
 use std::io;
 
 use crate::config::{Section, value};
 
-/// Vertical field of view, fixed by the game (section 7).
+/// Vertical field of view, fixed by the game (view-projection.md 3.1).
 pub const FOV_Y_DEGREES: f32 = 67.5;
-/// Near plane (section 7).
+/// Near plane (view-projection.md 3.1).
 pub const NEAR: f32 = 0.2;
 /// Near plane while the eye is within [`NEAR_CLEARANCE`] of collision.
 pub const NEAR_CLOSE: f32 = 0.01;
@@ -23,7 +24,7 @@ pub const NEAR_CLEARANCE: f32 = 0.2;
 /// The first-person camera's own aspect value.
 pub const CAMERA_ASPECT: f32 = 1.0;
 /// Starting values of the smoothed field of view (degrees), aspect factor
-/// and far plane when the camera is created (section 7.2).
+/// and far plane when the camera is created (view-projection.md 2.2).
 pub const INITIAL_FOV_DEGREES: f32 = 90.0;
 pub const INITIAL_ASPECT: f32 = 1.0;
 pub const INITIAL_FAR: f32 = 100.0;
@@ -49,7 +50,7 @@ fn normalize(a: Vec3) -> Vec3 {
 }
 
 /// What the eye height needs from the actor's configuration section
-/// (section 4.2).
+/// (player-movement.md 7).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ActorBody {
     pub camera_height_factor: f32,
@@ -87,7 +88,7 @@ impl ActorBody {
     }
 }
 
-/// Camera angles in radians (section 5).
+/// Camera angles in radians (world-coordinates.md 2).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Angles {
     pub yaw: f32,
@@ -136,7 +137,7 @@ fn mul3(a: [[f32; 3]; 3], b: [[f32; 3]; 3]) -> [[f32; 3]; 3] {
     out
 }
 
-/// The view matrix from eye `e`, direction `d` and up `u` (section 6):
+/// The view matrix from eye `e`, direction `d` and up `u` (view-projection.md 1.1):
 /// view-space x = (p − e)·r, y = (p − e)·u', z = (p − e)·d with
 /// `u' = normalize(u − d (u·d))` and `r = u' × d`.
 pub fn view_matrix(e: Vec3, d: Vec3, u: Vec3) -> Mat4 {
@@ -152,7 +153,7 @@ pub fn view_matrix(e: Vec3, d: Vec3, u: Vec3) -> Mat4 {
 }
 
 /// The aspect factor: `(height ÷ 2) / (width ÷ 2)`, halves rounded down to
-/// integers, times [`CAMERA_ASPECT`] (section 7). Halves below 1 count as 1,
+/// integers, times [`CAMERA_ASPECT`] (view-projection.md 2). Halves below 1 count as 1,
 /// so a target narrower than 2 pixels gives a finite factor (our choice; the
 /// spec does not cover it).
 pub fn aspect_factor(width: u32, height: u32) -> f32 {
@@ -160,7 +161,7 @@ pub fn aspect_factor(width: u32, height: u32) -> f32 {
 }
 
 /// The projection matrix for vertical field of view `fov_y` (radians),
-/// aspect factor `aspect`, near `n` and far `z` (section 7). Maps view space
+/// aspect factor `aspect`, near `n` and far `z` (view-projection.md 2). Maps view space
 /// to x, y in −1 … 1 (+x right, +y up) and depth 0 (near) … 1 (far) after
 /// division by w.
 pub fn projection(fov_y: f32, aspect: f32, n: f32, z: f32) -> Mat4 {
@@ -174,7 +175,7 @@ pub fn projection(fov_y: f32, aspect: f32, n: f32, z: f32) -> Mat4 {
 }
 
 /// The weight of an environment modifier at `camera`: `(1 − δ/ρ) × π` when
-/// the distance δ to its centre is below its radius ρ (section 7.1).
+/// the distance δ to its centre is below its radius ρ (view-projection.md 2.1).
 pub fn modifier_weight(centre: Vec3, radius: f32, power: f32, camera: Vec3) -> Option<f32> {
     let d = [
         camera[0] - centre[0],
@@ -185,7 +186,7 @@ pub fn modifier_weight(centre: Vec3, radius: f32, power: f32, camera: Vec3) -> O
     (distance < radius).then(|| (1.0 - distance / radius) * power)
 }
 
-/// The far plane (section 7.1): the two weather sections' `far_plane` values
+/// The far plane (view-projection.md 2.1): the two weather sections' `far_plane` values
 /// blended by `t`, with the applying modifiers' `(weight, far_plane)` pairs,
 /// scaled by `rs_vis_distance`.
 pub fn far_plane(
@@ -204,12 +205,12 @@ pub fn far_plane(
 }
 
 /// One frame of the smoothing of field of view, aspect and far plane
-/// (section 7.2): `value + k (target − value)`, `k = clamp(10 × dt, 0, 1)`.
+/// (view-projection.md 2.2): `value + k (target − value)`, `k = clamp(10 × dt, 0, 1)`.
 pub fn smooth(value: f32, target: f32, dt: f32) -> f32 {
     value + (10.0 * dt).clamp(0.0, 1.0) * (target - value)
 }
 
-/// Camera inertia (section 6): `old × cam_inert + computed × (1 − cam_inert)`
+/// Camera inertia (view-projection.md 1.1): `old × cam_inert + computed × (1 − cam_inert)`
 /// per component, for position and direction alike.
 pub fn inert(old: Vec3, computed: Vec3, cam_inert: f32) -> Vec3 {
     [0, 1, 2].map(|i| old[i] * cam_inert + computed[i] * (1.0 - cam_inert))
@@ -241,7 +242,7 @@ mod tests {
         .direction_up();
         assert!(d[1] < 0.0, "positive pitch looks down");
         assert!(close(&u, &[0.0, 0.3f32.cos(), 0.3f32.sin()], 1e-6));
-        // The closed form of section 5 for roll 0.
+        // The closed form of world-coordinates.md 3 for roll 0.
         let a = Angles {
             yaw: 1.0,
             pitch: -0.4,

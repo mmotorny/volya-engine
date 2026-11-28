@@ -255,8 +255,8 @@ impl<O> Active<'_, O> {
         }
     }
 
-    /// Makes the object at `i` active (physics-contacts.md 1.2;
-    /// physics-shell-shapeless-root.md 4.2): off the resting list (4.4) and
+    /// Makes the object at `i` active (physics-contacts.md 1.2, 1.5): off
+    /// the resting list (physics-resting.md) and
     /// appended to the end of the active objects. Returns its position.
     pub fn wake(&mut self, i: usize) -> usize {
         let id = self.entries[i].id;
@@ -440,7 +440,7 @@ impl<O: Object, S: Solver<O>> World<O, S> {
     }
 
     /// Adds an object, not stepped until [`World::activate`]; it is in the
-    /// collision index (physics-shell-shapeless-root.md 3.1).
+    /// collision index (physics-contacts.md 1.5).
     pub fn add(&mut self, object: O) -> ObjectId {
         let id = ObjectId(self.next_id);
         self.next_id += 1;
@@ -495,7 +495,7 @@ impl<O: Object, S: Solver<O>> World<O, S> {
     /// Makes an object active, also one set aside while frozen (5); it
     /// leaves the resting list (4.4). One not active is appended to the end
     /// of the active objects, as a contact's wake is
-    /// (physics-shell-shapeless-root.md 4.2; our reading for every
+    /// (physics-contacts.md 1.2, 1.5; our reading for every
     /// activation).
     pub fn activate(&mut self, id: ObjectId) -> Result<(), Fatal> {
         let Some(i) = self.objects.iter().position(|e| e.id == id) else {

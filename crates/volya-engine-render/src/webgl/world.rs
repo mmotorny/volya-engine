@@ -52,7 +52,7 @@ const TREE: [Attribute; 5] = [
     attribute(3, VertexFormat::Unorm8x4, 20),
     attribute(4, VertexFormat::Sint16x4, 24),
 ];
-/// The objects' models' (level-objects.md section 4.7).
+/// The objects' models' (model-shading.md 1).
 const MODEL: [Attribute; 3] = [
     attribute(0, VertexFormat::Sint16x4, 0),
     attribute(1, VertexFormat::Unorm8x4, 8),

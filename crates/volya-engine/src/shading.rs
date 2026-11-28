@@ -4,7 +4,7 @@
 //! How a level's shader table entries resolve to surfaces: programs,
 //! textures and states of the normal pass (docs/behavior/static-shading.md
 //! sections 3–5, 7, 8), and the objects' model shaders, resolved the same
-//! way (docs/behavior/level-objects.md section 5.2; element 1, which a
+//! way (docs/behavior/model-shading.md 4; element 1, which a
 //! renderer without the projected light texture draws every object with).
 //!
 //! Scripted definitions (`shaders\r1\*.s`) are Lua; no Lua runs here. The
@@ -258,7 +258,7 @@ impl ShaderLibrary<'_> {
                 s.detail_scale = association.map(|a| a.scale);
                 s
             }
-            // Element 1 of the model classes (level-objects.md 5.2): no
+            // Element 1 of the model classes (model-shading.md 4): no
             // detail, fog on, depth test and write on.
             "MODEL   " => {
                 let mut s = surface(Program::Model, [t0, None, None, None]);
@@ -313,7 +313,7 @@ impl ShaderLibrary<'_> {
 }
 
 /// The cube map `E` of a `MODELEbB` definition: its texture `Name` after
-/// the common block's (level-objects.md 5.2), lower-cased without an
+/// the common block's (model-shading.md 4), lower-cased without an
 /// extension like every texture name.
 fn environment_map(def: &Definition) -> Option<String> {
     def.properties
@@ -358,7 +358,7 @@ fn scripted(module: &str, t0: Option<String>) -> Result<Surface<String>, NotDraw
                 "billboards are drawn from their groups".into(),
             ));
         }
-        // The objects' scripted model shaders (level-objects.md 5.2).
+        // The objects' scripted model shaders (model-shading.md 4).
         "models_selflight" | "models_selflightl" => Surface {
             light: scripted_light(LightProgram::Model),
             ..surface(Program::ModelSelfLight, base)
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn model_shaders() {
-        // level-objects.md 5.2: element 1 of MODEL and MODELEbB.
+        // model-shading.md 4: element 1 of MODEL and MODELEbB.
         let s = resolve("models\\model/wood\\wood_walls8").unwrap();
         assert_eq!(
             (s.program, s.blend, s.alpha_ref, s.fog, s.depth_write),

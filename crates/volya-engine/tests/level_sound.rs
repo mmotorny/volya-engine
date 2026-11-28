@@ -42,7 +42,7 @@ use volya_engine::level_sound::{LevelSoundData, LevelSounds, SoundRun};
 use volya_engine_formats::ui::Resolution;
 
 const SIZE: Resolution = Resolution::new(1024, 768);
-/// The start eye (start-position.md).
+/// The start eye (player-movement.md 7.1).
 const EYE: Vec3 = [-246.726_3, -23.263_26, -134.433_87];
 
 fn distance(a: Vec3, b: Vec3) -> f32 {

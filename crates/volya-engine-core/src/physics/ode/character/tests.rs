@@ -223,7 +223,7 @@ fn the_player_pushes_and_wakes_the_leaf() {
 }
 
 /// 1.1: away from the leaf, no contacts; the outer sphere alone only sets
-/// "blocked" and does not wake it (physics-shell-shapeless-root.md 4.2).
+/// "blocked" and does not wake it (physics-contacts.md 1.2, 7 item 5).
 #[test]
 fn the_outer_sphere_only_blocks() {
     let mut s = setup(false);

@@ -171,7 +171,7 @@ pub enum Place {
     /// every [`SKIP_EVERY`] frames while it plays), at its frame
     /// [`TITLE_MENU_FRAME`].
     TitleMenu,
-    /// A New Game's level (`l01_escape`, start-position.md) seen by
+    /// A New Game's level (`l01_escape`, view-projection.md 2.3) seen by
     /// `camera` at its frame of play `seconds` at [`FRAME_MS`] (frame 1 the
     /// original's first after its New Game intro, ours the level's first
     /// update; [`Place::since_first_ms`] of updates later). The time of day and the
@@ -221,14 +221,14 @@ pub const PLAY_GLOBAL_MS: u64 = 120_000 + 28 * FRAME_MS as u64;
 /// Where a New Game's view is seen from.
 #[derive(Clone, Copy, Debug)]
 pub enum Camera {
-    /// The player's own view where the New Game puts it (start-position.md):
+    /// The player's own view where the New Game puts it (view-projection.md 2.3):
     /// no camera track. The original draws its HUD over every New Game view,
     /// a track's too (measured, #549); its frames are the camera recorder's
     /// screenshots, which leave it out (steering-the-original.md 5.1).
     Start,
     /// A camera track's (steering-the-original.md section 4.2): from `eye`
     /// (metres, level space) at `yaw` and `pitch` (radians,
-    /// start-position.md section 5: positive yaw turns toward +x, positive
+    /// world-coordinates.md 2: positive yaw turns toward +x, positive
     /// pitch looks down).
     Track { eye: [f32; 3], yaw: f32, pitch: f32 },
 }
@@ -251,7 +251,7 @@ pub const VIEWS: &[View] = &[
     },
     View {
         name: "bunker-start",
-        shows: "a New Game's start view in the trader's bunker (start-position.md)",
+        shows: "a New Game's start view in the trader's bunker (view-projection.md 2.3)",
         place: Place::NewGame {
             camera: Camera::Start,
             seconds: 30,

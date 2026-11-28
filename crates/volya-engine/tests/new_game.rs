@@ -4,7 +4,7 @@
 //! A New Game from the Russian edition (BYOA): its loading screen
 //! (docs/behavior/loading-screen.md), which level loads
 //! (docs/behavior/level-loading.md section 2.2), the start view
-//! (docs/behavior/start-position.md) with the load time, the game clock,
+//! (docs/behavior/view-projection.md 2.3) with the load time, the game clock,
 //! the player character and the placed effect, the intro and the menu
 //! during the game, a missing level sound and the loading stages' times.
 //! Its drawing (the start and outdoor views, the loading screen's and the
@@ -57,7 +57,7 @@ fn new_game_start_view_from_game_data() {
     for (got, want) in state.eye.iter().zip([-246.7263, -23.26326, -134.43387]) {
         assert!((got - want).abs() < 1e-4, "eye {:?}", state.eye);
     }
-    // start-position.md 7.1: two modifiers apply at the start eye.
+    // view-projection.md 2.3: two modifiers apply at the start eye.
     assert!(
         (state.far_plane - 254.478).abs() < 1e-3,
         "{}",

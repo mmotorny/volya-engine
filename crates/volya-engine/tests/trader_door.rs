@@ -88,7 +88,7 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
         ("trader_door", "ph_door@locked", true, None, None)
     );
     // Its leaf: one box, half sizes as the model's bone `door`, of
-    // `objects\large_metal_trash`; 1.7 m from the start (level-objects.md).
+    // `objects\large_metal_trash`; 1.7 m from the start (object-visual-and-transform.md 5.2).
     let boxes = level.doors().boxes();
     assert_eq!(boxes.len(), 1);
     let leaf = boxes[0];

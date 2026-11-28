@@ -189,7 +189,7 @@ pub fn cloud_directions() -> [u8; 4] {
 /// The camera of a frame as the sun sprite needs it.
 pub struct SkyCamera {
     pub eye: Vec3,
-    /// Viewing direction F and right vector r (start-position.md 6).
+    /// Viewing direction F and right vector r (world-coordinates.md 3, view-projection.md 2.3).
     pub forward: Vec3,
     pub right: Vec3,
 }

@@ -421,12 +421,12 @@ fn fs_lplanes(in: Out) -> @location(0) vec4<f32> {
     return finish(b.rgb, b.a * in.c0.a, in);
 }
 
-// The objects' models (docs/behavior/level-objects.md sections 4.7, 4.8,
-// 5.2–5.5), element 1 for every object. A vertex arrives quantized and is
+// The objects' models (docs/behavior/model-shading.md 1, 2, 4 – 7),
+// element 1 for every object. A vertex arrives quantized and is
 // drawn at its stored position, transformed by the object's X (`transform`);
 // `c_scale` holds L_dynamic_props, `sphere` the model's world sphere, so
-// very small objects are skipped by the static meshes' size test (section
-// 5.1 believes so; the exact test is unestablished: ours).
+// very small objects are skipped by the static meshes' size test
+// (model-shading.md 3, object-detail-level.md 3).
 
 struct ModelVertex {
     @builtin(instance_index) draw: u32,
@@ -493,7 +493,7 @@ fn projected_fade(d: Draw) -> f32 {
     return c + (1.0 - c) * g * g;
 }
 
-// model_def_lq, or model_def_hq for a receiver (level-objects.md 5.5): Q
+// model_def_lq, or model_def_hq for a receiver (model-shading.md 7): Q
 // in c0.rgb, φ in c0.a, the projected coordinate in c1, S(n) in sun.
 @vertex
 fn vs_model(v: ModelVertex) -> Out {

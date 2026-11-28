@@ -76,7 +76,7 @@ fn walks_from_the_start_at_the_run_speed() {
     };
     let angles = Angles::from_spawn(actor.angles);
     let mut player = Player::new(c, settings, actor.position, angles, 0);
-    // start-position.md 4.2: the eye 1.53 m above the stored position.
+    // player-movement.md 7.1: the eye 1.53 m above the stored position.
     let eye = player.view().eye;
     assert!(
         (eye[1] - (actor.position[1] + 1.53)).abs() < 1e-4,

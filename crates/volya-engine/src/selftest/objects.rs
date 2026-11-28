@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The level's spawned objects on New Game, drawn (once part of
-//! `tests/objects.rs`; docs/behavior/level-objects.md): the start view
-//! with and without them, the changes where section 3 places them, with
+//! `tests/objects.rs`; docs/behavior/object-visual-and-transform.md): the
+//! start view with and without them, the changes where its section 4 places
+//! them, with
 //! frame times; and an offline stalker drawn once the player walks within
 //! reach (offline-simulation.md 6.2). Frame `objects`.
 
@@ -146,8 +147,8 @@ async fn start_view(
     Ok((screen, pixels, note))
 }
 
-/// The start view with and without the objects: they show where section 3
-/// places them. Frame times are reported, not checked.
+/// The start view with and without the objects: they show where
+/// object-visual-and-transform.md 4 places them. Frame times are reported, not checked.
 pub async fn start_view_shows_the_objects(cx: &Context<'_>) -> Outcome {
     let data = GameData::read(cx.tree, None, SIZE).map_err(|e| format!("game data: {e}"))?;
     let (screen, with, shown) = start_view(cx, &data, false).await?;
@@ -170,7 +171,7 @@ pub async fn start_view_shows_the_objects(cx: &Context<'_>) -> Outcome {
     );
     // The changes lie where the objects are: within the screen square of
     // each one's world sphere. The trader (behind his counter, his upper
-    // body in view) and the lamp on the counter, of section 7.2, show;
+    // body in view) and the lamp on the counter, of object-visual-and-transform.md 5.2, show;
     // every changed pixel is covered by the square of an object within
     // the view.
     let (view, projection) = screen.view_projection(SIZE.width, SIZE.height);

@@ -3,7 +3,8 @@
 
 //! A New Game's level (docs/behavior/level-loading.md): which level, its
 //! static world, and the view from the player's start
-//! (docs/behavior/start-position.md), under the weather of the game clock's
+//! (docs/behavior/world-coordinates.md 4, docs/behavior/view-projection.md
+//! 2.3), under the weather of the game clock's
 //! time of day (docs/formats/sav.md sections 5 and 12,
 //! docs/behavior/static-shading.md section 9), with its collision world
 //! (docs/formats/level-cform.md), walked by the player in first person
@@ -107,7 +108,7 @@ use volya_engine_formats::ui::Resolution;
 pub const SPAWN_NAME: &str = "all";
 /// Files a level directory must hold to be a level (section 2.2).
 pub const LEVEL_FILES: [&str; 4] = ["level", "level.ltx", "level.geom", "level.cform"];
-/// `rs_vis_distance` of the shipped `user.ltx` (start-position.md 7.1),
+/// `rs_vis_distance` of the shipped `user.ltx` (view-projection.md 2.1),
 /// in force until the app hands over the console's.
 pub const VIS_DISTANCE: f32 = 1.0;
 /// Longest frame the sun's fade advances by, seconds (our choice).
@@ -163,7 +164,7 @@ pub struct LevelWorld {
     /// the renderer's buffers, which are sized for them with the world.
     pub particle_capacity: usize,
     /// The spawned objects drawn with the static world
-    /// (docs/behavior/level-objects.md).
+    /// (docs/behavior/object-visual-and-transform.md).
     pub objects: LevelObjects,
     /// The glows' shaders, textures as file paths (glows.md 6).
     pub glow_shaders: Vec<GlowShader<String>>,
@@ -369,7 +370,7 @@ pub struct LevelScreen {
     /// The player's footsteps (S11); `None` only in the unit tests' empty
     /// level.
     footsteps: Option<PlayerFootsteps>,
-    /// The player's sky visibility (level-objects.md 5.4,
+    /// The player's sky visibility (object-projected-light.md 5.2,
     /// sound-weather-ambient.md 4.3), for the sounds of the weather; the
     /// player's model's header sphere (ogf.md section 2), centre and radius
     /// in model space, its rays start from; the level's frame count and
@@ -383,7 +384,7 @@ pub struct LevelScreen {
     /// only in the unit tests' empty level.
     character: Option<CharacterState>,
     controls: Controls,
-    /// The near plane of the current view (start-position.md section 7).
+    /// The near plane of the current view (view-projection.md 3.1).
     near: f32,
     weather: Weather,
     /// The game clock (sav.md sections 5, 12).
@@ -432,7 +433,7 @@ pub struct LevelScreen {
     /// `r__supersample` in force: the frame's target size, and with it the
     /// size thresholds (static-shading.md 10.2, frame-presentation.md 1.1).
     supersample: u32,
-    /// `rs_vis_distance`, read every frame (start-position.md 7.1).
+    /// `rs_vis_distance`, read every frame (view-projection.md 2.1).
     vis_distance: f32,
     /// `r__geometry_lod`, `r1_ssa_lod_a`, `r1_ssa_lod_b`, read every frame
     /// (object-detail-level.md 1).
@@ -916,7 +917,8 @@ fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<Str
 const SUPPLY_SEED: u32 = 0;
 
 /// The player's record in `spawn_file`: object `index`, whose class must be
-/// the player's (level-objects.md: index 63, the only `O_ACTOR` record).
+/// the player's (sav.md 10.1: index 63; offline-simulation.md 9.1: the only `O_ACTOR`
+/// record).
 pub fn player_record(spawn_file: &[u8], index: u32, system: &Config) -> io::Result<ObjectRecord> {
     player_record_in(&mut io::Cursor::new(spawn_file), index, system)
 }
@@ -1051,7 +1053,7 @@ fn new_game_simulation(
 
 /// The current level's navigation data read from its directory `dir`
 /// (6.1; held in the file cache, docs/architecture/memory.md), and the
-/// first switch pass at `clock`'s time (6.2, level-objects.md 2.4: all
+/// first switch pass at `clock`'s time (6.2, offline-simulation.md 6.5.3: all
 /// objects evaluated once while the loading image shows), which brings the
 /// player online: it then receives its bolt (player-state.md 3.2) with the
 /// next id.
@@ -1243,7 +1245,7 @@ fn scripted(tree: &dyn Vfs, shader_dir: &str, module: &str) -> bool {
 
 /// The texture files of the surfaces of `prefetched`'s models, each once:
 /// each mesh's pair resolved as a level's object entries are
-/// (level-objects.md 5.2), its textures located without a level. Loaded
+/// (model-shading.md 4), its textures located without a level. Loaded
 /// with the models, before any level (texture-quality-filtering.md 2: the
 /// prefetching loads the textures created so far). An entry not drawn, or
 /// one that fails, adds none (our choice): the level that uses it resolves
@@ -1294,7 +1296,7 @@ fn prefetched_textures(
 }
 
 /// The surfaces of the shader entries `draw_items` use and of the objects'
-/// entries `object_entries` (level-objects.md 5.2: a model mesh's pair
+/// entries `object_entries` (model-shading.md 4: a model mesh's pair
 /// resolves like an entry of the shader table; only the model programs
 /// draw them). A texture that resolves nowhere fails the load ("Can't find
 /// texture", static-shading.md 4.2).
@@ -1436,7 +1438,7 @@ pub type GeometryKeeper =
 /// the part of each stage's work this engine has, in the stages' order;
 /// [`NewGameLoad::finish`] makes the level. Stages whose systems do not
 /// exist here (server, life simulation, details, AI) do nothing; the
-/// level's objects (docs/behavior/level-objects.md) are switched online,
+/// level's objects (docs/behavior/offline-simulation.md 6.5) are switched online,
 /// spawned with their models, given surfaces and light inputs in the
 /// stages named after those steps (placed there by us).
 #[derive(Default)]
@@ -1629,7 +1631,7 @@ fn artefact_record(
 }
 
 /// The game hour of `clock`, 0 … 23 (the scripts' switch rules,
-/// level-objects.md 2.5).
+/// offline-simulation.md 6.5.4).
 fn hour(clock: &GameClock) -> u32 {
     (clock.time_of_day() / 3600.0) as u32
 }
@@ -1983,7 +1985,7 @@ impl NewGameLoad {
                 self.level_file = None;
             }
             // The actor, the start weather (level-loading.md 2.6) and the
-            // objects' models (level-objects.md sections 3, 4), placed under
+            // objects' models (object-visual-and-transform.md, skeleton-ogf.md), placed under
             // this caption by us (the client creates the objects here).
             Stage::ClientSpawning => {
                 let name = earlier(self.name.as_deref(), "level")?;
@@ -2368,7 +2370,7 @@ impl NewGameLoad {
                 }
             }
             // The objects' light inputs against the static collision under
-            // the start's sun (level-objects.md 5.4), placed under this
+            // the start's sun (object-projected-light.md 5.2), placed under this
             // caption by us. They are kept while the level runs (our
             // choice: the game retests them, the sun's ray as the sun moves).
             Stage::ClientSynchronising => {
@@ -2499,7 +2501,7 @@ impl NewGameLoad {
             e.advance(now.saturating_sub(at));
             e
         });
-        // start-position.md sections 4 and 5: standing at the stored
+        // player-movement.md 7.1, world-coordinates.md 2: standing at the stored
         // position, the camera at the spawn's angles.
         let mut player = Player::new(
             movement,
@@ -2666,7 +2668,7 @@ impl LevelScreen {
     /// The environment at the camera at the clock's time of day
     /// (static-shading.md 9.2) and the near
     /// plane: 0.01 m while the cube of half-size 0.2 m around the eye meets
-    /// a static collision triangle (start-position.md section 7; movable
+    /// a static collision triangle (view-projection.md 3.1; movable
     /// objects do not exist here).
     fn update_view(&mut self) {
         let eye = self.player.view().eye;
@@ -2923,7 +2925,7 @@ impl LevelScreen {
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
     /// turned about y by the body's heading so that the model's +z points
-    /// along it (start-position.md 5: the heading turns about y only).
+    /// along it (player-movement.md 7: the heading turns about y only).
     /// TODO(#365): the specs do not give the actor's transform in
     /// first-person view; this is our reading.
     fn player_transform(&self) -> volya_engine_formats::model::Mat4 {
@@ -3319,7 +3321,7 @@ impl LevelScreen {
     /// and the objects' visuals following what switched. Runs only in
     /// [`LevelScreen::update`], so it stands still while the game is paused
     /// or the page hidden. A simulation error is fatal (offline-simulation.md
-    /// 6.2, level-objects.md 2.3): kept for [`LevelScreen::take_fatal`].
+    /// 6.2, 6.5.2): kept for [`LevelScreen::take_fatal`].
     fn simulate(&mut self) {
         let Some(sim) = &mut self.simulation else {
             return;
@@ -3399,7 +3401,7 @@ impl LevelScreen {
     }
 
     /// Shows the instances of objects that came online, at their records'
-    /// placements (level-objects.md 3.4), and hides those that went
+    /// placements (object-visual-and-transform.md 4), and hides those that went
     /// offline or were removed. An object online without a loaded visual
     /// (one that came onto the level by travel) stays undrawn (our
     /// limitation: visuals load with the level).
@@ -4008,9 +4010,10 @@ impl LevelScreen {
     }
 
     /// View and projection for a `width` × `height` target
-    /// (start-position.md sections 5–7, the smoothing of 7.2 replaced by its
-    /// targets, which it allows), from the player's eye at the player's
-    /// field of view (view-projection.md 3.1).
+    /// (world-coordinates.md 2, 3 and view-projection.md 1, 2, the smoothing
+    /// of view-projection.md 2.2 replaced by its targets, which it allows),
+    /// from the player's eye at the player's field of view
+    /// (view-projection.md 3.1).
     pub fn view_projection(&self, width: u32, height: u32) -> (Mat4, Mat4) {
         let v = self.player.view();
         let view = camera::view_matrix(v.eye, v.direction, v.up);

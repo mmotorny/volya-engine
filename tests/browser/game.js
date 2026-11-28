@@ -19,7 +19,7 @@ import { assert, assertEqual, skip } from "./harness.js";
 export const ONLY = [
   // The levels (a New Game's level, docs/behavior/level-loading.md).
   "gamedata.db0",
-  // The level's objects' models (docs/behavior/level-objects.md).
+  // The level's objects' models (docs/formats/skeleton-ogf.md).
   "gamedata.db4",
   "gamedata.db5",
   "gamedata.db6",

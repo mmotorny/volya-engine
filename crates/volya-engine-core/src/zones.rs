@@ -508,7 +508,7 @@ pub struct Zone {
     /// The class id (sound-detector.md 5.2).
     pub class_id: String,
     pub section: ZoneSection,
-    /// The object's matrix *X* (level-objects.md 3.4); row 3 is **p**.
+    /// The object's matrix *X* (object-visual-and-transform.md 4); row 3 is **p**.
     pub transform: Matrix,
     /// *e*′, *d*′, *s*′ (ms) and the creation clock *C*₀ (P9 1.3).
     enabled: u32,

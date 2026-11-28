@@ -6,8 +6,8 @@
 //! request becomes a movement state (walk, run, sprint, crouch, low crouch,
 //! jump; sections 3–4) and a desired acceleration (5) that drives the
 //! collision body of `collision::body` (docs/formats/level-cform.md) at the
-//! fixed physics step (6); the eye follows the body (7, start-position.md
-//! 4.2), looking turns the camera (8), and moving bobs it (9).
+//! fixed physics step (6); the eye follows the body (7), looking turns the
+//! camera (8), and moving bobs it (9).
 //!
 //! [`Player::frame`] runs one rendered frame from a [`Request`], the
 //! actions of the frame (a platform's input mapped onto the spec's actions
@@ -106,7 +106,7 @@ pub const BOB_MIN_FADE: f32 = 0.000_01;
 /// The landing effect's rate and height (9.2).
 pub const LANDING_EFFECT_RATE: f32 = 3.5;
 pub const LANDING_EFFECT_HEIGHT: f32 = 0.15;
-/// The eye's lag behind a rising position (start-position.md 4.2).
+/// The eye's lag behind a rising position (7).
 pub const EYE_LAG: f32 = 0.2;
 pub const EYE_CATCH_UP: f32 = 1.5;
 /// The body turns once the camera's yaw is more than π/4 away from its
@@ -225,7 +225,7 @@ pub struct Settings {
     pub always_run: bool,
     pub mouse_sens: f32,
     pub mouse_invert: bool,
-    /// Camera inertia (start-position.md section 6).
+    /// Camera inertia (view-projection.md 1.1).
     pub cam_inert: f32,
 }
 
@@ -408,7 +408,7 @@ pub struct Player {
     /// A jump started in the latest frame (4.4).
     jump_started: bool,
     body: PlayerBody,
-    /// The camera's yaw and pitch (8; start-position.md 5).
+    /// The camera's yaw and pitch (8; world-coordinates.md 2).
     angles: Angles,
     /// The body's heading `θ` (5.3).
     heading: f32,
@@ -446,7 +446,7 @@ pub struct Player {
     last_ground: Option<Vec3>,
     /// The current airborne phase has touched something (6.7, 9.2).
     touched: bool,
-    /// The feet's height as the eye follows it (start-position.md 4.2).
+    /// The feet's height as the eye follows it (7).
     eye_feet: f32,
     /// Bobbing's time and fade (9.1).
     bob_time: f32,
@@ -1381,9 +1381,9 @@ impl Player {
         self.landing_effect = Some((0.0, p));
     }
 
-    /// The camera: the eye above the feet (7, with the lag of
-    /// start-position.md 4.2), then bobbing (9.1), the landing effect (9.2)
-    /// and camera inertia (start-position.md 6).
+    /// The camera: the eye above the feet (7, with its lag), then bobbing
+    /// (9.1), the landing effect (9.2) and camera inertia
+    /// (view-projection.md 1.1).
     fn compute_view(&mut self, dt_f: f32) -> View {
         let feet = self.body.position();
         if self.body.airborne() || feet[1] <= self.eye_feet {
@@ -1446,7 +1446,7 @@ impl Player {
             }
         }
 
-        // Camera inertia (start-position.md 6).
+        // Camera inertia (view-projection.md 1.1).
         if self.settings.cam_inert > 0.0
             && let Some((old_eye, old_d)) = self.inert
         {

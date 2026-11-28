@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The spawn file `spawns\all.spawn`, only as far as the start position needs
-//! (docs/behavior/start-position.md, sections 2 and 3): the objects of
+//! (docs/formats/sav.md 7.2, 10.1 and 10.2): the objects of
 //! top-level chunk 1 and the common part of each spawn packet. Everything
 //! else is skipped by chunk sizes. [`for_each_record`] hands out both packets
 //! of every object, which [`crate::object`] parses in full
@@ -31,7 +31,7 @@ const UPDATE_PACKET_CHUNK: u32 = 1;
 const SPAWN_MESSAGE: u16 = 1;
 /// Flags bit: a version field follows.
 const FLAG_VERSION: u16 = 0x20;
-/// Lowest version whose layout the spec describes fully (section 3.1).
+/// Lowest version whose layout the spec describes fully (sav.md 7.2).
 const MIN_VERSION: u16 = 112;
 
 /// Section name of the player's object.
@@ -41,7 +41,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
-/// The common part of a spawn packet (section 3.1).
+/// The common part of a spawn packet (sav.md 7.2).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SpawnObject<'a> {
     /// Object index: the id of the object's sub-chunk.
@@ -271,7 +271,7 @@ pub struct ActorStart {
     /// Stored angles `a0, a1, a2`.
     pub angles: [f32; 3],
     /// Game-graph vertex and level-graph node from the object-specific data
-    /// (section 3.3), for cross-checks.
+    /// (sav.md 7.4.1, 10.2), for cross-checks.
     pub game_graph_vertex: u16,
     pub level_graph_node: u32,
 }
@@ -296,7 +296,7 @@ pub fn actor_start_in(reader: &mut (impl Read + Seek)) -> io::Result<ActorStart>
 
 fn actor_fields(o: &SpawnObject<'_>) -> io::Result<ActorStart> {
     // Object-specific data: u16 game-graph vertex, float, u32, u32
-    // level-graph node (section 3.3).
+    // level-graph node (sav.md 7.4.1, 10.2).
     let mut f = Reader::new(o.data);
     let game_graph_vertex = f.u16()?;
     f.take(8)?;

@@ -4,7 +4,7 @@
 //! Level loading from the Russian edition (BYOA): the chunk container
 //! (docs/formats/chunks.md section 9), `level.geom` / `level.geomx`
 //! (docs/formats/level-geom.md section 9) and the start position and camera
-//! (docs/behavior/start-position.md section 8). Skips when
+//! (docs/formats/sav.md 10.1, docs/behavior/view-projection.md 2.3). Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -457,7 +457,7 @@ fn start_position_from_game_data() {
         );
         assert_eq!(objects.find(0).unwrap().payload, 8_641u32.to_le_bytes());
 
-        // Every record (section 8).
+        // Every record (sav.md 10.1, 15).
         let mut count = 0;
         let mut flags = BTreeMap::new();
         let mut positions = [0f64; 3];
@@ -524,7 +524,7 @@ fn start_position_from_game_data() {
             (4, 11_713)
         );
 
-        // Eye height (section 4.2).
+        // Eye height (player-movement.md 7, 7.1).
         // The actor's section, in config\creatures\actor.ltx, inherits from
         // sections of other files: load it through system.ltx.
         let actor_ltx = config::load(vfs, "gamedata/config/system.ltx").unwrap();
@@ -537,7 +537,7 @@ fn start_position_from_game_data() {
             near(f64::from(*got), want, 1e-7);
         }
 
-        // Orientation (section 5).
+        // Orientation (world-coordinates.md 2 – 4).
         let a = Angles::from_spawn(actor.angles);
         near(f64::from(a.yaw), 1.3962544, 1e-7);
         near(f64::from(a.pitch), 0.0043165, 1e-4);
@@ -559,7 +559,7 @@ fn start_position_from_game_data() {
         let off = (dx * d[0] + dz * d[2]) / (dx.hypot(dz) * d[0].hypot(d[2]));
         near(f64::from(off.acos().to_degrees()), 3.1, 0.02);
 
-        // View transform (section 6).
+        // View transform (view-projection.md 1.1, 2.3).
         let v = camera::view_matrix(eye, d, u);
         for (got, want) in [v[0][0], v[1][0], v[2][0]]
             .iter()
@@ -571,7 +571,7 @@ fn start_position_from_game_data() {
             assert!((f64::from(*got) - want).abs() < 2e-4, "last row {v:?}");
         }
 
-        // Far plane (section 7.1) from l01_escape's environment modifiers.
+        // Far plane (view-projection.md 2.1, 2.3) from l01_escape's environment modifiers.
         let mods = env_mod::parse(&read(vfs, "gamedata/levels/l01_escape/level.env_mod").unwrap())
             .unwrap();
         let applying: Vec<(u32, f32, f32)> = mods

@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The per-object light inputs of docs/behavior/level-objects.md section
-//! 5.4: sky visibility from 26 fixed rays, sun visibility from one ray
+//! The per-object light inputs of docs/behavior/object-projected-light.md
+//! 5.2 and 5.3: sky visibility from 26 fixed rays, sun visibility from one ray
 //! towards the sun, both against the static collision, and the shader
-//! constant `L_dynamic_props` made of them.
+//! constant `L_dynamic_props` made of them (docs/behavior/model-shading.md 6).
 //!
 //! The game moves each value towards its target over frames; here the
 //! converged values are taken at once (the values the section gives for a
@@ -78,11 +78,11 @@ pub fn sun_visibility(world: &CollisionWorld, origin: Vec3, sun_dir: Vec3) -> f3
     }
 }
 
-/// Directions tested per update (5.4).
+/// Directions tested per update (object-projected-light.md 5.3).
 const PER_UPDATE: usize = 5;
 
 /// An object's sky visibility *h* followed over frames
-/// (level-objects.md 5.4, sound-weather-ambient.md 4.3): each update tests
+/// (object-projected-light.md 5.2, 5.3, sound-weather-ambient.md 4.3): each update tests
 /// five of the 26 directions, cycling in order, at most once per frame;
 /// the target is the fraction of free results among the tested (the 26
 /// latest once all were tested); *h* ← *k* · target + (1 − *k*) · *h*

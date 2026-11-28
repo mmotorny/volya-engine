@@ -150,7 +150,7 @@ pub fn kept_angles(s: &Matrix) -> Vec3 {
 }
 
 /// The update rotation *U* of kept angles (*h*, *p*, *b*) (P10 4.3): the
-/// rotation of level-objects.md 3.4 with *x* = *p*, *y* = *h*, *z* = *b*,
+/// rotation of object-visual-and-transform.md 4 with *x* = *p*, *y* = *h*, *z* = *b*,
 /// as a matrix with row 3 (0, 0, 0, 1).
 pub fn update_rotation(angles: Vec3) -> Matrix {
     let [h, p, b] = angles;
@@ -167,7 +167,7 @@ const FAST_DISTANCE: f32 = 50.0;
 pub struct ArtefactRecord {
     pub id: u16,
     pub name: String,
-    /// The object transform *X* (level-objects.md 3.4).
+    /// The object transform *X* (object-visual-and-transform.md 4).
     pub transform: Matrix,
     /// It is created with a parent (carried).
     pub parent: bool,

@@ -65,7 +65,7 @@ pub(crate) const GAME: &str = "[level_maps_single]\nL01_escape\n\
     [l01_escape]\ntexture = map\\map_escape\nbound_rect = -317.164, -633.718, 404.880, 811.627\n\
     global_rect = 355, 2011, 576, 2453\n";
 
-/// The New Game's start (start-position.md).
+/// The New Game's start (sav.md 10.2, world-coordinates.md 4).
 const START: [f32; 2] = [-246.7263, -134.43387];
 const START_YAW: f32 = 1.3962544;
 

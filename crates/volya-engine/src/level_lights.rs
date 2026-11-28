@@ -433,7 +433,7 @@ impl LevelLights {
     /// occlusion off (occlusion-tests.md 4), and the glows (glows.md 3 –
     /// 6), their occlusion rays against `collision`.
     // TODO(#347): the object part of the glows' occlusion ray (glows.md
-    // 5.1): the bone shapes' fields (level-objects.md chunk 16: shape type
+    // 5.1): the bone shapes' fields (skeleton-ogf.md 4, chunk 16: shape type
     // codes, the box, sphere and cylinder layouts) and which objects are
     // enabled are not specified.
     pub fn finish(

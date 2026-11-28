@@ -175,9 +175,9 @@ impl SimObject {
     }
 
     /// Whether *on* can hold for it: the engine's predicate
-    /// (level-objects.md 2.3: the renderer match and state flags bit 0x02),
+    /// (6.5.2: the renderer match and state flags bit 0x02),
     /// or the electra artefacts' scripted rule, which does not test the
-    /// engine's (2.5: true at night 50 m away or more).
+    /// engine's (6.5.4: true at night 50 m away or more).
     pub fn may_switch_online(&self) -> bool {
         self.candidate.is_electra()
             || self
@@ -692,7 +692,7 @@ impl Simulation {
     /// One simulation update at game time `now` (6.2): the switch pass,
     /// then the scheduled updates. `normal_time_factor` is the game-time
     /// chunk's second factor (7.5), `hour` the game hour (the scripts'
-    /// switch rules, level-objects.md 2.5).
+    /// switch rules, 6.5.4).
     pub fn update(&mut self, now: u64, normal_time_factor: f32, hour: u32) -> io::Result<Changes> {
         let mut changes = Changes::default();
         self.switch_pass(now, hour, &mut changes)?;

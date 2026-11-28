@@ -39,7 +39,7 @@ pub use random::Random;
 /// A vector (x, y, z).
 pub type Vec3 = [f32; 3];
 /// A 4 × 4 matrix, row by row, in the row-vector convention of
-/// docs/behavior/level-objects.md: a point **p** is placed as [**p** 1] · *M*.
+/// docs/behavior/object-visual-and-transform.md: a point **p** is placed as [**p** 1] · *M*.
 pub type Matrix = [[f32; 4]; 4];
 
 /// Runs one action's step with Δ `dt` on `particles` as an effect alone

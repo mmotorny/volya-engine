@@ -353,7 +353,7 @@ fn the_cache_at_the_start_position() {
     with_tree(|vfs| {
         let mut random = Generator::new(1);
         let (mut details, collision) = first_level(vfs);
-        // The New Game's start eye (start-position.md 8), looking along +x.
+        // The New Game's start eye (player-movement.md 7.1), looking along +x.
         let eye = [-246.7263, -23.26326, -134.43387];
         let mut vp = [[0.0f32; 4]; 4];
         // A 90° view along +x: clip x = −z, y = y, w = x (relative).

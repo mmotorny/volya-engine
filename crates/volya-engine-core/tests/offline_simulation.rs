@@ -972,7 +972,7 @@ fn new_game_registry_and_walking_across_the_switch_distance() {
         let scheduled = sim.schedule().count();
         assert!(scheduled > 1_000 && scheduled <= 1_349, "{scheduled}");
 
-        // The first pass (level-objects.md 2.4, 2.6): 671 online.
+        // The first pass (6.5.3, 9.1): 671 online.
         let changes = sim.update(START, 10.0, 5).unwrap();
         assert_eq!(changes.online.len(), 671);
         assert!(changes.offline.is_empty() && changes.removed.is_empty());

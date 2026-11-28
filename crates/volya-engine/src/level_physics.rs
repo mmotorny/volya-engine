@@ -438,7 +438,7 @@ impl LevelPhysics {
     }
 
     /// Activates object `object`'s shell built from `model` (`shells` 2.1):
-    /// active unless switched off (`root` 3.1).
+    /// active unless switched off (physics-resting.md 1).
     pub fn add_shell(&mut self, object: u16, shell: &Shell, model: &ShellModel) -> io::Result<()> {
         let params = *self.world.params();
         let body = self.world.solver_mut().activate_shell(&params, shell);
@@ -481,7 +481,7 @@ impl LevelPhysics {
     }
 
     /// A joint's motor on its axis (`door` 2.3: `set_max_force_and_velocity`
-    /// on a hinge): it wakes the shell (`root` 3.1), then sets the hinge's
+    /// on a hinge): it wakes the shell (physics-resting.md 2), then sets the hinge's
     /// maximum force and velocity. Nothing without the joint.
     pub fn set_max_force_and_velocity(
         &mut self,
@@ -516,7 +516,7 @@ impl LevelPhysics {
     }
 
     /// The hinge angle of the joint of object `object`'s shell made from
-    /// bone `bone` (`root` 2.2).
+    /// bone `bone` (physics-joints.md 2.2).
     pub fn hinge_angle(&self, object: u16, bone: &str) -> Option<f32> {
         let (_, joint) = self.joint(object, bone)?;
         self.world.solver().hinge_angle(joint)

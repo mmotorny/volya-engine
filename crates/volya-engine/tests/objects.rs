@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! The level's spawned objects on New Game from the Russian edition (BYOA):
-//! the verification facts of docs/behavior/level-objects.md section 7 (the
-//! online objects per class id, named objects' visuals, transforms and
-//! meshes, the invariants over every model file the records reference).
+//! the verification facts of docs/behavior/offline-simulation.md 9.1 (the
+//! online objects per class id), docs/behavior/object-visual-and-transform.md
+//! 5 (named objects' visuals and transforms) and docs/formats/skeleton-ogf.md
+//! 7 (their meshes, the invariants over every model file the records
+//! reference).
 //! Their drawing (the start view with and without them, an offline stalker
 //! drawn as the player walks) is the render-level suite's
 //! (`selftest::objects`). Skips when `VOLYA_GOG_INSTALLER` is unset.
@@ -50,7 +52,7 @@ fn near3(got: [f32; 3], want: [f32; 3], tolerance: f32, what: &str) {
     );
 }
 
-/// Section 7.1: online objects per class id (the classes with any).
+/// offline-simulation.md 9.1: online objects per class id (the classes with any).
 const ONLINE: &[(&str, usize)] = &[
     ("AI_CROW", 55),
     ("AI_STL_S", 32),
@@ -78,7 +80,7 @@ const ONLINE: &[(&str, usize)] = &[
     ("Z_RADIO", 18),
 ];
 
-/// The world box of `instance`'s model vertices, unquantized (section 7.2).
+/// The world box of `instance`'s model vertices, unquantized (object-visual-and-transform.md 5.2).
 fn world_box(model: &Model, instance: &Instance) -> ([f32; 3], [f32; 3]) {
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
@@ -154,7 +156,7 @@ fn level_objects_from_game_data() {
             )
         };
 
-        // Section 7.1: the stalkers' visuals are their records'.
+        // object-visual-and-transform.md 5.1: the stalkers' visuals are their records'.
         for (name, visual) in [
             ("esc_lager1", "actors\\novice\\green_stalker_2"),
             ("esc_lager2", "actors\\novice\\green_stalker_10"),
@@ -450,7 +452,7 @@ fn level_objects_from_game_data() {
         near3(min, [-329.1732, 16.4293, 75.0037], 1e-3, "heli box min");
         near3(max, [-308.898, 22.1571, 91.5756], 1e-3, "heli box max");
 
-        // Section 6: the five lamps online, all spot lights without shadows.
+        // hanging-lamps.md 9.3: the five lamps online, all spot lights without shadows.
         let lamps: BTreeMap<&str, (LightKind, bool, bool, bool)> = objects
             .lamps
             .iter()
@@ -527,7 +529,7 @@ fn level_objects_from_game_data() {
     });
 }
 
-/// Section 7.3: every model file the records of all levels name.
+/// skeleton-ogf.md 7.1: every model file the records of all levels name.
 #[test]
 fn referenced_model_files_from_game_data() {
     with_game(|tree, data| {

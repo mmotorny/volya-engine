@@ -83,7 +83,8 @@ export const tests = {
     const stages = byCaption(log);
     const record = await heapRecord(false);
     assertEqual([s.level.name, s.level.draws], ["l01_escape", 7782], "level");
-    // The level's objects (docs/behavior/level-objects.md section 7.1).
+    // The level's objects (docs/behavior/offline-simulation.md 9.1,
+    // docs/behavior/object-visual-and-transform.md 5.1).
     assertEqual([s.level.objects.online, s.level.objects.with_model], [671, 352], "objects");
     // Its lamps on, with their seven records; chunk 6's 40 records and the
     // sun's two besides; 22 glows of its own and the lamps' 5

@@ -158,7 +158,7 @@ pub struct WorldScene {
     pub forward: Vec3,
     /// Vertical field of view, degrees.
     pub fov_y_degrees: f32,
-    /// Row-vector convention (start-position.md sections 6, 7).
+    /// Row-vector convention (view-projection.md 1.1, 2).
     pub view: Mat4,
     pub projection: Mat4,
     #[serde(skip)]

@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The level's spawned objects drawn at rest on New Game
-//! (docs/behavior/level-objects.md): which records of `spawns\all.spawn`
-//! are online (section 2, the offline simulation's switch pass,
-//! [`crate::core::simulation`]), each one's visual
-//! and transform (section 3), its model file (section 4,
-//! [`volya_engine_formats::model`]) drawn at its stored positions
-//! quantized as the first renderer stores them (4.7, 4.8), and the
-//! hanging lamps' lights as structure (section 6).
+//! The level's spawned objects drawn at rest on New Game: which records of
+//! `spawns\all.spawn` are online (docs/behavior/offline-simulation.md 6.5,
+//! the offline simulation's switch pass, [`crate::core::simulation`]), each
+//! one's visual and transform (docs/behavior/object-visual-and-transform.md,
+//! cited as `OV`), its model file (docs/formats/skeleton-ogf.md,
+//! [`volya_engine_formats::model`]) drawn at its stored positions quantized
+//! as the first renderer stores them (docs/behavior/model-shading.md 1, 2),
+//! and the hanging lamps' lights as structure
+//! (docs/behavior/hanging-lamps.md).
 //!
 //! Loading runs in the level's loading stages ([`crate::level::NewGameLoad`]):
 //! the switch pass, the models (taken from the game type's prefetched ones,
@@ -41,7 +42,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// An object of the current level whose visual is loaded with the level:
-/// one online at the start (section 2.6) or one that may come online later
+/// one online at the start (offline-simulation.md 9.1) or one that may come online later
 /// (offline-simulation.md 6.2).
 #[derive(Clone, Debug)]
 pub struct LevelObject {
@@ -56,12 +57,12 @@ pub struct LevelObject {
 
 /// The objects of `simulation`'s current level whose visuals the level
 /// loads: those of its list without a parent that are online, or for which
-/// the engine's *on* can hold (level-objects.md 2.3). The others never come
-/// online here: the scripts' replacements only make *on* false where the
-/// engine's is (section 2.5; a job-online value set true by a smart
-/// terrain's script would not, but no script runs yet). Objects inside a
-/// container are left out (our choice: none on the level has one, section
-/// 2.1).
+/// the engine's *on* can hold (offline-simulation.md 6.5.2). The others
+/// never come online here: the scripts' replacements only make *on* false
+/// where the engine's is (offline-simulation.md 6.5.4; a job-online value
+/// set true by a smart terrain's script would not, but no script runs yet).
+/// Objects inside a container are left out (our choice: none on the level
+/// has one, offline-simulation.md 9.1).
 pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
     simulation
         .level_list()
@@ -76,13 +77,13 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
         .collect()
 }
 
-/// The visual name an online object shows (section 3.2): the record's
+/// The visual name an online object shows (`OV` 2): the record's
 /// Visual block, replaced for a trader by its specific character's
-/// `<visual>`; `None` without a model (section 3.3: no Visual block, an
+/// `<visual>`; `None` without a model (`OV` 3: no Visual block, an
 /// empty name, or the actor, whose body the first-person view does not
 /// draw). The configuration's `visual` key is overridden by the Visual
 /// block in every kind that has one, so it is not read. A dead body's
-/// `corpse_visual` (section 3.2, item 4) is not handled: it applies only to
+/// `corpse_visual` (`OV` 2, item 4) is not handled: it applies only to
 /// a body with a non-zero death time, and every dead body of the shipped
 /// file has death time 0 (our omission).
 pub fn visual_name(
@@ -105,7 +106,7 @@ pub fn visual_name(
     Ok((!name.is_empty()).then_some(name.to_string()))
 }
 
-/// A visual name without its extension, lower-cased (section 3.2).
+/// A visual name without its extension, lower-cased (`OV` 2).
 fn plain_name(name: &str) -> String {
     let name = name.to_lowercase();
     match name.rfind('.') {
@@ -114,8 +115,8 @@ fn plain_name(name: &str) -> String {
     }
 }
 
-/// The `<visual>` of the Trader-like block's specific character (section
-/// 3.2, item 3; [`Characters::for_trader`]) as a visual name; without one
+/// The `<visual>` of the Trader-like block's specific character (`OV` 2,
+/// item 3; [`Characters::for_trader`]) as a visual name; without one
 /// the record's visual is kept.
 pub fn character_visual(
     characters: &mut Characters,
@@ -127,7 +128,7 @@ pub fn character_visual(
         .filter(|v| !v.is_empty()))
 }
 
-/// The file of visual name `name` (section 3.1): `name` as given, then
+/// The file of visual name `name` (`OV` 1): `name` as given, then
 /// `$level$` + n′, then `$game_meshes$` + n′, n′ = `name` with `.ogf`
 /// appended if it has no `.`. Not found is the game's fatal error. Without
 /// a level (`dir` empty: the prefetching, before any level is known) the
@@ -336,7 +337,7 @@ impl LoadedModel {
     }
 }
 
-/// Appends `model`'s vertices, quantized (section 4.7), and its meshes'
+/// Appends `model`'s vertices, quantized (model-shading.md 1), and its meshes'
 /// indices and detail windows to `geometry`. Every mesh is quantized whatever its
 /// render mode: the software mode keeps floats, but needs a bone index
 /// above 78 with 256 vertex shader constants, which no shipped model has
@@ -770,7 +771,7 @@ pub struct Instance {
     /// The visual name it shows.
     pub visual: String,
     pub model: usize,
-    /// Model space to world (section 3.4).
+    /// Model space to world (`OV` 4).
     pub transform: Mat4,
     /// The model's header sphere in world space: centre, radius.
     pub sphere: [f32; 4],
@@ -796,14 +797,14 @@ impl Instance {
     }
 }
 
-/// The kind of a lamp's light (section 6).
+/// The kind of a lamp's light (hanging-lamps.md 3.1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum LightKind {
     Point,
     Spot,
 }
 
-/// A light as section 6 sets it up; at rest, its placement from the bind
+/// A light as hanging-lamps.md 3.1 sets it up; at rest, its placement from the bind
 /// pose.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Light {
@@ -825,8 +826,8 @@ pub struct Light {
     pub right: [f32; 3],
 }
 
-/// A glow at the light's position (section 6; its drawing is
-/// unestablished).
+/// A glow at the light's position (hanging-lamps.md 3.3; its drawing
+/// is glows.md's).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Glow {
     pub texture: String,
@@ -834,8 +835,8 @@ pub struct Glow {
     pub position: [f32; 3],
 }
 
-/// The lights of a hanging lamp (section 6; docs/behavior/hanging-lamps.md
-/// 2, 3), at rest.
+/// The lights of a hanging lamp (docs/behavior/hanging-lamps.md 2,
+/// 3), at rest.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct LampLights {
     pub name: String,
@@ -865,7 +866,7 @@ pub struct LampLights {
     pub ambient_matrix: Mat4,
 }
 
-/// Light flags (section 6).
+/// Light flags (hanging-lamps.md 2.2).
 const LAMP_PHYSICS: u16 = 0x01;
 const LAMP_SHADOWS: u16 = 0x02;
 const LAMP_SPOT: u16 = 0x10;
@@ -958,7 +959,7 @@ pub fn lamp_lights(
 /// The objects spawned on the level, once their models are loaded.
 #[derive(Debug, Default)]
 pub struct Spawned {
-    /// Online objects at the start (section 2.6).
+    /// Online objects at the start (offline-simulation.md 9.1).
     pub online: usize,
     /// Online objects per class id.
     pub online_by_class: Vec<(String, usize)>,
@@ -1266,7 +1267,8 @@ impl LevelObjects {
     }
 }
 
-/// Each instance's converged `L_dynamic_props` (section 5.4) against the
+/// Each instance's converged `L_dynamic_props` (object-projected-light.md 5.2,
+/// 5.3; model-shading.md 6) against the
 /// static collision `world` under sunlight travelling along `sun_dir`.
 pub fn light_inputs(
     world: &CollisionWorld,

@@ -3256,7 +3256,7 @@ mod tests {
     }
 
     /// r1-settings-scope.md 2.2: `rs_vis_distance` scales the far plane
-    /// from the next frame (start-position.md 7.1; the empty level's
+    /// from the next frame (view-projection.md 2.1; the empty level's
     /// weather has 100 m).
     #[test]
     fn the_view_distance_scales_the_far_plane() {

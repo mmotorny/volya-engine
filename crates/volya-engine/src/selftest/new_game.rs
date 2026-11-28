@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 //! A New Game's drawing (once in `tests/new_game.rs`, which keeps what
-//! needs none): the start view (docs/behavior/start-position.md) with the
+//! needs none): the start view (docs/behavior/view-projection.md 2.3) with the
 //! frame times, an outdoor view with the sky (docs/behavior/sky.md), the
 //! loading screen's and the intro's frames (docs/behavior/loading-screen.md),
 //! the texture paths against each other, the loading taking prefetched and prepared

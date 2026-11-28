@@ -219,7 +219,7 @@ impl Door {
     /// One physics step's per-step call (2.2): once the door is `closed`
     /// it is held. Closed is the hinge angle at most the low limit the
     /// script receives, −0 for a hinge whose first element is fixed (2.3;
-    /// physics-shell-shapeless-root.md 2.2).
+    /// physics-joints.md 2.3).
     pub fn physics_step(&mut self, closed: bool) {
         if self.to_block && closed {
             self.to_block = false;

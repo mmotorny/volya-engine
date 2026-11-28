@@ -285,9 +285,9 @@ struct Group {
     own: Vec<*mut DxBody>,
     /// Its object's own joints (in the order made).
     own_joints: Vec<*mut DxJoint>,
-    /// Its object's request for the exact solver (`root` 1.4), and its
+    /// Its object's request for the exact solver (physics-shells.md 3.5), and its
     /// mark for this step: the request, and those of the groups merged
-    /// into it (4.2; physics-shell-shapeless-root.md 1.4, 4.3).
+    /// into it (4.2; physics-shells.md 3.5, physics-contacts.md 1.6).
     requests: bool,
     marks: bool,
     /// The group this one is merged into this step (itself if none).
@@ -525,7 +525,7 @@ impl OdeSolver {
         g.contacts.extend(contacts);
         g.bodies += bodies;
         g.joints += joints;
-        // physics-shell-shapeless-root.md 4.3: the merged group's requests
+        // physics-contacts.md 1.6: the merged group's requests
         // join the colliding object's own, kept from then on.
         g.marks |= marks;
         g.requests |= requests;
@@ -616,7 +616,7 @@ impl OdeSolver {
     /// `params`. A group is solved by the iterative solver (2.4), unless it
     /// is marked for the exact one and has fewer than
     /// [`EXACT_SOLVER_JOINTS`] joints, contacts included (a shell naming
-    /// fixed bones requests it, physics-shell-shapeless-root.md 1.4). Then
+    /// fixed bones requests it, physics-shells.md 3.5). Then
     /// every group lists its own bodies again (item 8).
     fn solve_groups(&mut self, params: &Params, groups: impl Iterator<Item = GroupId>) {
         let _turn = STEPPING.lock().unwrap_or_else(|e| e.into_inner());

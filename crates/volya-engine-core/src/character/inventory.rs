@@ -122,7 +122,7 @@ pub struct ItemConfig {
     /// Read for every item (3.4); missing, it is fatal (ltx-config.md 11).
     pub inv_weight: f32,
     /// `visual`, the Visual block's model (3.1); empty when absent, as the
-    /// key is set only if present (level-objects.md 3.2 item 1).
+    /// key is set only if present (object-visual-and-transform.md 2 item 1).
     pub visual: String,
     /// `condition`: the default of a supplied item's condition (3.1).
     pub condition: Option<f32>,
@@ -1304,7 +1304,7 @@ mod tests {
             let err = ItemConfig::read(&system, section).unwrap_err();
             assert!(err.to_string().contains(key), "{section}: {err}");
         }
-        // `visual` is set only if present (level-objects.md 3.2).
+        // `visual` is set only if present (object-visual-and-transform.md 2).
         assert_eq!(ItemConfig::read(&system, "no_visual").unwrap().visual, "");
         let food = ItemConfig::read(&system, "food").unwrap();
         assert_eq!(

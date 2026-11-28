@@ -103,7 +103,7 @@ async fn draws(cx: &Context<'_>) -> Outcome {
     Ok(String::new())
 }
 
-/// The New Game's start (start-position.md) on `l01_escape`.
+/// The New Game's start (sav.md 10.2, world-coordinates.md 4) on `l01_escape`.
 const START: [f32; 2] = [-246.7263, -134.43387];
 const START_YAW: f32 = 1.3962544;
 

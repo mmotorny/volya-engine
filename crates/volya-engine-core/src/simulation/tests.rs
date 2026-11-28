@@ -640,7 +640,7 @@ fn dead_bodies_are_removed_with_what_they_carry() {
         c.health = 0.0;
         c.death_time = START;
     }
-    // Dead creatures never switch offline (level-objects.md 2.3), so it
+    // Dead creatures never switch offline (offline-simulation.md 6.5.2), so it
     // must be offline: its state flags lack 0x02 (cannot switch online).
     body.object.object_block_mut().state_flags = 0x05;
     let records = vec![actor([0.0; 3], 0, 0), body, bread(2, 1)];
