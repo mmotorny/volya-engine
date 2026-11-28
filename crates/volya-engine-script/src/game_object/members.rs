@@ -14,7 +14,6 @@
 //! Later specs add their members to the class [`game_object_class`]
 //! builds before it is registered.
 
-use volya_engine_core::config::value;
 use volya_engine_formats::cp1251;
 use volya_engine_formats::model::transform_point;
 
@@ -22,6 +21,7 @@ use super::engine_classes::Hit;
 use super::{Context, Event, GameObject, GameObjects, HitEvent, Kinds, Restrictor};
 use crate::Value;
 use crate::classes::{EngineClass, EnginePart, Objects, Operand};
+use crate::dialogs::trade::read_show;
 use crate::files::IniFile;
 use crate::values::{Vector, lua_number, to_bits32, to_f32};
 
@@ -690,38 +690,28 @@ fn ini_arg(c: &Call, i: usize) -> Result<IniFile, String> {
     }
 }
 
-/// `sell_condition` and `buy_condition` (7).
+/// `sell_condition` and `buy_condition` (7): the two default factors, or
+/// a section read into the part as script API R 5.3 states.
 fn set_factors(c: &mut Call, which: Factors) -> Results {
     if c.object()?.owner.is_none() {
         return Ok(Vec::new());
     }
-    let factors = if matches!(c.arg(0), Value::Number(_)) {
-        let (f1, f2) = (to_f32(c.number(0)?), to_f32(c.number(1)?));
-        (Some((f1, f2)), None)
-    } else {
-        let ini = ini_arg(c, 0)?;
-        let section = c.text(1)?;
-        let found = trade_section(c, &ini, &section)?;
-        // A line without a value is handled separately (unestablished
-        // how): skipped here.
-        let items = found
-            .entries()
-            .filter_map(|e| {
-                let [a, b] = value::floats::<2>(e.value()?);
-                Some((crate::game_object::game_bytes(e.key()), a, b))
-            })
-            .collect::<Vec<_>>();
-        (None, Some(items))
-    };
-    let owner = c.object()?.owner.as_mut().expect("tested above");
-    let target = match which {
-        Factors::Sell => &mut owner.sell,
-        Factors::Buy => &mut owner.buy,
-    };
-    match factors {
-        (Some(default), _) => target.default = default,
-        (_, Some(items)) => target.items = items,
-        _ => {}
+    if matches!(c.arg(0), Value::Number(_)) {
+        let default = (to_f32(c.number(0)?), to_f32(c.number(1)?));
+        let trade = &mut c.object()?.owner.as_mut().expect("tested above").trade;
+        match which {
+            Factors::Sell => trade.sell.default = default,
+            Factors::Buy => trade.buy.default = default,
+        }
+        return Ok(Vec::new());
+    }
+    let ini = ini_arg(c, 0)?;
+    let section = c.text(1)?;
+    let found = trade_section(c, &ini, &section)?;
+    let trade = &mut c.object()?.owner.as_mut().expect("tested above").trade;
+    match which {
+        Factors::Sell => trade.sell.read(found),
+        Factors::Buy => trade.buy.read(found),
     }
     Ok(Vec::new())
 }
@@ -740,15 +730,10 @@ fn trade(class: EngineClass, ctx: &Context) -> EngineClass {
         }
         let ini = ini_arg(c, 0)?;
         let section = c.text(1)?;
-        // A missing section: the same failed check (our choice).
+        // A missing section: the same failed check (script API R 5.3).
         let found = trade_section(c, &ini, &section)?;
-        let show = found
-            .entries()
-            .filter(|e| e.value().is_none())
-            .map(|e| crate::game_object::game_bytes(e.key()))
-            .collect();
         if let Some(owner) = &mut c.object()?.owner {
-            owner.show = show;
+            read_show(&mut owner.trade.show, found);
         }
         Ok(Vec::new())
     });

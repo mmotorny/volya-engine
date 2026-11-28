@@ -22,6 +22,7 @@ use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx::value;
 
 use crate::classes::EngineClass;
+use crate::dialogs::DialogsAndTrade;
 use crate::files::FileSystem;
 use crate::game_object::GameObjects;
 use crate::loader::{Common, Prefix, Scripts, Trees};
@@ -113,7 +114,7 @@ pub enum EngineCall {
 
 /// What startup makes and registers a game state from: the game's trees
 /// and path aliases, the namespace prefix, and the engine state the
-/// interface's names read (script APIs B, F, M, P).
+/// interface's names read (script APIs B, F, M, P, R).
 pub struct Startup {
     pub trees: Rc<dyn Trees>,
     pub aliases: PathAliases,
@@ -122,6 +123,7 @@ pub struct Startup {
     pub files: Rc<RefCell<FileSystem>>,
     pub objects: Rc<RefCell<GameObjects>>,
     pub story: Rc<RefCell<Story>>,
+    pub dialogs: Rc<RefCell<DialogsAndTrade>>,
 }
 
 impl Startup {
@@ -154,7 +156,7 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, M, P; A, C and
+    /// The engine interface of the specs implemented (B, F, M, P, R; A, C and
     /// E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
@@ -165,7 +167,8 @@ impl Startup {
             Rc::clone(&self.services),
             Rc::clone(&self.files),
         )?;
-        scripts.register_story(Rc::clone(&self.story))
+        scripts.register_story(Rc::clone(&self.story))?;
+        scripts.register_dialogs_and_trade(Rc::clone(&self.dialogs))
     }
 }
 

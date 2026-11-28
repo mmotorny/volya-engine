@@ -41,6 +41,8 @@ use volya_engine_formats::model::{self, Mat4};
 use volya_engine_formats::object::ObjectRecord;
 
 use crate::classes::{Conversion, EnginePart, OverrideFailure};
+use crate::dialogs::talk::Talk;
+use crate::dialogs::trade::TradeParameters;
 use crate::files::{FileSystem, IniFile, config_from_text};
 use crate::loader::Scripts;
 use crate::object_factory::{ObjectFactory, class_id};
@@ -379,25 +381,16 @@ impl Default for Conditions {
     }
 }
 
-/// An inventory owner's selling or buying factors (7).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct TradeFactors {
-    /// The two default factors.
-    pub default: (f32, f32),
-    /// Per item section, its two factors.
-    pub items: Vec<(Vec<u8>, f32, f32)>,
-}
-
 /// An inventory owner's part (7).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InventoryOwner {
-    pub sell: TradeFactors,
-    pub buy: TradeFactors,
-    /// The item sections to show.
-    pub show: Vec<Vec<u8>>,
+    /// Its own trade parameters (script API R 5.2, 5.3).
+    pub trade: TradeParameters,
     /// The character profile id, if any.
     pub profile: Option<Vec<u8>>,
     pub character_name: Vec<u8>,
+    /// Its talk state (script API R 4).
+    pub talk: Talk,
 }
 
 /// A fighter's part (5.5).

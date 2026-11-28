@@ -191,6 +191,7 @@ fn started(
         services,
         objects: Rc::new(RefCell::new(GameObjects::new())),
         story: Rc::new(RefCell::new(Story::new())),
+        dialogs: Rc::default(),
         files: Rc::clone(&fs),
     })
     .map_err(|e| e.message)?;

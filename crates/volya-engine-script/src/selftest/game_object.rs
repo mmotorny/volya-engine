@@ -844,9 +844,10 @@ eq(obj({STALKER}):profile_name(), nil, "no profile")
         let owner = objects.get(TRADER).and_then(|o| o.owner.clone());
         let owner = owner.ok_or("no owner")?;
         ensure(
-            owner.sell.items == [(b"wpn_pm".to_vec(), 0.5, 1.5)]
-                && owner.buy.default == (0.25, 0.75)
-                && owner.show == [b"wpn_pm".to_vec()],
+            owner.trade.sell.factor_table == [(b"wpn_pm".to_vec(), 0.5, 1.5)]
+                && owner.trade.sell.item_list == [b"listed".to_vec()]
+                && owner.trade.buy.default == (0.25, 0.75)
+                && owner.trade.show == [b"wpn_pm".to_vec()],
             || format!("the owner's factors {owner:?}"),
         )?;
     }

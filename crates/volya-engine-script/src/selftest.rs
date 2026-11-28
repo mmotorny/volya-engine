@@ -4,7 +4,8 @@
 //! The runtime's behaviour, the script loader, script classes, the
 //! object factory, the engine services, the value types, configuration
 //! and files, game objects, object binders, object event callbacks, the
-//! story state, the engine's entry points and the dialog files' functions,
+//! story state, the engine's entry points, the dialog files' functions and the
+//! dialogs and trade,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -13,6 +14,7 @@ use crate::{ErrorKind, Lua, Value};
 
 pub mod classes;
 pub mod dialogs;
+pub mod dialogs_and_trade;
 pub mod entry_points;
 pub mod files;
 pub mod game_object;
@@ -72,6 +74,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = dialogs::check() {
+        fail(e);
+    }
+    if let Err(e) = dialogs_and_trade::check() {
         fail(e);
     }
     if failures.is_empty() {

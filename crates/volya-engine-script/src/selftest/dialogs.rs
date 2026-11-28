@@ -195,7 +195,7 @@ pub fn actions() -> Result<(), String> {
     )
 }
 
-/// R 3.1 (as disputed in its review), `files` 8: an error raised is fatal,
+/// R 3.1 (D 1.2), `files` 8: an error raised is fatal,
 /// and so is a function no script defines (our reading of the believed
 /// access fault).
 pub fn failures() -> Result<(), String> {

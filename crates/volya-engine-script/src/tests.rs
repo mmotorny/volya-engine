@@ -848,3 +848,76 @@ mod dialogs {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// The dialogs and trade's checks, one test per section of
+/// docs/behavior/script-api-dialogs-and-trade.md (all of them run in
+/// [`selftest`] too, on every target).
+mod dialogs_and_trade {
+    use crate::selftest::dialogs_and_trade as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn the_phrase_classes() {
+        section(checks::phrase_classes);
+    }
+
+    #[test]
+    fn the_one_object_forms() {
+        section(checks::one_object_forms);
+    }
+
+    #[test]
+    fn init_functions() {
+        section(checks::init_func);
+    }
+
+    #[test]
+    fn talk() {
+        section(checks::talk);
+    }
+
+    #[test]
+    fn the_start_dialog() {
+        section(checks::start_dialog);
+    }
+
+    #[test]
+    fn trade_enabled() {
+        section(checks::trade_enabled);
+    }
+
+    #[test]
+    fn the_trade_condition_functions() {
+        section(checks::trade_conditions);
+    }
+
+    #[test]
+    fn factors_and_price() {
+        section(checks::factors_and_price);
+    }
+
+    #[test]
+    fn trader_members() {
+        section(checks::trader_members);
+    }
+
+    #[test]
+    fn game_difficulty() {
+        section(checks::game_difficulty);
+    }
+
+    #[test]
+    fn the_worked_example() {
+        section(checks::worked_example);
+    }
+}

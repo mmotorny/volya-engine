@@ -123,6 +123,7 @@ fn game() -> Option<Game> {
         objects: Rc::new(RefCell::new(GameObjects::new())),
         files,
         story: Rc::clone(&story),
+        dialogs: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

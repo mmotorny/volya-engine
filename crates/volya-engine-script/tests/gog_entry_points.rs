@@ -115,6 +115,7 @@ fn started(trees: Rc<GameTrees>, aliases: &PathAliases) -> GameScripts {
         services,
         objects: Rc::new(RefCell::new(GameObjects::new())),
         story: Rc::new(RefCell::new(Story::new())),
+        dialogs: Rc::default(),
         files,
     })
     .unwrap()

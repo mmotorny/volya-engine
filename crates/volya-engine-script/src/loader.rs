@@ -238,6 +238,8 @@ pub struct Scripts {
     pub(crate) game_object_state: Option<crate::game_object::Registered>,
     /// The story state, once registered ([`crate::story`]).
     pub(crate) story_state: Option<crate::story::Registered>,
+    /// The dialogs and trade, once registered ([`crate::dialogs`]).
+    pub(crate) dialogs_state: Option<crate::dialogs::Registered>,
 }
 
 impl Scripts {
@@ -308,6 +310,7 @@ impl Scripts {
             factory,
             game_object_state: None,
             story_state: None,
+            dialogs_state: None,
         })
     }
 

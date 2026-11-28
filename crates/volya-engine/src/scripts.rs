@@ -78,6 +78,7 @@ pub fn start(data: &GameData, trees: Rc<dyn Trees>) -> io::Result<GameScripts> {
         objects: Rc::new(RefCell::new(GameObjects::new())),
         // TODO(#1063): the game's story state.
         story: Rc::new(RefCell::new(Story::new())),
+        dialogs: Rc::default(),
     })
     .map_err(fatal)
 }
