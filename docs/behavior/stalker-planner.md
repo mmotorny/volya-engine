@@ -62,7 +62,7 @@ Conventions:
   believed wherever it depends on the script runtime and on specifications of other systems.
 - **Checks**: every claim carries a label in brackets, an assertion of `checks/stalker-planner/checks.py` in the
   dirty workspace (`python3 -I checks.py`; `B`, `E`, `S`, `A`, `U`, `V`, `O` from the static analysis, `D`, `K`, `X`
-  from the data and scripts). All 41 pass. Statements cited from an approved specification carry its checks.
+  from the data and scripts). All 57 pass. Statements cited from an approved specification carry its checks.
 
 ## 1. The root
 
@@ -99,9 +99,11 @@ The root evaluates seven properties, added in this order [B1, B1b] (W keeps them
 
 The enemy rule: each time the enemy choice is updated and has an enemy, it records the clock; the property stays
 true for 3,000 ms after the last such update, so a stalker that loses its enemy keeps "enemy" for up to 3 s [E1].
-The recorded time starts at 0 when the stalker's memory is made (**believed** of no effect at a New Game, when the
-clock is already well past 3,000 ms). **Disputed in review:** no check establishes the initial value of the recorded
-time; treat it as unestablished.
+The recorded time is 0 when the stalker's memory is made and is set to 0 again each time the memory reads the
+stalker's section, which the stalker's own reload does when it comes online (1.1, `L` 5.1) [E1b]; it is not reset
+when the enemy is lost. So after coming online, until the choice first has an enemy, the property is true exactly
+while the clock is below 3,000 ms (the clock counts from the engine's start, `H` 6; **believed** never so at a New
+Game's think steps, which follow the title menu and the level's loading).
 
 The anomaly rule [E3]: the stalker counts as in an anomaly when it currently touches a zone object that is not a
 radiation zone (its touch sense, updated in its scheduled update after the think step, 5.1; **believed** the class
@@ -139,9 +141,9 @@ update plan anew). Then it runs the general update (W) [B4, B4b].
 
 Since `puzzle_solved` is always false at the root, the life goal is reached only through the alife planner, the one
 action whose effect is puzzle_solved = true. So a living stalker always plans towards the alife planner: when its
-preconditions hold, it runs; when enemy, danger, items or anomaly is true, the plan starts with the combat, danger,
-gather-items or anomaly action, whose effects restore them; and every precondition the scripts add to the alife
-planner (4.3) puts the script actions that produce it in front of it. A dead stalker plans towards the death
+preconditions hold, it runs; when enemy, danger, items or anomaly is true, among the engine's parts the plan starts
+with the combat, danger, gather-items or anomaly action, whose effects restore them (script actions with the same
+effects may lead instead, 4.3); and every precondition the scripts add to the alife planner (4.3) puts the script actions that produce it in front of it. A dead stalker plans towards the death
 planner, the one action whose effect is already_dead = true; since `already_dead` is also always false, the death
 planner, once chosen, stays the running action.
 
@@ -187,9 +189,8 @@ Building it stores anomaly = false in its own stored set and in the root's, remo
 
 - evaluators: `inside_anomaly` (43), true when the stalker touches a zone that is not a radiation zone, with the
   same enemy and group-rating condition as the anomaly rule of 1.2 (no stored-set alternative) [E4]; `anomaly` (42),
-  the same rule as the root's (1.2), reading this planner's stored set [S3, E3]. **Disputed in review:** the anomaly
-  evaluator here reads the root's stored set, not this planner's: it is the same evaluator as the root's and always
-  looks up `anomaly` in the stalker's root;
+  the same rule as the root's (1.2), and like it reading the stored `anomaly` of the stalker's root, not this
+  planner's own set [S3, E3b];
 - actions: `get_out_of_anomaly` (10), precondition inside_anomaly = true, effect inside_anomaly = false;
   `detect_anomaly` (11), preconditions inside_anomaly = false, anomaly = true, effect anomaly = false.
 
@@ -208,23 +209,35 @@ them out); "desired position" is `X`'s desired position with its flag.
 
 ### 3.1 What every engine action does
 
-Starting an engine action records the clock as its start time and clears a flag of the root that other actions set
-(CH-18's) [A1]. A plain action (`action_dead`) does nothing while it runs; finishing an engine action resets the
-stalker's motion manager (CH-11; **believed**: its script animation request) [A1]. An action writes the stored set
+Starting an engine action records the clock as its start time, resets the stalker's motion manager (CH-11;
+**believed**: its script animation request) and clears a flag of the root that other actions set (CH-18's) [A1,
+A1b]. A plain action (`action_dead`) does nothing while it runs; finishing an engine action resets the same motion
+request [A1]. An action writes the stored set
 of the planner that added it [S5].
 
 ### 3.2 `action_dying` and `action_dead`
 
-`action_dying` [A2]: it drops the items in the stalker's inventory slots, never a bolt. A condition on the item in
-the active slot and on a time less than 501 ms before now decides when (**unestablished** what the condition is;
-**believed** "it was firing when it died"): when it holds, every slot item but the active one is dropped when the
-action starts, after a further request to the inventory (**unestablished**); when it does not, every slot item but
-the active one is dropped at its first run and the active one is marked instead (**believed**: to fall with the
-body, CH-21). Then, at each run, it stores dead = true in the death planner's set [A2, S5]. **Disputed in review:** dead = true
-is stored only at a run where the condition does not hold; while it holds, a run drops nothing and stores nothing,
-and the drop-and-mark pass (every slot item but the active one dropped, the active one marked) and the storing of
-dead = true happen at the first run where it no longer holds. What dropping does is
-CH-6's and CH-21's.
+`action_dying` [A2, A2b]: it drops the items in the stalker's inventory slots, never a bolt, and decides when by the
+**firing condition**, which holds when all of these do:
+
+- the inventory's total weight (the sum of its items' weights, kept by the inventory) is above 0 (**believed** the
+  meaning of that sum);
+- an active slot is set and holds an item that is a weapon (**believed**: the item's weapon view is not none) with
+  at least one round in its magazine (the count `get_ammo_in_magazine` returns);
+- the stalker's **dying-fire flag** is set: the stalker's death sets it when, at that moment, its combat planner is
+  running (a mark the combat planner sets when it starts and clears when it finishes while the stalker is alive),
+  the item handler (CH-20) does not hold its weapon strapped (a stored property of the item handler's planner that
+  strapping sets and unstrapping clears, false at first), and a random number is even (3.4.1); otherwise the death clears it (**believed** that this routine runs at the death, as `script-api-inventory`
+  7.4);
+- the clock is less than 501 ms past the stalker's death time (`death_time()`, `script-api-game-object-basics`).
+
+Starting: when the condition holds, the inventory is given the fire action (`wpn_fire`, 32) as pressed, which it
+passes to the item in the active slot (what the weapon then does is CH-6's and CH-20's), and every slot item but the
+active one is dropped. Each run: the stalker's movement is disabled as by `movement_enabled(false)` (`X`: its
+position is recorded when movement was enabled) [A2c]; then, only when the condition does not hold, every slot item
+but the active one is dropped, the active one is marked (**believed**: to fall with the body, CH-21) and dead = true
+is stored in the death planner's set [A2, S5]. So while the stalker goes on firing (up to 500 ms after its death)
+the action stays, and the first run after that drops, marks and stores. What dropping does is CH-6's and CH-21's.
 
 `action_dead` is a plain action (3.1) [A1, S1].
 
@@ -240,26 +253,36 @@ the sight is updated (CH-13 / `X`). Finishing: the desired position is dropped a
 ### 3.4 `action_no_alife`, `action_smart_terrain_task`, `action_solve_zone_puzzle`
 
 All three start with no desired direction, detail path line (0), body standing (1), movement walk (0) and mental
-state free (1); `action_no_alife` also drops the desired position [A4]. `action_no_alife` and
-`action_smart_terrain_task` play, at each run, the humming sound kind (`sound_humming`, 3) with the two intervals
-10,000 and 60,000 ms (**believed**: the shortest and the longest pause; the sound player is CH-25's);
-`action_solve_zone_puzzle` does not [A4].
+state free (1); `action_no_alife` also drops the desired position [A4]. Each start also runs the sight update that
+gather items runs (3.3) [A4b]. `action_no_alife` and `action_smart_terrain_task` play, at each run, the humming
+sound kind (`sound_humming`, 3) with the two intervals 10,000 and 60,000 ms (**believed**: the shortest and the
+longest pause; the sound player is CH-25's); `action_solve_zone_puzzle` does not [A4].
 
-- `action_no_alife` and `action_solve_zone_puzzle`: path type game path (0) [A4]. Starting, each records a time:
-  the start, or 30,000 ms plus a random part of up to 30,000 ms after it when the weapon in the active slot is the
-  one the item handler holds as best; each run renews the choice of the best weapon and asks the item handler to
-  hold it idle (**believed**, CH-6 and CH-20's requests); what the recorded time changes between the two is
-  **unestablished** [A4].
+- `action_no_alife` and `action_solve_zone_puzzle`: path type game path (0) [A4]. Starting, each records a **strap
+  time**: the start, or, when the stalker is alive, its best weapon (renewed then, CH-20) is set and is the item in
+  its active slot, 30,000 ms plus a random part after the start [A4c]. Each run asks the item handler (CH-20) for a
+  goal, with the queue values −1, −1 and the two intervals 300 and 300 ms [A4c, D2]: before the strap time, `idle`
+  (`object.idle`, 8) with the best weapon (renewed at each run while the stalker is alive; none if it has none); from
+  the strap time on, when the stalker is alive and has a best weapon, `strap` (`object.strap`, 9) with that weapon,
+  else `idle` with no object. So a stalker holding its best weapon keeps it in hand 30 to 60 s, then straps it.
 - `action_smart_terrain_task`: on each run, when the stalker's game-graph vertex is the task's, path type level path
-  (1) to the task's level vertex and position (with the desired position set once it is close), else path type
-  game path (0) to the task's game vertex (**Disputed in review:** "once it is close" is unbacked: on the level-path
-  branch the desired position is set at every run, either to the task's position directly or to a position the
-  movement finds from the task's position and level vertex; what decides between the two is unestablished); from 30,000 ms after its start it renews the item handler's request each
-  run (**believed**, CH-20). The task's place is CH-28's [A4].
+  (1): when the task's level vertex is accessible to the stalker (its restrictions, CH-9), the target level vertex is
+  the task's and the desired position is the task's position; otherwise the target and the desired position are
+  requested from the task's position and level vertex as `get_out_of_anomaly` requests its own (3.5, CH-9 / CH-10)
+  [A4d]. Else path type game path (0) to the task's game vertex. From 30,000 ms after its start it renews the item
+  handler's request each run (**believed**, CH-20). The task's place is CH-28's [A4].
+
+#### 3.4.1 The random parts
+
+The random parts of 3.4 and 3.6 come from one sequence shared by the whole process: a 32-bit value s, 0 when the
+game's library is loaded, never saved or seeded; each draw sets s ← (s × 134,775,813 + 1) mod 2³² and gives
+⌊s × N / 2³²⌋, in [0, N), N being 30,000 (3.4) or 5,000 (3.6) [R1]. <!-- spec-lint: constant --> Two actions of the
+combat and danger planners (CH-18's, CH-19's) draw from it too, so the values depend on everything that drew
+before. The parity of 3.2 comes from a different generator, which one is **unestablished** here.
 
 ### 3.5 `get_out_of_anomaly`
 
-Starting: the stalker's sounds are stopped (**believed**); path type level path (1), detail line (0), standing (1),
+Starting: the stalker's sounds are stopped (**believed**); the sight update of 3.3 [A4b]; path type level path (1), detail line (0), standing (1),
 walk (0), mental state danger (0); the item handler's request depends on whether it has an enemy and holds its best
 weapon (**believed**, CH-20); then it stores anomaly = true in the anomaly planner's set [A5, S5]. Each run: the same movement
 targets, and the stalker moves away from the zones it touches (it collects them and requests a position clear of
@@ -267,11 +290,13 @@ them, CH-9 / CH-10) [A5].
 
 ### 3.6 `detect_anomaly`
 
-Starting: sounds stopped (**believed**); a duration of 15,000 ms plus a random part of up to 5,000 ms; a further
-request (**unestablished**). Each run: while the duration has not passed and the stalker has no chosen enemy, the
-item handler's idle request (**believed**); otherwise it stores anomaly = false in the anomaly planner's set [S5] (so the root's
-`anomaly` becomes false at that planner's next update, 2.3) [A5]. **Disputed in review:** the copy into the root's set
-comes at the end of the same anomaly-planner update in which the action ran, not at the next one.
+Starting: sounds stopped (**believed**); a duration of 15,000 ms plus a random part (3.4.1, N = 5,000); then the
+stalker's throw target (CH-20's throw) is set to the point 10 m ahead of it (its position plus 10 m along its
+forward direction), the target being kept as unchanged when it is within 0.1 m of the previous one [A5b]. Each run:
+while the duration has not passed and the stalker has no chosen enemy, the item handler's idle request
+(**believed**); otherwise it stores anomaly = false in the anomaly planner's set [S5], which that planner copies into
+the root's set at the end of the same update (2.3), so the root reads `anomaly` false from its next update [A5,
+S3c].
 
 ## 4. Handing control to the scripts
 
@@ -296,7 +321,11 @@ In the spawning order of `L` 5.1 [B5, K1, K5]:
    `state_mgr_goap`) is a separate planner, not part of the root; the binder's `update` runs it (5.1) [K5].
 4. The binder's `net_spawn`, for a living stalker: the root's `anomaly` evaluator is removed and replaced by a
    constant false [K1]; then the logic set-up of `xr_logic` (through `xr_gulag`) enables the stalker's schemes, each
-   of which adds its evaluators and actions and preconditions on the engine's actions (4.3).
+   of which adds its evaluators and actions and preconditions on the engine's actions (4.3). Among them the generic
+   danger scheme (`xr_danger`, enabled for every script-bound stalker) removes the root's `danger` evaluator and adds
+   its own under the same id (8) [K7]: from then on the root's danger is that script evaluator's answer, false
+   whenever the danger choice has no danger, else decided by the script's rules (ignored kinds, distances, times,
+   zones, the wounded checks, the camper case).
 
 The "idle in life" evaluator is true whenever the stalker has an active scheme section [K5].
 
@@ -316,14 +345,21 @@ enemy, no anomaly, the common ones of `xr_motivator`, on_position = false; effec
 alife planner [K6]. While the scheme is active, the life goal can be reached only through "wait", so "wait" (after
 "go to position" when needed) is the running action; once it ends, kamp_end becomes true and the alife planner runs.
 
-The engine's own preconditions stay in force: whatever the scripts add, the combat, danger and gather-items actions
-come first when enemy, danger or items is true, the death planner when the stalker dies (1.3).
-**Disputed in review:** not whatever the scripts add: shipped scripts add root actions whose effect is enemy = false (the camper
-scheme's patrol, the wounded action, the zombied, camper and monolith combat types) or danger = false (the zombied
-combat type), and preconditions on the combat planner (for example the camper's close-combat property, the combat
-checker's property), so with enemy or danger true such a script action can lead the plan instead of the engine's
-planner; the same limits the "plan starts with the combat, danger ... action" statement of 1.4 to the engine's own
-parts.
+The engine's own preconditions stay in force, but the scripts also add root actions whose effects are the engine's
+properties, and preconditions on the combat and danger planners, so with enemy or danger true a script action may
+lead the plan instead of the engine's planner; which one leads is the plan W finds [K8]:
+
+| Script | Added when | Root action (id): preconditions → effects | On the engine's planners |
+|---|---|---|---|
+| `xr_wounded` | every script-bound stalker | "wounded" (`sidor_act_wounded_base`): alive, wounded → wounded = false, enemy = false, can_fight = true | combat, danger and anomaly planners need can_fight = true |
+| `xr_camper` | a stalker given the camper scheme | "patrol" (`stohe_camper_base` + 1): alive, camper_end = false, close_combat = false, can_fight, no danger, no anomaly, the common ones → camper_end = true, enemy = false | combat planner needs close_combat = true and gets the effects close_combat = false, camper_end = true |
+| `xr_combat` (with `xr_combat_zombied`, `xr_combat_camper`) | logic with an `on_combat` section, or the section `stalker_zombied` | "zombie shoot": alive, zombied type, script_combat → enemy = false; "zombie go to danger": alive, zombied type, no enemy, danger → danger = false; "camper shoot": alive, enemy, no anomaly, script_combat, camper type, sees → enemy = false | combat planner needs script_combat = false |
+| `xr_rest` | a stalker given the rest scheme | "stand2": alive, enemy, rest = false, on_position → on_position = false | combat planner needs on_position = false |
+| `xr_heli_hunter` | every script-bound stalker | (no engine effect) | combat and danger planners need heli_hunter = false |
+
+The script_combat property is true when the stalker has an enemy and its combat setting picks a script combat type
+(`zombied` or `camper`; `monolith` counts as none) [K8]. `xr_combat_monolith` adds nothing: its binding call is
+commented out [K8]. Ids are `xr_actions_id`'s, as script text; the rules of each script evaluator are the scripts'.
 
 ## 5. The update
 
@@ -339,14 +375,11 @@ U4]:
 2. The common update of a creature, which begins with the object's general scheduled update and with it the binder's
    `update(delta)` (`L` 5.2): so `xr_motivator`'s update (with `state_mgr`'s planner, the sounds) runs before the
    think step of the same update.
-3. When the object is controlled locally (a spawn flag; **believed** always so in single-player play): the **think
-   step** (5.2), or, when scripts have taken the stalker over (CH-24), the scripted actions instead; the root is then
-   not updated.
-4. When alive: its touch sense (whose touched objects 1.2 and 2.3 read at the next think step).
-5. Further work (network state, the inventory's update; not this specification's).
-
-**Disputed in review:** steps 4 and the network state of 5 run only in the locally controlled case of step 3 (they
-are skipped with it); the inventory's update runs in every case.
+3. When the object is controlled locally (a spawn flag; **believed** always so in single-player play), in this
+   order: the **think step** (5.2), or, when scripts have taken the stalker over (CH-24), the scripted actions
+   instead (the root is then not updated); when alive, its touch sense (whose touched objects 1.2 and 2.3 read at
+   the next think step); then a record of its network state.
+4. In every case: the inventory's update and further work (not this specification's).
 
 How often the scheduled update runs is CH-26's.
 
@@ -360,8 +393,8 @@ runs while the stalker is dead too, so the death planner runs (2.1).
 
 A stalker's saved state ends with the root's [V1]. A planner writes, in this order: each evaluator's own state (in id
 order), each action's own state (in id order; an inner planner writes its planner state in the same way), then its
-stored set: a u32 count, then for each pair a u32 property id and a u8 value. Loading reads the same and marks the
-planner as loaded (W's meaning) [V1]. The engine's evaluators and plain actions write nothing of their own; what a
+stored set: a u32 count, then for each pair a u32 property id and a u8 value. Loading reads the same and sets a
+mark on the planner that its set-up clears; nothing in the engine reads that mark, so it changes nothing [V1, V2]. The engine's evaluators and plain actions write nothing of their own; what a
 script evaluator or action writes is W's [V1]. Where the stalker's block sits in the save is CH-27's.
 
 ## 7. `need_osoznanie_mode`
@@ -384,8 +417,9 @@ campfire job.
    ones (`xr_wounded`, `xr_abuse`, `xr_meet`, `xr_heli_hunter` and others, `xr_logic`), adding among others
    kamp_end 1065, on_position 1066, "go to position" 202 and "wait" 204, and the precondition kamp_end = true on the
    alife planner [K6].
-4. At its first think step: health is above 0, so the life goal; no enemy (and none in the last 3 s), no danger,
-   no item chosen (**believed** for this place), anomaly false; the scheme is active, so kamp_end is false and "idle
+4. At its first think step: health is above 0, so the life goal; no enemy (and none in the last 3 s; the clock past 3,000 ms, 1.2), no
+   danger (the `xr_danger` evaluator, false with no danger chosen, 4.2), no item chosen (**believed** for this place),
+   anomaly false; its logic has no `on_combat` section, so `xr_combat` adds nothing (4.3) [X1b]; the scheme is active, so kamp_end is false and "idle
    in life" is true. The plan is "go to position" (if not on its vertex), "wait", then the alife planner; the first
    runs: the stalker walks to its place at the fire. On its vertex, "wait" runs and keeps running while the scheme is
    active.
@@ -395,8 +429,8 @@ campfire job.
 
 ## 9. Unestablished and believed
 
-- What the condition of `action_dying` is and its further inventory request; the further requests of
-  `detect_anomaly` and of `action_no_alife` / `action_solve_zone_puzzle` (3.2, 3.4, 3.6).
+- The generator of the dying-fire flag's parity (3.2, 3.4.1); the meaning of the
+  inventory's weight sum and of the weapon view (3.2).
 - What group rating 0 means for the anomaly rule (1.2; CH-18).
 - The sound and item-handler requests of the actions are believed from what they set (3.3–3.6; CH-20, CH-25).
 - That `Z_RADIO` is the radiation zone (1.2), that the task field of 2.2 is a smart terrain's job (CH-28), that the
@@ -411,7 +445,8 @@ campfire job.
 - Data examined: the winning copies of `config\`, `scripts\` and `spawns\all.spawn` as extracted for the approved
   `pda-scope`: `lua_help.script` (`stalker_ids`), `bind_stalker`, `xr_motivator`, `state_mgr`, `state_mgr_goap`,
   `xr_actions_id`, `xr_evaluators_id`, `modules`, `xr_logic`, `xr_kamp`, `xr_meet`, `xr_wounded`, `xr_abuse`,
-  `xr_heli_hunter`, `gulag_escape` and every script fetching the root's actions; `config\misc\gulag_escape.ltx`; the
+  `xr_heli_hunter`, `xr_danger`, `xr_combat`, `xr_combat_zombied`, `xr_combat_camper`, `xr_combat_monolith`,
+  `xr_camper`, `xr_rest`, `gulag_escape` and every script fetching the root's actions; `config\misc\gulag_escape.ltx`; the
   record `esc_lager1`.
 - Analysis: static analysis of `bin\xrGame.dll` (the full headless Ghidra decompilation made for earlier approved
   specifications, read-only headless instruction listings of the planner-building routines, run-time type
@@ -419,20 +454,14 @@ campfire job.
   update; the three inner planners and their actions; the evaluators' routines; the stalker's reload, scheduled
   update, think step, save and load; the script member returning the root; the reading of `need_osoznanie_mode`.
   No debugging or execution; the game was not run.
-- Checks: `checks/stalker-planner/checks.py` (with the `characters-scope` helpers), run with `python3 -I`; 41 pass.
+- Checks: `checks/stalker-planner/checks.py` (with the `characters-scope` helpers), run with `python3 -I`; 57 pass.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
 ## Gaps found in review
 
-- The generic danger scheme (`xr_danger`), enabled for every script-bound stalker at the logic set-up, removes the
-  root's `danger` evaluator and adds its own script evaluator under the same id; what the root then reads as danger
-  is not specified (4.2 lists no replacement besides `anomaly`).
-- Script actions added to the root with effects on the engine's properties (enemy = false, danger = false) and the
-  script preconditions on the combat planner: which scripts, under which conditions, and how they share the enemy
-  case with the combat planner.
-- Starting an engine action also resets the same motion request that finishing resets (3.1 gives it only for
-  finishing).
-- The start of `action_no_alife`, `action_solve_zone_puzzle`, `action_smart_terrain_task` and `get_out_of_anomaly`
-  also updates the stalker's sight (3.3 gives a sight update only for gather items).
-- Each run of `action_dying` also clears a movement value of the stalker, first recording the stalker's position
-  into it when it was set; its meaning is not specified.
+- The rest scheme (`xr_rest`) also adds the root action "stand" (alive, enemy, rest = true, on_position →
+  on_position = false), which, like "stand2", meets the combat planner's precondition on_position = false; the table
+  of 4.3 lists only "stand2".
+- The parity of 3.2 comes from a linear congruential sequence of its own, s ← (s × 214,013 + 2,531,011) mod 2³²,
+  whose draw is bits 16 to 30 of s (a value in [0, 32,768)); whose state it advances, and that state's start, are
+  not specified (3.4.1 calls the whole generator unestablished).
