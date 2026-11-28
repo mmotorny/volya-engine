@@ -120,7 +120,7 @@ optional fields occur as follows [SJ-6, SJ-6b]:
 | `predicate` | 303 | a function of the member's information deciding whether the job suits it |
 | `timeout` | 33 | after a member began it, the job ends for it after this long (ms of game time) |
 | `idle_after_death` | 10 | after its member's death the job is unavailable this long (s; default 600) |
-| `fill_idle` | 2 | the job may be filled once per state (4.3) **Disputed in review:** in effect never applied; see 4.3 |
+| `fill_idle` | 2 | meant to let the job be filled once per state; in effect never limits a job (4.3) [SJ-31] |
 | `dependent` | 8 | never read [SJ-6c] |
 | `redicate` | 1 | a misspelt `predicate`, never read: that job suits every member [SJ-6b] |
 
@@ -157,6 +157,9 @@ The scripted update of a smart terrain (`se_smart_terrain:update`, section 4.7) 
 - **online**: from the binder's `update` (OB 5): `bind_smart_terrain.bind` binds a binder to every `SMRTTRRN` object
   whose custom data has `[smart_terrain]` or `[gulag1]`, provided a simulation exists; its `update(delta)` calls the
   simulation object's `update()` [SJ-3, SJ-7c].
+  An object bound by it whose custom data has one of those sections but whose class id is not `SMRTTRRN` is a fatal
+  error (`You must use SMART_TERRAIN instead of SCRIPT_ZONE %s`); every shipped record with those sections is a
+  `SMRTTRRN` of the configuration section `smart_terrain`, so the shipped data never reach it [SJ-37].
 
 The binder's `net_Relcase(handle)` (OB 5.5) marks a member being destroyed as offline in the gulag [SJ-7c]. A smart
 zone never switches offline once online (`OS` 6.5.2), so on the current level its update is the binder's.
@@ -204,18 +207,18 @@ engine only through members already specified:
 When the smart terrain registers (J 5.2 `on_register`), its gulag loads its jobs: the job tables of its type (2.3),
 sorted by `prior` from greatest to smallest with `table.sort` (not a stable sort: the order of equal priorities is the
 runtime's) [SJ-6d]. For each job, its path (2.2), the game vertex and position of point 0 of that path, and that
-vertex's level are recorded [SJ-6d]. **Disputed in review:** the paths, their point 0 and its vertex and level are
-recorded not at registration but when the gulag starts working (its first member, 4.7) or, for a gulag saved as
-working, when it registers after a load; so the fatal errors of 2.2 arise then. The capacity becomes the smaller of the custom-data `capacity` and the number of
-jobs whose `state` contains 0 [SJ-6d].
+vertex's level are recorded, not at registration but when the gulag starts working (its first member, 4.7), or at
+registration for a gulag read from a save as working; so the fatal errors of 2.2 arise then [SJ-6d, SJ-30]. The
+capacity becomes the smaller of the custom-data `capacity` and the number of jobs whose `state` contains 0 [SJ-6d].
 
 ### 4.2 The gulag's state
 
 A working gulag has a state number (0 at first). At each gulag update, when the player exists, the type's state
 function gives the state; when it differs, the state changes, its start time is recorded, and every job that does not
 exist in the new state is freed (4.6) [SJ-8b]. A job whose `fill_idle` was used up in the previous state may be filled
-again [SJ-8b]. The type's state functions are the level scripts' (`load_states`); an unknown type is fatal (`ERROR:
-unrecognized gulag's type '%s'`) [SJ-8b]. When the gulag starts working (its first member), the condition lists
+again [SJ-8b] (in effect this never occurs, 4.3). The type's state functions are the level scripts' (`load_states`); an unknown type is fatal (`ERROR:
+unrecognized gulag's type '%s'`) [SJ-8b]. When the gulag starts working (its first member), or at registration for a gulag read
+from a save as working (4.1), the condition lists
 `switch_0` and `switch_1` of the custom data are parsed and kept for the state functions [SJ-8]. `esc_lager`'s states
 are in section 6.
 
@@ -225,10 +228,13 @@ A job is **available** when: it has never been begun, or more than `idle` ms of 
 last begun; and its time of unavailability after a death (4.6) has passed; and, for a job with `fill_idle`, it has not
 been filled once already in this state (or, when `fill_idle` is a time, it is still within that time after its
 beginning). A job **remains current** for its member while it has no `timeout`, or less than `timeout` ms have passed
-since it was begun [SJ-8c]. **Disputed in review:** when the gulag starts working, every job's `fill_idle` is replaced
-by its saved value, which is none for a gulag that was not saved as working; the value saved is that replaced one, so
-it is none again after a load. The `fill_idle` of the job tables therefore never limits a job in the shipped scripts,
-and the once-per-state use (4.2, 4.5 step 1) never occurs.
+since it was begun [SJ-8c].
+
+In effect `fill_idle` never limits a job [SJ-31]: both shipped jobs that have it give the once-per-state value, which
+does not limit availability while the gulag is idle; when the gulag starts working, every job's `fill_idle` is
+replaced by its saved value, which is none for a gulag not read from a save as working; the value saved is that
+replaced one (none is saved as 0 and read back as none). Nothing else sets it, so the once-per-state use (4.2, 4.5
+step 1) never occurs.
 
 ### 4.4 Assignment
 
@@ -242,10 +248,10 @@ At each gulag update, the jobs are distributed (`updateJob`):
    (shortest first; `table.sort`, so ties in the runtime's order) and taken in that order, giving each still-free job
    to each still-free candidate. Then each job of the block that is still free may take a member from a job of lower
    priority: among the jobs of lower priority, from the lowest, the members of the lowest-priority group of such jobs
-   whose predicate the job accepts, the nearest is moved (its old job freed). **Disputed in review:** the search
-   from the lowest stops before the position, in the list of available jobs, equal to the free job's position in the
-   whole sorted job list of 4.1; lower-priority jobs at or before that position in the available list are not
-   searched, so the search covers all lower-priority jobs only when every job before the free one is available.
+   whose predicate the job accepts, the nearest is moved (its old job freed). The search from the lowest stops
+   before the position, in the list of available jobs, equal to the free job's position in the whole sorted job
+   list of 4.1; lower-priority jobs at or before that position in the available list are not searched, so the search
+   covers all lower-priority jobs only when every job before the free one is available [SJ-32].
 
 [SJ-8d]
 
@@ -270,7 +276,8 @@ arrival: with `position_threshold = "graph"`, when the level vertex of its game 
 vertex; otherwise when its distance to the job (4.4) is less than `position_threshold`, default 120 [SJ-7h, SJ-6e].
 An arriving member **begins** the job:
 
-1. it is marked arrived, the job's begin time is the game time, and a once-per-state job is used up;
+1. it is marked arrived, the job's begin time is the game time, and a once-per-state job is used up (in effect
+   never, 4.3);
 2. its simulation object's job-online value becomes the job's `online` (absent: none) (`OS` 6.5.4) [SJ-7g];
 3. a monster's smart-terrain task is activated (`smart_terrain_task_activate`, J 3.6: the "task reached" byte 1),
    which ends its online task state (5.2) [SJ-7g];
@@ -285,12 +292,12 @@ An arriving member **begins** the job:
 
 [SJ-8e]
 
-When a member comes online (3.3): if it has begun its job, its restrictions are set again, and its logic is set from
-the job unless the game was just loaded (then its own saved logic is restored); a member that has not begun, or a
-creature without a smart terrain, starts its own logic (`xr_logic.initialize_obj`) [SJ-8f]. **Disputed in review:** the
-test is the member's "arrived" flag, which freeing a job (4.6) does not clear (only a new job clears it); a member
-freed after arriving that comes online before it is given another job gets neither job logic nor its own logic
-(believed: static reading).
+When a member comes online (3.3), the test is its "arrived" flag (4.5 step 1), which only being given a job (4.4)
+or joining clears; freeing a job (4.6) leaves it [SJ-8f, SJ-33]. With the flag set, the restrictions and logic of its
+job are set again if it has a job, the logic only unless the game was just loaded (then its own saved logic is
+restored); a member without the flag, or a creature without a smart terrain, starts its own logic
+(`xr_logic.initialize_obj`) [SJ-8f]. So a member freed after arriving that comes online before it is given another
+job gets neither job logic nor its own logic, unless the game was just loaded [SJ-33].
 
 ### 4.6 Leaving a job and the smart terrain
 
@@ -301,18 +308,23 @@ had arrived, its logic is restarted as at spawn (`xr_logic.initialize_obj`) [SJ-
 
 **Releasing** a member (`unregister_npc`): its job is freed; it leaves the gulag; its simulation object's squad and
 group return to those from before it joined; its smart-terrain id is cleared (`clear_smart_terrain`, J 3.6), after
-which `OS` 7.2's choice applies to it again [SJ-8g]. A dead member that had an exclusive smart terrain returns one
+which `OS` 7.2's choice applies to it again [SJ-8g]. No script changes an online member's team, squad or group on release: it keeps the
+team, squad and group the job's `change_team` gave it (4.4; `change_team` is called by no other script) [SJ-38];
+whether the engine later carries those or the simulation object's restored squad and group into the simulation
+object (for example when the member goes offline) is **unestablished**. A dead member that had an exclusive smart terrain returns one
 exclusive place (OS-5's) [SJ-8g]. A member is released:
 
-- when it dies online: the job counts a casualty and stays unavailable for `idle_after_death` (default 600) seconds of
-  game time, then the member is released [SJ-7i]; **Disputed in review:** the casualty and the unavailability apply only
-  when the member had a job; the member is released at once, not after that time;
+- when it dies online: it is released at once; if it had a job, the gulag counts a casualty and that job stays
+  unavailable for `idle_after_death` (default 600) seconds of game time [SJ-7i, SJ-34];
 - when its exclusive condition for this smart terrain no longer holds (checked at the gulag update, 4.7) [SJ-7j];
 - when the engine asks for its task while it has no job (3.2) [SJ-7d];
 - when it is pushed out by a newcomer that no free job suits (OS-5's joining; the first non-exclusive member whose job
-  suits the newcomer (**Disputed in review:** "first" is in the runtime's traversal order of the table of members keyed
-  by id, not the order of joining; whether it matches the original's is unestablished); if there is none, a fatal error `[smart_terrain %s] can't add npc, all are exclusive or there
-  are no suitable jobs`) [SJ-8g];
+  suits the newcomer, "first" in the runtime's `pairs` traversal of the table of members keyed by simulation id, not
+  the order of joining [SJ-35]; if there is none, a fatal error `[smart_terrain %s] can't add npc, all are exclusive or there
+  are no suitable jobs`) [SJ-8g]; **Disputed in review:** the test reads each traversed member's job without
+  checking that it has one, so a non-exclusive member without a job reached before a suitable one makes the scripts'
+  call fail (indexing a missing job) instead of being skipped; what the engine does with that script error is
+  `script-environment`'s;
 - when the gulag is removed (4.7), with every member [SJ-8h];
 - when the creature is unregistered from the simulation (3.3).
 
@@ -327,11 +339,10 @@ At each update of the smart terrain (3.1), if the gulag works:
   condition no longer holds are released; then, with no member left, the gulag is removed; else the gulag update runs
   [SJ-7j].
 
-The **gulag update**: members that went offline without notice are marked offline (their restrictions forgotten, an
-online member found by `level.object_by_id` set up online again; **Disputed in review:** in this pass a member is marked
-offline only when `level.object_by_id` does not find it, so the setting up online again never happens here; it
-happens when a creature that is online joins); the arrival test (4.5); the state (4.2, only while
-the player exists); the distribution (4.4); the arrival test again [SJ-8h].
+The **gulag update**: members that went offline without notice are marked offline (their restrictions forgotten; a
+member is marked offline only when `level.object_by_id` does not find it) [SJ-36]; the arrival test (4.5); the state
+(4.2, only while the player exists); the distribution (4.4); the arrival test again [SJ-8h]. A creature that is online
+when it joins is recorded as online, its game object found by `level.object_by_id` [SJ-36].
 
 **Removal** releases every member, then makes a new, idle gulag of the same type with its jobs loaded (a new working
 period starts with the next member) [SJ-8h].
@@ -478,6 +489,10 @@ Which members `esc_lager` has at a New Game, and so who takes the campfire jobs,
 
 - The order of jobs of equal priority and of pairs of equal distance (4.1, 4.4) is the runtime's `table.sort`'s; it
   matches the original only if the runtime's sort is the same algorithm (`script-environment`).
+- Which member a newcomer pushes out (4.6) follows the runtime's `pairs` traversal of a table keyed by simulation id;
+  it matches the original only if the runtime's tables are the same implementation (`script-environment`).
+- Whether a released online member's team, squad and group (from the job's `change_team`) or its simulation object's
+  restored squad and group reach the simulation object later (4.6).
 - The meaning of the stalker's path types 0 and 1 (believed: game-graph and level-graph paths) and one movement setting
   the smart-terrain action clears and sets (5.1).
 - The effect of each alife-planner action (believed from the planner's pattern, 5.1); what action 5 does (CH-17).
@@ -499,10 +514,3 @@ Which members `esc_lager` has at a New Game, and so who takes the campfire jobs,
   of the shipped scripts and configuration; static analysis (read-only decompilation and disassembly, run-time type
   information) of `xrGame.dll` for the engine's smart-terrain calls, the stalker's alife planner and its smart-terrain
   action, and the monsters' smart-terrain task state. Nothing was run.
-
-## Gaps found in review
-
-- The binder's binding is fatal for an object with a `[smart_terrain]` or `[gulag1]` custom-data section whose class id
-  is not `SMRTTRRN` (`You must use SMART_TERRAIN instead of SCRIPT_ZONE %s`), not stated in 3.1.
-- Releasing a member restores only its simulation object's squad and group (4.6); what becomes of an online member's
-  team, squad and group set with `change_team` (4.4) is not stated.
