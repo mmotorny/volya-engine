@@ -5,7 +5,17 @@
       "Bash(bazel run //tools/xtask -- wait-memory)",
       "Bash(bazel test //:checks)",
       "Bash(bazel run //tools/xtask -- spec-lint *)",
-      "Bash(shasum *)"
+      "Bash(shasum *)",
+      "Bash(bazel test //:checks //...)",
+      "Bash(bazel test //...)",
+      "Bash(bazel test //:checks //... --test_output=errors)",
+      "Bash(bazel test //:checks //... //tests/browser:game_level_chrome)",
+      "Bash(bazel test //tests/browser:game_level_chrome)",
+      "Bash(bazel test //tests/browser:game_input_chrome)",
+      "Bash(bazel test //tests/browser:game_level_chrome //tests/browser:game_input_chrome)",
+      "Bash(bazel test //tests/browser:game_memory_chrome)",
+      "Bash(bazel test //tests/browser:render_level_chrome)",
+      "Bash(bazel test //tests/browser:platform_chrome)"
     ]
   }
 }
