@@ -191,7 +191,7 @@ pub fn to_bits32(n: f64) -> i32 {
 
 /// Lua's number conversion of an assigned property value (2.4), without a
 /// type test: a numeric string gives its number, anything else 0.
-fn lua_number(v: &Value) -> f64 {
+pub(crate) fn lua_number(v: &Value) -> f64 {
     match v {
         Value::Number(n) => *n,
         Value::String(s) => string_number(s).unwrap_or(0.0),

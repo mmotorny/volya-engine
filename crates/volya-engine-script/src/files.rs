@@ -458,6 +458,15 @@ fn some_value<'a>(c: &Context, value: Option<&'a str>, function: &str) -> Result
     value.ok_or_else(|| c.handler(function, line!()))
 }
 
+/// A configuration from `text` loaded as `create_ini_file` loads one (2.3):
+/// up to its first zero byte, a root file whose includes resolve against
+/// `$game_config$`, over the index (for script API M's `spawn_ini`).
+pub(crate) fn config_from_text(files: &FileSystem, text: &[u8]) -> std::io::Result<Config> {
+    let text = &text[..text.iter().position(|&b| b == 0).unwrap_or(text.len())];
+    let base = files.aliases.dir(GAME_CONFIG)?.to_ascii_lowercase();
+    config::parse_in(&index::IndexVfs(&files.index), text, &base)
+}
+
 /// `sscanf(value, "%f,%f,%f")` (3.5): reading stops at the first component
 /// that doesn't parse; it and those after it are 0.
 pub fn scan_vector(value: &str) -> [f32; 3] {

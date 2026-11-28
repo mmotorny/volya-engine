@@ -189,6 +189,79 @@ mod files {
     }
 }
 
+/// Game object basics' checks, one test per section of
+/// docs/behavior/script-api-game-object-basics.md (all of them run in
+/// [`selftest`] too, on every target).
+mod game_object {
+    use crate::selftest::game_object as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn the_handle_and_kinds() {
+        section(checks::handle);
+    }
+
+    #[test]
+    fn identity() {
+        section(checks::identity);
+    }
+
+    #[test]
+    fn place() {
+        section(checks::place);
+    }
+
+    #[test]
+    fn condition() {
+        section(checks::condition);
+    }
+
+    #[test]
+    fn zones_restrictors_use_and_visibility() {
+        section(checks::zones);
+    }
+
+    #[test]
+    fn trade_parameters_and_names() {
+        section(checks::trade);
+    }
+
+    #[test]
+    fn constants() {
+        section(checks::constants);
+    }
+
+    #[test]
+    fn hit() {
+        section(checks::hit);
+    }
+
+    #[test]
+    fn cgameobject_client_classes_and_explosive() {
+        section(checks::engine_classes);
+    }
+
+    #[test]
+    fn unregistered_names() {
+        section(checks::unregistered);
+    }
+
+    #[test]
+    fn the_door_scheme() {
+        section(checks::door);
+    }
+}
+
 /// The value types' checks, one test per section of
 /// docs/behavior/script-api-value-types-and-math.md (all of them run in
 /// [`selftest`] too, on every target).

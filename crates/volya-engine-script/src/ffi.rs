@@ -196,6 +196,7 @@ unsafe extern "C" {
     pub fn volya_dispatch_protected(l: *mut LuaState, dispatch: *mut Dispatch) -> c_int;
     pub fn volya_open_factory_tools_protected(l: *mut LuaState, name: *const c_char) -> c_int;
     pub fn volya_new_engine_object_protected(l: *mut LuaState, object: *mut EngineObject) -> c_int;
+    pub fn volya_release_engine_object_protected(l: *mut LuaState, part: *mut f64) -> c_int;
     pub fn volya_register_object_function_protected(
         l: *mut LuaState,
         function: *mut ObjectFunction,

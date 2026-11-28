@@ -227,6 +227,8 @@ pub struct Scripts {
     pub(crate) fatal: Rc<RefCell<Option<String>>>,
     /// The object factory, made on first use ([`crate::object_factory`]).
     pub(crate) factory: Rc<RefCell<Option<ObjectFactory>>>,
+    /// The game object basics, once registered ([`crate::game_object`]).
+    pub(crate) game_object_state: Option<crate::game_object::Registered>,
 }
 
 impl Scripts {
@@ -295,6 +297,7 @@ impl Scripts {
             failures,
             fatal,
             factory,
+            game_object_state: None,
         })
     }
 

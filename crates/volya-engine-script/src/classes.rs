@@ -722,6 +722,23 @@ impl Lua {
         Ok(part)
     }
 
+    /// Releases the engine object holding `part` ([`Lua::new_engine_object`])
+    /// when what it stands for is gone: the state stops keeping it and its
+    /// part is released, so its members fail on values scripts still hold
+    /// (our choice where the specs leave that unestablished). `false` if no
+    /// engine object holds the part.
+    pub fn release_engine_object(&mut self, part: EnginePart) -> Result<bool, Error> {
+        if self.classes.part(part.0).is_err() {
+            return Ok(false);
+        }
+        let mut value = part.value();
+        // SAFETY: the state is open; `value` outlives the call.
+        let status =
+            unsafe { ffi::volya_release_engine_object_protected(self.state.as_ptr(), &mut value) };
+        self.check(status)?;
+        Ok(self.classes.part(part.0).is_err())
+    }
+
     /// Sets the global `name` to a function running `f`, which returns an
     /// engine object: the object holding the part `f` returns, or nil.
     pub fn register_object_function(

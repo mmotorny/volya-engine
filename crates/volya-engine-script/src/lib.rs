@@ -8,8 +8,8 @@
 //! behind a thin safe API; [`loader`] loads the game's script files,
 //! [`classes`] gives scripts classes deriving from engine classes,
 //! [`object_factory`] keeps the class ids and creates objects by them, and
-//! [`services`], [`values`] and [`files`] register the engine's names of
-//! the script API. See docs/architecture/scripts.md.
+//! [`services`], [`values`], [`files`] and [`game_object`] register the
+//! engine's names of the script API. See docs/architecture/scripts.md.
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
 //! Lua call that can raise runs in C inside `lua_cpcall` (csrc/volya_glue.c),
@@ -23,6 +23,7 @@
 pub mod classes;
 mod ffi;
 pub mod files;
+pub mod game_object;
 mod libc;
 pub mod loader;
 pub mod object_factory;

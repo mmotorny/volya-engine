@@ -877,6 +877,32 @@ int volya_new_engine_object_protected(lua_State *L, volya_engine_object *e)
   return lua_cpcall(L, new_engine_object, e);
 }
 
+/* Releases the engine object holding part `*part` (when the engine destroys
+** what it stands for): the state no longer keeps it and its part is
+** released; values scripts still hold are objects without a part. */
+static int release_engine_object(lua_State *L)
+{
+  double part = *(const double *)lua_touserdata(L, 1);
+  volya_object *o;
+  push_registry(L, &engine_objects_key);
+  if (lua_isnil(L, -1)) return 0;
+  lua_pushnumber(L, part);
+  lua_rawget(L, -2);
+  o = to_object(L, -1);
+  if (o == NULL) return 0;
+  lua_pop(L, 1);
+  lua_pushnumber(L, part);
+  lua_pushnil(L);
+  lua_rawset(L, -4);
+  release_part(L, o);
+  return 0;
+}
+
+int volya_release_engine_object_protected(lua_State *L, double *part)
+{
+  return lua_cpcall(L, release_engine_object, part);
+}
+
 typedef struct volya_object_function {
   const char *name;
   volya_rust_fn f;

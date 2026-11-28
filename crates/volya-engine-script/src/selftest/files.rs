@@ -54,7 +54,7 @@ pub fn check() -> Result<(), String> {
 }
 
 /// An archive tree in memory: lowercase `/`-separated paths.
-struct Tree(BTreeMap<String, Vec<u8>>);
+pub(super) struct Tree(pub(super) BTreeMap<String, Vec<u8>>);
 
 impl Trees for Tree {
     fn with_trees(&self, f: &mut dyn FnMut(&dyn Vfs, &dyn Vfs)) -> io::Result<()> {
@@ -134,7 +134,7 @@ impl LooseFiles for Saves {
     }
 }
 
-const FSGAME: &[u8] = b"$app_data_root$ = true | false| {userdocs}\\Stalker-SHOC\r\n\
+pub(super) const FSGAME: &[u8] = b"$app_data_root$ = true | false| {userdocs}\\Stalker-SHOC\r\n\
     $game_data$ = false| true | $fs_root$ | gamedata\\\r\n\
     $game_scripts$ = true | false| $game_data$ | scripts\\\r\n\
     $game_config$ = true | false| $game_data$ | config\\\r\n\
