@@ -118,14 +118,22 @@ At each update of a stalker whose movement is enabled (X 4.2), in this order [SM
 
 1. The movement request is copied into a **working state** (the target body state, movement type, mental state,
    path type, detail path type, desired position and direction with their marks) [SM-6].
-2. When the working movement type is not stand: the path settings (3.3) [SM-6].
+2. When the working movement type is not stand, or the **stand-path flag** is on: the path settings (3.3) [SM-6,
+   SM-6d].
 3. If the stalker is under script control (CH-24) and its current scripted action has a speed of at least 10⁻⁷ in
    size, that speed becomes the stalker's speed and the update ends here [SM-6b].
-4. When the working movement type is not stand: the travel masks (3.2), then the path pipeline (section 4) [SM-6].
-   **Disputed in review:** steps 2 and 4 also run with movement type stand while a further flag of the stalker's
-   movement is on; some of the decision planner's own actions (CH-17) switch it on together with a stand request
-   and off when they finish (which actions, and what the path does then, is unestablished).
+4. Under the same condition: the travel masks (3.2), then the path pipeline (section 4) [SM-6, SM-6d].
 5. The current states and speeds (3.4), then the run test (3.5) [SM-6].
+
+The stand-path flag is off at reinitialisation and is switched only by one action, the combat planner's
+(CH-18) `stalker_ids.action_kill_if_player_on_the_path` (35): when it starts, it requests movement type stand and
+mental state danger and switches the flag on; at each execution it sets the desired position and the destination
+vertex to a point it chooses, when it finds one (CH-18's; which point is unestablished here); when it finishes, it
+switches the flag off [SM-6e, SM-6f, SM-6g]. **Disputed in review:** the flag is not cleared at reinitialisation:
+the reinitialisation of the stalker's movement leaves it as it is; it is off only when the stalker's movement is
+first created, and afterwards only that action's finish switches it off. Meanwhile the path toward that position is built with the masks of a danger stand (3.2:
+only the stand entry of the body state is a candidate), but the stalker does not walk it: with movement type stand
+its speed is 0 (3.4) [SM-6d, SM-7, SM-8].
 
 The request's defaults, before any script sets it: standing, stand, danger, path type 3 (no path), detail type line,
 desired position and direction unset; body turn rate 2π, head turn rate 3π/2 [SM-5]. The path types are
@@ -167,6 +175,8 @@ detail path, let *e* be the entry of the stalker's current point [SM-8]:
 - *e* moves, in free: if the body heading is more than π/16 from the segment heading, the stalker stops to turn:
   speed 0 and body turn rate π, with body and head targets on the segment heading (as above) and the standing
   torso rule (6.3) off [SM-8, SM-8b].
+- When a stand point's own entry would be replaced by the next point's but the point is the path's last, its own
+  entry is kept, in every mental state [SM-8c].
 - in danger, *e* is used as it is [SM-8].
 
 The chosen entry gives the stalker's speed and body turn rate, and its code the **current** states: body standing if
@@ -213,9 +223,10 @@ SM-10].
   with squared length below 0.001 becomes (0, 1) [SM-11, SM-10b]. A start or end position that does not lie in its
   level vertex's cell is moved 0.001 m toward that cell's centre [SM-11f].
 - **Candidates**: the travel entries whose code has no bit outside the wanted mask; of those whose code also has no
-  bit outside the allowed mask, the fastest and the slowest are noted [SM-11]. For the departure every candidate is
-  tried; for the arrival, every candidate when the desired direction is set, otherwise a single entry of speed 0 and
-  turn rates 2π (the arrival direction then does not matter) [SM-11]. With no candidate the build fails [SM-11].
+  bit outside the allowed mask, the fastest and the slowest are noted [SM-11]. For every departure, and for the arrival at each inner
+  key point (5.2), every candidate is tried; for the arrival at the end, every candidate when the desired direction
+  is set, otherwise a single entry of speed 0 and turn rates 2π (the arrival direction then does not matter) [SM-11,
+  SM-11j]. With no candidate the build fails [SM-11].
 - The detail path type (X 3) is read but every value builds the same path [SM-11e].
 
 ### 5.2 Key points
@@ -239,17 +250,19 @@ departure candidate and an arrival candidate [SM-11b, SM-11c]:
 - each state gets two turning circles, left and right of its direction, of radius speed / path turn rate (a speed of 0
   gives radius 0: turning on the spot);
 - for each of the four pairs of circles, the common tangent leaving the first circle and reaching the second in
-  their turning senses is taken (when it exists), giving a first arc, a straight piece and a second arc;
+  their turning senses is taken (when it exists), giving a first arc, a straight piece and a second arc; it is kept
+  only if both ends of the straight piece lie within the level graph's area (its bounds widened by half a cell) over
+  a cell that has a level vertex [SM-11i];
 - the curves are ordered by their **time**: straight length / speed of the fastest allowed candidate + |first arc
   angle| / departure path turn rate + |second arc angle| / arrival path turn rate; the first, in that order, whose
   arcs and straight piece pass the level graph is the pair's curve [SM-11b].
 
-Without shortest choice the first pair (in table order) that yields a curve is used; with it, the pair of least time
-[SM-11c]. **Disputed in review:** the order is not the table's as listed in section 2. The entries are kept sorted
-by code (ascending, unsigned); the candidate list puts the entries that fit the allowed mask first, in descending
-code order, followed by the other candidates in ascending code order, and pairs are tried with the departure
-candidate in the outer loop and the arrival candidate in the inner one. So a danger stalker (no shortest choice)
-tries its moving entry before its stand entry. If no pair yields a curve for some stretch, the whole detail path is discarded and the build fails
+Without shortest choice the first pair that yields a curve is used; with it, the pair of least time [SM-11c]. The
+pairs are tried with the departure candidate in the outer loop and the arrival candidate in the inner one, each in
+**candidate order**: the travel entries are kept sorted by code (ascending, as unsigned numbers); the candidates
+that fit the allowed mask come first, in descending code order, then the other candidates in ascending code order
+[SM-11h]. So a danger standing walker (candidates 0x8000004a, 0x49) and a free standing walker (0x8000008a, 0x89)
+both try their moving entry before their stand entry [SM-11h2]. If no pair yields a curve for some stretch, the whole detail path is discarded and the build fails
 [SM-11c, SM-11g]. A negative speed
 would reverse the direction; no entry has one [SM-11c, SM-1].
 
@@ -259,6 +272,9 @@ would reverse the direction; no entry has one [SM-11c, SM-1].
   equal angular steps, each sample followed through the level graph from the previous one (the arc fails when a
   sample leaves it); a shorter arc is a single point [SM-11d]. The straight piece is followed by the straight walk,
   with a point where it crosses into each next vertex (**believed** from the walk's structure) [SM-11d].
+- After each stretch but the last is built, its last point is dropped when its x–z distance to the point before it
+  is below 10⁻⁷; the x–z direction of the last segment that then remains becomes the next stretch's departure
+  direction, and the stretch's last point is dropped (the next stretch starts there) [SM-11k].
 - Points of the first arc carry the departure entry's code, the straight piece the fastest allowed entry's, the second
   arc the arrival entry's (**believed**: the code is the one passed while each part is built) [SM-11b].
 - Each point holds its position, its level vertex and its code; its height is the height of its level vertex's plane
@@ -268,9 +284,9 @@ would reverse the direction; no entry has one [SM-11c, SM-1].
 - With the extrapolation flag on, the path is extended past its last point along the last segment by the extrapolate
   length (X 4.2; 8 by default), and the path counts as finished at the last point before the extension [SM-11g,
   SM-10b].
-- A built path is used only if its last point is within 10⁻⁷ (in x and z) of the end position; it is then current
-  from point 0 [SM-11e]. **Disputed in review:** the test is that the squared x–z distance is below 10⁻⁷; with the
-  extrapolation flag on, the point tested is the last one before the extension. A failure writes a message with the start and end positions to the log [SM-11e].
+- A built path is used only if the squared x–z distance from its last point to the end position is below 10⁻⁷
+  (with the extrapolation flag on, the last point before the extension); it is then current from point 0 [SM-11e,
+  SM-11l]. A failure writes a message with the start and end positions to the log [SM-11e].
 
 ## 6. Walking and turning
 
@@ -281,19 +297,21 @@ and the speed *v* (3.4) not 0 [SM-12]:
 
 1. Points already passed are skipped: while the stalker is farther from the current point than the segment to the
    next is long and also farther from it than from the next, the next becomes current [SM-12].
-2. The stalker advances by *v*·*dt* along the points, taking each point it reaches; within 0.001 m of the last point it
-   has arrived (speed 0, the last point current) [SM-12]. **Disputed in review:** the 0.001 m test is on the length
-   of the last hop the step considered (from the position before it to the point it was heading for), not on the
-   distance left to the path's last point. When the step reaches the last point by a hop of 0.001 m or more, the last
-   point becomes current and the rest of the step continues along that hop's direction past it (step 3), after which
-   the finished path stops the stalker (speed 0); a step that does not reach the next point while that point is less
-   than 0.001 m away also makes the last point current, wherever it is on the path.
+2. The stalker advances by *v*·*dt* along the points, taking each point it reaches (it moves onto the point and the
+   rest of the step is shortened by the hop) until the rest no longer reaches the next point or the path's last point
+   is current [SM-12, SM-12b]. If the last hop considered (from the position before it to the point it was heading
+   for) is shorter than 0.001 m, the last point of the path becomes current, wherever the stalker is on the path, and
+   its speed becomes 0 [SM-12b]. Otherwise step 3 follows; when the step has reached the last point, the rest of the
+   step continues past it along that hop's direction, and at the next frame the finished path stops the stalker
+   (speed 0) [SM-12b]. **Disputed in review:** the stop comes in the same frame: right after that move, with the
+   last point current, the reported speed is set to 0 and the body's velocity to zero, unless the stalker's body is
+   active in a state in which it keeps moving (which state is unestablished).
 3. Otherwise it moves toward the next point by the rest: its velocity is the unit direction to that point with the
    vertical part limited (above 0.9: 0.8, below −0.9: −0.8, renormalised), times *v*; the body (PH-22) moves it,
    considering objects within 2 m (2.5 m when its body is active), and its position is the body's [SM-12].
-4. The speed it reports (X, CH-11) is the average of *v* and the distance actually covered divided by *dt* [SM-12].
-   **Disputed in review:** the distance averaged is the planned one (the hops taken plus the rest of the step), not
-   the body's actual movement; it always equals *v*·*dt*, so the reported speed is *v* while walking.
+4. The speed it reports (X, CH-11) is the average of *v* and the planned distance (the hops taken plus the rest of the
+   step, not the body's actual movement) divided by *dt*; that distance is *v*·*dt*, so the reported speed is *v*
+   while walking [SM-12, SM-12c].
 
 ### 6.2 Head and body targets by sight type (static)
 
@@ -388,8 +406,8 @@ vertex) [SM-17c, SM-17d]:
 | (0,0,−1) | 45,941 | (−207.2, −20.06, −142.1) | 0° |
 | (1,0,−1) | 47,199 | (−205.8, −20.04, −141.4) | −45° |
 
-The movement, for the seat 45,947 (6.2 m from the stalker) [SM-7, SM-11, SM-18]. **Disputed in review:** 6.2 m is
-the distance to the 2 m sector target; the seat vertex's position is 6.1 m (in x–z) from the stalker.
+The movement, for the seat 45,947 (6.1 m in x–z from the stalker; its 2 m sector target is 6.2 m away) [SM-7, SM-11,
+SM-18, SM-17e].
 
 1. Masks: mask 0x8000008a; allowed 0x8000008b, wanted 0x8000008b, shortest choice on. Candidates: 0x89 (speed 0,
    path turn rate π/4) and 0x8000008a (1.1 m/s, π/8: turning radius 2.80 m); the fastest allowed is 0x8000008a.
@@ -417,6 +435,8 @@ the distance to the 2 m sector target; the seat vertex's position is 6.1 m (in x
   corner position (5.2).
 - That the frame update runs every rendered frame (conventions); the spawn heading's source field (6.4).
 - Patrol paths' extrapolation flag and the game and patrol pipelines (CH-9).
+- The point toward which `action_kill_if_player_on_the_path` builds its path (CH-18), and whether a build from a
+  stand entry alone succeeds (3.1).
 - Everything here is static or read from the data: nothing was observed in the running game.
 
 ## Provenance
@@ -436,13 +456,3 @@ the distance to the 2 m sector target; the seat vertex's position is 6.1 m (in x
 - No leaked source code, derived projects or third-party documentation of the engine were used. The turn–straight–turn
   construction is the generic shortest-path curve for a vehicle with a minimum turning radius (Dubins, 1957), used
   here only to name what the binary computes.
-
-## Gaps found in review
-
-- 5.3: after the common tangent of a pair of circles is found, two further tests decide whether that curve is kept;
-  what they test is not given (believed: that the tangent points lie on the level graph).
-- 5.1 and 5.3: the arrival rule (all candidates only with the desired direction set) applies to the last stretch
-  only; at every inner key point all candidates are tried as arrival states.
-- 5.4: after each stretch is built, a last point whose x–z distance to the point before it is below 10⁻⁷ is
-  dropped; the spec does not say so.
-- 3.4: at a stand point with no next point on the path, the stand point's own entry is kept in every mental state.
