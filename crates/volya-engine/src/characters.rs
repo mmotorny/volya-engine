@@ -235,6 +235,16 @@ impl<'a> Characters<'a> {
         }
     }
 
+    /// The `crouch_type` of `record`'s specific character
+    /// (stalker-motions.md 10), as `start_dialog` finds it; 0 for a record
+    /// without one (believed: the value of an absent element).
+    pub fn crouch_type(&mut self, record: &ObjectRecord) -> io::Result<i32> {
+        match trader_like(record).map(|t| t.specific_character.as_str()) {
+            Some(id) if !id.is_empty() => Ok(self.specific_character(id)?.crouch_type),
+            _ => Ok(0),
+        }
+    }
+
     /// The voice prefix of `record`'s character as it comes online (script
     /// API T 6.5): its specific character's `snd_config`
     /// (character-descriptions.md), as `start_dialog` finds it; empty for

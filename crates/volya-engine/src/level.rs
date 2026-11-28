@@ -373,6 +373,16 @@ fn refilled<T>(list: &mut Arc<Vec<T>>) -> &mut Vec<T> {
     list
 }
 
+/// The parts of an online stalker's motion update
+/// ([`LevelScreen::with_stalker_motions`]).
+pub struct StalkerMotionParts<'a> {
+    pub model: &'a mut crate::core::motion_playback::AnimatedModel,
+    pub give: Option<crate::core::stalker_motions::StalkerModel>,
+    pub notified: Vec<crate::core::motion_playback::Notified>,
+    pub clock: crate::core::motion_playback::Clock,
+    pub random: &'a mut crate::core::sound::random::SharedRandom,
+}
+
 /// The level shown.
 pub struct LevelScreen {
     world: Arc<LevelWorld>,
@@ -452,6 +462,7 @@ pub struct LevelScreen {
     motions: crate::level_motions::LevelMotions,
     /// The traders' motion channels (scripted-motion-channels.md).
     motion_channels: crate::level_motion_channels::LevelMotionChannels,
+    stalker_motions: crate::level_stalker_motions::LevelStalkerMotions,
     /// Instance of each object id with a loaded visual, but the items
     /// shown on their holders.
     instances: HashMap<u16, usize>,
@@ -2845,6 +2856,12 @@ impl NewGameLoad {
             .map(|(k, i)| (i.id, k))
             .collect();
         let motion_channels = crate::level_motion_channels::LevelMotionChannels::new(&objects);
+        let mut stalker_motions = crate::level_stalker_motions::LevelStalkerMotions::default();
+        for (k, i) in objects.instances.iter().enumerate() {
+            if i.online {
+                stalker_motions.spawned(k, &i.class_id);
+            }
+        }
         // The first update after loading receives the rest of the load's
         // time (level-placed-effects.md section 5.3).
         let effects = self.effects.map(|(mut e, at)| {
@@ -2936,6 +2953,7 @@ impl NewGameLoad {
             info_portions: Some(info_portions),
             motions: crate::level_motions::LevelMotions::new(placements.len()),
             motion_channels,
+            stalker_motions,
             placements: Arc::new(placements),
             instances,
             attached_items,
@@ -3250,7 +3268,11 @@ impl LevelScreen {
         });
         // Their notifications reach the traders' motion channels, whose
         // check follows (scripted-motion-channels.md 4.1).
-        (self.motion_channels).tracks_updated(self.motions.take_notifications());
+        // The stalkers' are their next motion update's
+        // (stalker-motions.md 3.5).
+        let notified = self.motions.take_notifications();
+        self.stalker_motions.tracks_updated(&notified);
+        (self.motion_channels).tracks_updated(notified);
         // character-items.md 8.5: the attached items placed as their
         // holders' bones were computed.
         self.place_attached_items();
@@ -4198,6 +4220,7 @@ impl LevelScreen {
             if let Some(&k) = self.instances.get(&id) {
                 let class_id = &self.world.objects.instances[k].class_id;
                 self.motion_channels.spawned(k, class_id);
+                self.stalker_motions.spawned(k, class_id);
             }
         }
         for &id in changes.offline.iter().chain(&changes.removed) {
@@ -4205,6 +4228,7 @@ impl LevelScreen {
             self.attached_items.holder_gone(id);
             if let Some(&k) = self.instances.get(&id) {
                 self.motion_channels.destroyed(k);
+                self.stalker_motions.destroyed(k);
             }
         }
         let shared = self.simulation.borrow();
@@ -4574,6 +4598,47 @@ impl LevelScreen {
             clock,
         };
         (&mut self.motion_channels, traders)
+    }
+
+    /// `f` on online stalker `object`'s motion parts
+    /// (stalker-motions.md 3): its model's playbacks (made the first time),
+    /// its model to give its motion state when it hasn't it yet, the ends
+    /// reached since its last update, the clock and the generator. `None`
+    /// for an object that isn't an online stalker with a loaded visual;
+    /// reading its motions fails as the traders' do.
+    pub fn with_stalker_motions<R>(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        object: u16,
+        f: impl FnOnce(StalkerMotionParts<'_>) -> R,
+    ) -> Option<io::Result<R>> {
+        let &k = self.instances.get(&object)?;
+        if !self.stalker_motions.is_online(k) {
+            return None;
+        }
+        let objects = &self.world.objects;
+        let model = objects.instances[k].model;
+        let (loaded, names, dir) = (&objects.models[model], &objects.names, &self.world.dir);
+        let read = || crate::level_motions::model_motions(tree, data, dir, loaded, names);
+        let animated = match self.motions.animate(k, model, read) {
+            Ok(a) => a,
+            Err(e) => return Some(Err(e)),
+        };
+        let motions = std::sync::Arc::clone(animated.motions());
+        let give = self.stalker_motions.model_to_give(k, model, &motions);
+        let notified = self.stalker_motions.take_notified(k);
+        let clock = crate::core::motion_playback::Clock {
+            time_global: self.global_ms as u32,
+            frame: self.frame as u32,
+        };
+        Some(Ok(f(StalkerMotionParts {
+            model: animated,
+            give,
+            notified,
+            clock,
+            random: &mut self.stalker_motions.random,
+        })))
     }
 
     /// Makes `call` on object `object` (scripted-motion-channels.md 2): on
@@ -5697,6 +5762,7 @@ impl LevelScreen {
             placements: Arc::new(Vec::new()),
             motions: Default::default(),
             motion_channels: Default::default(),
+            stalker_motions: Default::default(),
             instances: HashMap::new(),
             attached_items: AttachedItems::default(),
             effects: None,

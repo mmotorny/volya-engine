@@ -334,3 +334,71 @@ fn directions() {
     assert!((wrap(3.0 * PI) - PI).abs() < 1e-5);
     assert!((wrap(-1.5 * PI) - FRAC_PI_2).abs() < 1e-5);
 }
+
+/// The lists' name index finds what the model's lookups find: the last
+/// motion set's, within it the first.
+#[test]
+fn the_lists_find_the_last_sets_motion() {
+    let a = model(&[("norm_escape_0", 0, 0xFFFF, 10)]);
+    let two = |name: &str| MotionDefinition {
+        name: name.into(),
+        flags: 0,
+        bone_or_partition: 0,
+        motion_index: 0,
+        speed: 1.0,
+        power: 1.0,
+        accrue: 2.0,
+        falloff: 2.0,
+    };
+    let params = |defs| MotionParams {
+        version: 3,
+        partitions: vec![Partition {
+            name: "legs".into(),
+            bones: vec![("pelvis".into(), 0)],
+        }],
+        definitions: defs,
+    };
+    let motion = || Motion {
+        keys: 10,
+        tracks: vec![track(), track(), track()],
+    };
+    let motions = Motions::new(
+        &["pelvis", "spine", "head"],
+        &[None, Some(0), Some(1)],
+        &[IDENTITY; 3],
+        vec![
+            (params(vec![two("norm_escape_0")]), vec![motion()]),
+            (
+                params(vec![two("norm_escape_0"), two("norm_escape_0")]),
+                vec![motion(), motion()],
+            ),
+        ],
+    );
+    let lists = MotionLists::build(&motions);
+    let want = motions.cycle("norm_escape_0").unwrap();
+    assert_eq!(
+        want,
+        MotionId {
+            set: 1,
+            definition: 0
+        }
+    );
+    assert_eq!(lists.global[1][ESCAPE], [want]);
+    assert_eq!(MotionLists::build(&a).global[1][ESCAPE].len(), 1);
+}
+
+/// A model given after the reload: the queued names it has resolved, the
+/// others dropped.
+#[test]
+fn a_model_given_later_resolves_the_queue() {
+    let mut s = StalkerMotions::new();
+    s.reload(None, true, -1);
+    s.add_animation(b"sit_1_idle_0", true, false);
+    s.add_animation(b"no_such", true, false);
+    assert_eq!(s.animation_count(), 2);
+    let motions = campfire();
+    s.set_model(StalkerModel::new(motions.clone()), true);
+    assert_eq!(s.animation_count(), 1);
+    assert_eq!(s.queue()[0].motion, Some(id(&motions, "sit_1_idle_0")));
+    assert_eq!(s.mask(), [0, 1]);
+}

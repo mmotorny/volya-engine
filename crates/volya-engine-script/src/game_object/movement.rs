@@ -31,8 +31,8 @@ use crate::classes::EngineClass;
 use crate::loader::Scripts;
 use crate::values::{Vector, to_bits32, to_f32};
 use volya_engine_core::config::{Config, value};
-use volya_engine_core::motion_playback::{AnimatedModel, Clock};
-use volya_engine_core::stalker_motions::{Outcome, StalkerMotions, StalkerState};
+use volya_engine_core::motion_playback::{AnimatedModel, Clock, Notified};
+use volya_engine_core::stalker_motions::{Outcome, StalkerModel, StalkerMotions, StalkerState};
 
 /// The largest 32-bit float (conventions).
 pub const FLT_MAX: f32 = f32::MAX;
@@ -894,9 +894,8 @@ impl Scripts {
 /// engine keeps them.
 // TODO(#1129): its speed, path and sight turning are the movement's
 // (CH-10), whose fake (#1234) keeps it still: no path, not turning. TODO(#1132):
-// the item in hand and the object handler are CH-20's: none. Its critical
-// wounds (CH-21) and its sounds for the head (CH-25) aren't followed:
-// none, silent.
+// the item in hand and the object handler are CH-20's: none. TODO(#1249):
+// no critical wound (CH-21). TODO(#1248): silent for the head (CH-25).
 fn stalker_state(o: &GameObject) -> StalkerState {
     let states = o.movement.stalker.as_ref().map(|s| s.current);
     let body = o.fighter.as_ref().map_or((0.0, 0.0), |f| f.body_heading);
@@ -916,9 +915,30 @@ fn stalker_state(o: &GameObject) -> StalkerState {
 }
 
 impl Scripts {
+    /// Stalker `id`'s model given to its motion state after its spawning
+    /// ([`StalkerMotions::set_model`]); whether it is a stalker.
+    pub fn set_stalker_model(
+        &mut self,
+        id: u16,
+        model: StalkerModel,
+    ) -> Result<bool, crate::Error> {
+        let objects = self.game_objects()?;
+        let mut objects = objects.borrow_mut();
+        let Some(o) = objects.get_mut(id) else {
+            return Ok(false);
+        };
+        let alive = o.entity.as_ref().is_some_and(|e| e.health > 0.0);
+        let Some(s) = o.movement.stalker.as_mut() else {
+            return Ok(false);
+        };
+        s.motions.set_model(model, alive);
+        Ok(true)
+    }
+
     /// Stalker `id`'s motion update (stalker-motions.md 3.3) on its
     /// `model`, whose health is above 0 (3.2): the ends its model reached
-    /// handed to its slots, callback 29 (`script_animation`) called when a
+    /// (`notified`, those a tracks update outside it took, and the
+    /// model's own) handed to its slots, callback 29 (`script_animation`) called when a
     /// script animation ended, then the script mode or the normal
     /// selection, `draw` the global generator. The body's target heading
     /// follows the legs (7.2, 7.3). Nothing for an object that isn't a
@@ -928,6 +948,7 @@ impl Scripts {
         &mut self,
         id: u16,
         model: &mut AnimatedModel,
+        notified: &[Notified],
         clock: Clock,
         draw: &mut dyn FnMut() -> u32,
     ) -> Result<Option<Outcome>, crate::Error> {
@@ -941,6 +962,7 @@ impl Scripts {
             let Some(s) = o.movement.stalker.as_mut() else {
                 return Ok(None);
             };
+            s.motions.notified(notified, clock.time_global);
             s.motions
                 .take_script_animation_end(model, clock.time_global)
         };

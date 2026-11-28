@@ -16,6 +16,7 @@
 //! sounds) are the caller's ([`StalkerState`]); what the update writes
 //! back to the movement is its [`Outcome`].
 
+use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_6, PI};
 use std::sync::Arc;
 
@@ -142,14 +143,51 @@ pub fn global_names() -> Vec<String> {
     names
 }
 
+/// A model's cycles and fx motions by name, as [`Motions::cycle`] and
+/// [`Motions::fx`] find them (the last motion set holding one, its first),
+/// for the many lookups of the lists.
+struct Names<'a> {
+    cycles: HashMap<&'a str, MotionId>,
+    fx: HashMap<&'a str, MotionId>,
+}
+
+impl<'a> Names<'a> {
+    fn new(motions: &'a Motions) -> Self {
+        let mut names = Names {
+            cycles: HashMap::new(),
+            fx: HashMap::new(),
+        };
+        for (id, d) in motions.definitions() {
+            let map = if d.is_fx() {
+                &mut names.fx
+            } else {
+                &mut names.cycles
+            };
+            // The sets come in order: a later set's replaces, within a set
+            // the first stays.
+            if map.get(d.name.as_str()).is_none_or(|m| m.set != id.set) {
+                map.insert(d.name.as_str(), id);
+            }
+        }
+        names
+    }
+
+    fn cycle(&self, name: &str) -> Option<MotionId> {
+        self.cycles.get(name).copied()
+    }
+}
+
 /// The list of base name `base` (2.2): `base` + *i* for *i* = 0, 1, …,
 /// each a cycle or else an fx motion; a missing one skipped below 10, the
 /// end from 10 on.
-fn list(motions: &Motions, base: &str) -> Vec<MotionId> {
+fn list(motions: &Names, base: &str) -> Vec<MotionId> {
     let mut found = Vec::new();
     for i in 0.. {
         let name = format!("{base}{i}");
-        match motions.cycle(&name).or_else(|| motions.fx(&name)) {
+        match motions
+            .cycle(&name)
+            .or_else(|| motions.fx.get(name.as_str()).copied())
+        {
             Some(m) => found.push(m),
             None if i > 9 => break,
             None => {}
@@ -177,6 +215,7 @@ pub struct MotionLists {
 impl MotionLists {
     /// The lists of a model with `motions` (2.1, 2.2).
     pub fn build(motions: &Motions) -> Self {
+        let motions = &Names::new(motions);
         let globals = global_names();
         let cycle = |name: &str| motions.cycle(name);
         let per_prefix = |p: &str| {
@@ -301,7 +340,7 @@ enum ListKey {
 
 /// A slot's motion, its playback and whether it is current (3.4), and the
 /// list it last chose from with the motion chosen (4).
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct SlotState {
     motion: Option<MotionId>,
     playback: Option<PlaybackId>,
@@ -309,13 +348,23 @@ struct SlotState {
     memory: Option<(ListKey, MotionId)>,
 }
 
+impl Default for SlotState {
+    /// Empty (3.1): no motion, no playback, no remembered list choice, and
+    /// marked current.
+    fn default() -> Self {
+        SlotState {
+            motion: None,
+            playback: None,
+            current: true,
+            memory: None,
+        }
+    }
+}
+
 impl SlotState {
-    /// Emptied: no motion, no playback. The disputed mark (3.1) on an
-    /// emptied slot is left out: either way the next motion chosen starts.
+    /// Emptied: as a slot starts (3.1).
     fn empty(&mut self) {
-        self.motion = None;
-        self.playback = None;
-        self.current = false;
+        *self = SlotState::default();
     }
 
     /// `motion` chosen (3.4): current only if it was and holds it.
@@ -515,6 +564,26 @@ impl StalkerMotions {
         self.slots = Default::default();
     }
 
+    /// `model` taken after the reload (our choice, for an engine that has
+    /// the model's motions only once the stalker plays: as the reload takes
+    /// it, the slots kept, and the queued names it lacks dropped as
+    /// [`StalkerMotions::add_animation`] drops them).
+    pub fn set_model(&mut self, model: StalkerModel, alive: bool) {
+        let crouch = self.crouch_preference;
+        let slots = std::mem::take(&mut self.slots);
+        self.reload(Some(model), alive, crouch);
+        self.slots = slots;
+        let motions = Arc::clone(&self.model.as_ref().expect("just set").motions);
+        self.queue.retain_mut(|e| {
+            if e.motion.is_none() {
+                e.motion = std::str::from_utf8(&e.name)
+                    .ok()
+                    .and_then(|n| motions.cycle(n));
+            }
+            e.motion.is_some()
+        });
+    }
+
     /// The model taken at the reload.
     pub fn model(&self) -> Option<&StalkerModel> {
         self.model.as_ref()
@@ -596,7 +665,13 @@ impl StalkerMotions {
 
     /// Hands the ends `model` reached to their slots (3.5).
     fn take_notifications(&mut self, model: &mut AnimatedModel, now: u32) {
-        for Notified { value, .. } in model.take_notifications() {
+        self.notified(&model.take_notifications(), now);
+    }
+
+    /// The ends `notified` reached on the stalker's model, handed to their
+    /// slots (3.5): those a tracks update outside the stalker's took.
+    pub fn notified(&mut self, notified: &[Notified], now: u32) {
+        for &Notified { value, .. } in notified {
             if let Some(slot) = Slot::of_notification(value) {
                 self.slot_ended(slot, now);
             }

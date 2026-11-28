@@ -125,7 +125,7 @@ impl Campfire<'_> {
         let clock = clock(self.t);
         self.animated.update_tracks(clock);
         let out = (self.s)
-            .update_stalker_motions(self.stalker, &mut self.animated, clock, &mut || 0)
+            .update_stalker_motions(self.stalker, &mut self.animated, &[], clock, &mut || 0)
             .unwrap();
         assert!(out.is_some(), "a living stalker");
     }

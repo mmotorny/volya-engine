@@ -220,6 +220,20 @@ impl Motions {
         })
     }
 
+    /// Every definition with its motion, in the order of the motion sets
+    /// and of their definitions.
+    pub fn definitions(&self) -> impl Iterator<Item = (MotionId, &MotionDefinition)> {
+        self.sets.iter().enumerate().flat_map(|(s, set)| {
+            (set.params.definitions.iter().enumerate()).map(move |(d, def)| {
+                let id = MotionId {
+                    set: s as u16,
+                    definition: d as u16,
+                };
+                (id, def)
+            })
+        })
+    }
+
     /// The cycle named `name` (skeletal-motions 4.2).
     pub fn cycle(&self, name: &str) -> Option<MotionId> {
         self.find(name, false)

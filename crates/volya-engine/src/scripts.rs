@@ -974,13 +974,67 @@ pub fn spawn_client_object(
 /// dialog (6.1).
 pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::Result<EngineState> {
     let start_dialog = characters.start_dialog(&object.record)?;
+    // stalker-motions.md 3.1: its model's motions are given at its first
+    // motion update ([`stalker_motions_frame`]).
+    let crouch_type = if object.record.kind() == Kind::Stalker {
+        characters.crouch_type(&object.record)?
+    } else {
+        0
+    };
     Ok(EngineState {
         visual: object.model.map(|(m, names)| visual_of(m, names)),
         physics: object.physics,
         restrictor: restrictor_of(&object.record),
         start_dialog: cp1251::encode(&start_dialog).unwrap_or_else(|| start_dialog.into_bytes()),
+        crouch_type,
         ..EngineState::default()
     })
+}
+
+/// The stalkers' motion updates of a level frame (stalker-motions.md
+/// 3.2), unless the game is `paused`: each online stalker in the scripts
+/// given its model's motions the first time, then its update on its model,
+/// callback 29 raised on it when a script animation ended. A script error,
+/// a fatal error of the playback or the motions unread is fatal.
+// TODO(#1129): the update's further conditions (3.2: the scripted-action
+// step) and what the movement takes of its outcome (the body's target
+// heading is the scripts', the speed CH-10's) follow the movement.
+// TODO(#1247): the steps its step slots start (9).
+pub fn stalker_motions_frame(
+    scripts: &mut GameScripts,
+    level: &mut LevelScreen,
+    tree: &dyn Vfs,
+    data: &GameData,
+    paused: bool,
+) -> Result<(), Error> {
+    if paused {
+        return Ok(());
+    }
+    let stalkers: Vec<u16> = {
+        let o = scripts.objects().borrow();
+        (o.iter())
+            .filter(|o| o.movement.stalker.is_some())
+            .map(|o| o.id)
+            .collect()
+    };
+    for id in stalkers {
+        let updated = level.with_stalker_motions(tree, data, id, |p| {
+            let s = scripts.scripts();
+            if let Some(model) = p.give {
+                s.set_stalker_model(id, model)?;
+            }
+            let random = p.random;
+            let mut draw = || random.draw();
+            s.update_stalker_motions(id, p.model, &p.notified, p.clock, &mut draw)
+                .map(drop)
+        });
+        match updated {
+            None => {}
+            Some(Ok(result)) => result?,
+            Some(Err(e)) => return Err(io_fatal(e)),
+        }
+    }
+    Ok(())
 }
 
 /// Whether `object` spawns in the scripts: one without a binding function

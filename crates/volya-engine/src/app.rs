@@ -1435,6 +1435,19 @@ impl App {
         {
             self.failed.get_or_insert(e.message);
         }
+        // The stalkers' motions (stalker-motions.md 3.2).
+        if let (Some(Phase::Level { level, .. }), Some(scripts)) =
+            (&mut self.phase, &mut self.scripts)
+            && let Err(e) = crate::scripts::stalker_motions_frame(
+                scripts,
+                level,
+                tree,
+                &self.data,
+                self.pause.is_on(),
+            )
+        {
+            self.failed.get_or_insert(e.message);
+        }
         // The traders' motion channels follow, their check after the level
         // update (scripted-motion-channels.md 4.1).
         if let (Some(Phase::Level { level, .. }), Some(scripts)) =

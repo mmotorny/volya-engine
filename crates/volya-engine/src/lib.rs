@@ -38,6 +38,7 @@ pub mod level_motion_channels;
 pub mod level_motions;
 pub mod level_physics;
 pub mod level_sound;
+pub mod level_stalker_motions;
 pub mod level_talk;
 pub mod level_visibility;
 pub mod loading_screen;
