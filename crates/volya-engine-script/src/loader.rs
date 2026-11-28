@@ -255,6 +255,8 @@ pub struct Scripts {
     pub(crate) level_state: Option<crate::level::Registered>,
     /// Effects and weather, once registered ([`crate::effects_and_weather`]).
     pub(crate) effects_and_weather_state: Option<crate::effects_and_weather::Registered>,
+    /// The relations, once registered ([`crate::relations`]).
+    pub(crate) relations_state: Option<crate::relations::Registered>,
 }
 
 impl Scripts {
@@ -333,6 +335,7 @@ impl Scripts {
             inventory_state: None,
             level_state: None,
             effects_and_weather_state: None,
+            relations_state: None,
         })
     }
 

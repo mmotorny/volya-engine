@@ -121,6 +121,9 @@ pub struct AlifeSimulator {
     pub(crate) brains: HashMap<u16, BrainState>,
     /// The simulation's own random generator (9): its state.
     pub(crate) random: u32,
+    /// Script API Q's relations registry, ranking list and the player's
+    /// statistics, for the game's length.
+    pub relations: crate::relations::Relations,
     events: Vec<Event>,
 }
 
@@ -140,6 +143,7 @@ impl AlifeSimulator {
             server_objects: None,
             brains: HashMap::new(),
             random: 0,
+            relations: Default::default(),
             events: Vec::new(),
         }
     }
@@ -149,9 +153,11 @@ impl AlifeSimulator {
         std::mem::take(&mut self.events)
     }
 
-    /// The simulation ends (the game is left): `alife()` is nil again.
+    /// The simulation ends (the game is left): `alife()` is nil again, and
+    /// script API Q's relations go with it.
     pub fn end(&mut self) -> Option<Simulation> {
         self.brains.clear();
+        self.relations = Default::default();
         self.events.clear();
         self.simulation.take()
     }

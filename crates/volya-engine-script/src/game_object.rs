@@ -532,6 +532,9 @@ pub struct GameObject {
     pub invisible: Option<bool>,
     /// A scripted object's script control (script API V 2.1).
     pub scripted: Option<ScriptControl>,
+    /// Script API Q's values: team, community, rank, reputation, relation
+    /// flags, set as it comes online.
+    pub relations: crate::relations::ObjectRelations,
     /// Its handle, made at spawn ([`Scripts::spawn`]).
     handle: Option<EnginePart>,
     /// `spawn_ini()`'s configuration object, made at spawn.
@@ -594,6 +597,7 @@ impl GameObject {
             contacts: class.is(SCRIPT_ZONE).then(Vec::new),
             invisible: class.is(BLOODSUCKER).then_some(false),
             scripted: is_scripted(class).then(ScriptControl::new),
+            relations: Default::default(),
             handle: None,
             spawn_ini: None,
             client: None,
@@ -1165,6 +1169,9 @@ impl Scripts {
             );
             return Err(fatal_error(message));
         }
+        // Script API Q 2.1: what it copies from its simulation object and
+        // reads from its section as it comes online.
+        self.relations_come_online(id)?;
         let ini = if custom.is_empty() {
             None
         } else {

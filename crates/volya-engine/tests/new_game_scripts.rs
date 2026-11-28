@@ -423,6 +423,27 @@ end
         "intro1 gave esc_trader_hello_played"
     );
 
+    // Script API Q 2.1, 5, 8.1: the trader came online with his New Game
+    // identity (character-identity.md 8: his community and rank), which the
+    // ranking reads; the player has no entry. TODO(#1202): the player's
+    // record carries its identity, its community `actor`.
+    let relations = scripts.scripts().exec(
+        "=relations",
+        b"local t = db.trader actor_stats.add_to_ranking(t:id()) \
+          return t:character_community(), t:character_rank(), t:team(), \
+            actor_stats.get_actor_ranking()",
+    );
+    assert_eq!(
+        relations.unwrap(),
+        [
+            Value::from("trader"),
+            Value::Number(330.0),
+            Value::Number(0.0),
+            Value::Number(1.0),
+        ],
+        "the trader's relations"
+    );
+
     // Script API S 6: the trader comes online with his record's money, and
     // what `give_money` sets reaches the record (event 32) with the next
     // level frame.

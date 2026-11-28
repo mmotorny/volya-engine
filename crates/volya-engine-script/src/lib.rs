@@ -36,6 +36,7 @@ pub mod level;
 mod libc;
 pub mod loader;
 pub mod object_factory;
+pub mod relations;
 pub mod scripted_actions;
 pub mod selftest;
 pub mod services;

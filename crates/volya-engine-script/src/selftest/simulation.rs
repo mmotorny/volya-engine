@@ -107,7 +107,7 @@ fn vertex(level_id: u8, at: [f32; 3], level_vertex: u32) -> GraphVertex {
 
 /// Level `l01` (id 1): vertices 0 (0, 0, 0) and 1 (10, 0, 0); level `l02`
 /// (id 2): vertices 2 and 3. Edges 0 ↔ 1 (10 m), 2 → 3.
-fn graph() -> GameGraph {
+pub(super) fn graph() -> GameGraph {
     let mut vertices = vec![
         vertex(1, [0.0; 3], 5),
         vertex(1, [10.0, 0.0, 0.0], 6),
@@ -147,7 +147,7 @@ fn graph() -> GameGraph {
 
 /// `walk`: points p0 (vertex 0), p1 (vertex 1), p2 (vertex 3), linked
 /// 0 → 1 → 2 → 1.
-fn paths() -> PatrolPaths {
+pub(super) fn paths() -> PatrolPaths {
     let point = |name: &str, gv: u16, lv: u32, x: f32| PathPoint {
         name: name.into(),
         position: [x, 0.0, 0.0],

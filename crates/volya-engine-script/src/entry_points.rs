@@ -172,7 +172,7 @@ impl Startup {
     }
 
     /// The engine interface of the specs implemented (B, F, H, M, N, P, R,
-    /// T, Y, K, J, V, G3, S, U; A, C and E [`Scripts::new`] registers).
+    /// T, Y, K, J, V, G3, S, U, Q; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -197,6 +197,7 @@ impl Startup {
             self.aliases.clone(),
         )?;
         scripts.register_inventory()?;
+        scripts.register_relations()?;
         scripts.register_level(Rc::clone(&self.level))?;
         scripts.register_effects_and_weather(Rc::clone(&self.effects_and_weather))
     }

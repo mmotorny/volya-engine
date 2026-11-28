@@ -241,7 +241,8 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     // (script API U 2.4).
     scripts.effects_and_weather().borrow_mut().level_ended();
     scripts.scripts().clear_level_calls()?;
-    // Script API K: `alife()` is nil until the next level's simulation.
+    // Script API K: `alife()` is nil until the next level's simulation; script
+    // API Q's relations registry, ranking and statistics go with it.
     scripts.simulation().borrow_mut().end();
     scripts.scripts().release_server_objects()?;
     // Script API N 6.5: the spawn manager's table emptied and the level

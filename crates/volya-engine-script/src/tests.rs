@@ -1624,3 +1624,19 @@ mod effects_and_weather {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// Script API Q's checks, one test per section of
+/// docs/behavior/script-api-relations-community-and-ranking.md (all of
+/// them run in [`selftest`] too, on every target).
+mod relations {
+    use crate::selftest::relations::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}
