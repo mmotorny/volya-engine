@@ -43,9 +43,11 @@ Conventions:
   *n*" is the remainder of that draw divided by *n*.
 - Every fact carries its check, cited by label in brackets: `D`*n* are assertions of `checks/dialog-flow/c_data.py`
   (the game data), `B`*n* of `checks/dialog-flow/c_bin.py` (static analysis of the program, read from the
-  decompilation and disassembly that `checks/dialog-flow/ghidra.py` re-creates). `run_all.py` runs both; all
-  pass. **Static** marks a fact read from the program and not observed at run time; **believed** a reading with
-  its reason; **unestablished** what could not be settled statically.
+  decompilation and disassembly that `checks/dialog-flow/ghidra.py` re-creates) and, from `B10` on, of
+  `checks/dialog-flow/c_fix.py` (read from the full decompilation and instruction listing of the program and its
+  run-time type information). `run_all.py` runs all three; all pass. **Static** marks a fact read from the
+  program and not observed at run time; **believed** a reading with its reason; **unestablished** what could not
+  be settled statically.
 
 ## 1. A dialog in a talk
 
@@ -57,10 +59,17 @@ While it is in progress, a dialog of a talk has (static) [B2, B3]:
 - whether it is **finished**.
 
 The talk window holds at most one dialog in progress, its **current dialog** [B7b, B9b, B9f]. Each speaker also
-keeps the dialogs it takes part in and drops one when it finishes it by saying a phrase [B2b, B3g]; nothing
-else of the flow reads that record. **Disputed in review:** no check establishes that nothing reads this record;
-only the sayer drops the dialog, so the other speaker keeps a dialog the sayer finished, and who reads or clears
-the record is unestablished.
+keeps a **record** of its dialogs (static) [B2b, B3g, B10, B10b, B10c, B10d]:
+
+- starting a dialog adds it to the records of both speakers (2);
+- a speaker removes a dialog from its own record only when a phrase that speaker says finishes the dialog; the
+  other speaker's record keeps it, and a dialog that is never finished stays in both records;
+- a record is released only when its character is destroyed.
+
+Beyond these additions and removals, none of the routines of this flow (sections 2 to 7), of the closing of the
+talk screen or of the end of a side (`stop_talk`) reads or changes a record [B10e], and no other routine of the
+characters' dialog handling reads it [B10d]. So a record plays no part in the flow; whether anything else in the
+program reads it is **unestablished**.
 
 ## 2. Starting a dialog
 
@@ -135,7 +144,7 @@ The line of a phrase is added before the phrase is said, by whoever makes it say
 An action that ends the talk (`stop_talk` on both speakers, R 4.1) does not stop these steps: the continuations
 are still tested and the partner still answers, as long as the dialog is not finished (static: none of the
 steps tests whether the speakers are talking) [B3, B5]. What the end of the talk then does to the window is
-DG-3's and DG-6's.
+DG-3's and DG-6's; what it does to the dialog, section 7.
 
 ## 4. The partner's answer
 
@@ -246,6 +255,19 @@ Dialogs that should not repeat rely on their conditions (for example a portion t
 `dont_has_info` names). The partner's opening (2.1) runs only at talk start [B7]: within a talk, the flow does
 not start the partner's start dialog or `hello_dialog` again.
 
+**A dialog still in progress when the talk ends** (static):
+
+- Ending a side (`stop_talk`, also from a phrase's action, 3) does nothing to the dialog: it stays the current
+  dialog until the talk screen closes [B10e, B11c] (when the screen closes after the end of a side is DG-6's).
+- Closing the talk screen, by any of its routes, drops the current dialog: afterwards no dialog is in progress
+  [B11, B11b]. The dialog is not finished by this, and stays in both speakers' records (1) [B10b, B10e].
+- Switching to trade and coming back from it (DG-10) leave the current dialog as it was [B11c].
+- A later talk never continues a dropped dialog. The current dialog is set only by the partner's opening at talk
+  start (2.1) and by a question click that starts a dialog (2.2); in both cases it is a dialog of a list just
+  built, every build makes each dialog it adds anew, and a started dialog begins at phrase `0` (2) [B7c, B7e,
+  B11c, B12, B2]. So a dialog cut off by the end of a talk is offered again from its phrase `0`, as long as its
+  own conditions hold, like a finished one.
+
 ## 8. Errors
 
 | Case | What the program does |
@@ -327,6 +349,8 @@ the trader continues with 321 and the path of 32 [D6b, D6c, D6d].
 - The order of equal entries in a list of more than 32 entries (6; none in this edition).
 - Which portions the player character holds at a New Game's first talk with the trader (9.2; believed none of
   those named there).
+- Whether anything outside the flow, the talk screen's closing and the characters' dialog handling reads a
+  speaker's record of its dialogs (1).
 
 ## 11. Coverage
 
@@ -349,15 +373,12 @@ dialog flow.
 - Analysis: static analysis (decompilation and instruction listings with Ghidra, headless and read-only) of the
   program's routines that start a dialog, say a phrase, test and order its continuations, let a stalker or
   trader answer, build the characters' dialog lists, and, in the talk window, open a talk, refill the question
-  list and handle a question click; the sorting routines they use; the shared generator's import; constants and
-  strings read from the binary. No program was executed; the game was not run.
-- Checks: `checks/dialog-flow/c_data.py` and `c_bin.py`, run with `python3 -I` (`run_all.py` runs both), with the
-  `dialogue-scope`, `pda-scope` and `dialog-files` helpers and the `dialog-files` and
-  `script-api-dialogs-and-trade` evidence; all pass.
+  list and handle a question click, close the talk screen and switch to trade and back; the characters' records
+  of their dialogs and the end of a side; the sorting routines they use; the shared generator's import; the
+  program's run-time type information; constants and strings read from the binary. No program was executed; the
+  game was not run.
+- Checks: `checks/dialog-flow/c_data.py`, `c_bin.py` and `c_fix.py`, run with `python3 -I` (`run_all.py` runs
+  all three), with the `dialogue-scope`, `pda-scope`, `dialog-files`, `talk-window` and `game-object-basics`
+  helpers, the `dialog-files` and `script-api-dialogs-and-trade` evidence and the full headless decompilation of
+  the program; all pass.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
-
-## Gaps found in review
-
-- What becomes of a dialog still in progress when the talk ends or the window closes (whether it stops being
-  the current dialog, and whether either speaker's record of it is kept), and so whether a later talk can find
-  it still in progress.
