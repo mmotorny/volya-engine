@@ -636,13 +636,6 @@ impl Scripts {
             .ok_or_else(|| api("the level isn't registered"))
     }
 
-    /// The started level's vertices, if any (FAKE(#1234): the fake
-    /// stalker movement's).
-    pub(crate) fn level_vertices(&self) -> Option<LevelVertices> {
-        let state = self.level_state.as_ref()?.ctx.state.borrow();
-        state.level.as_ref()?.vertices.clone()
-    }
-
     /// The level is created (conventions): the functions read `level`, and
     /// its client spawn manager is made with it (2.7). A level already
     /// there is ended first ([`Scripts::end_level`]).
@@ -651,6 +644,11 @@ impl Scripts {
         let ctx = self.level_context()?;
         let manager =
             (self.lua_mut()).new_engine_object("client_spawn_manager", |_| SpawnManager)?;
+        // The level graph the characters' restrictions and paths use
+        // (character-paths.md).
+        if let Ok(objects) = self.game_objects() {
+            objects.borrow_mut().level_graph = level.vertices.clone();
+        }
         let mut state = ctx.state.borrow_mut();
         state.level = Some(level);
         state.spawn_manager = Some(manager);
@@ -668,6 +666,12 @@ impl Scripts {
             state.level = None;
             state.spawn_manager.take()
         };
+        // Its restrictors unregister with it (character-paths.md 2.1).
+        if let Ok(objects) = self.game_objects() {
+            let mut objects = objects.borrow_mut();
+            objects.level_graph = None;
+            objects.restrictors.clear();
+        }
         if let Some(manager) = manager {
             self.lua_mut().release_engine_object(manager)?;
         }

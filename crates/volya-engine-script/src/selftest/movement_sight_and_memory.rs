@@ -10,7 +10,9 @@ use std::rc::Rc;
 
 use volya_engine_core::config::PathAliases;
 use volya_engine_core::console::{Console, ConsoleFiles};
+use volya_engine_core::simulation::restrictions::RestrictorShape;
 use volya_engine_formats::ltx;
+use volya_engine_formats::object::Shape;
 
 use super::ensure;
 use super::files::{FSGAME, Tree};
@@ -35,6 +37,7 @@ pub const SECTIONS: &[(&str, Check)] = &[
     ("3 the fake stalker movement (#1234)", fake_movement),
     ("4 paths and patrol paths", paths),
     ("5 space restrictions", restrictions),
+    ("5 space restrictions in effect", restrictions_in_effect),
     ("6 sight", sight),
     ("7 vision and memory", vision_and_memory),
     ("8 enemies and dangers", enemies),
@@ -609,14 +612,82 @@ s:add_restrictions("a, b", "c")
 s:add_restrictions("b", "")
 eq(s:out_restrictions(), "a,b", "out_restrictions")
 eq(s:in_restrictions(), "c", "in_restrictions")
-eq(s:base_out_restrictions(), "", "base_out_restrictions")
-raises(function() return s:accessible(vector()) end, "TODO(#1130)", "under restrictions")
+eq(s:base_out_restrictions(), "a,b", "base_out_restrictions: its own, with those added")
+eq(s:base_in_restrictions(), "c", "base_in_restrictions")
+eq(s:accessible(vector()), true, "restrictors not registered: not initialised")
 s:remove_restrictions("a", "")
 eq(s:out_restrictions(), "b", "removed")
 s:remove_all_restrictions()
 eq(s:out_restrictions() .. s:in_restrictions(), "", "all removed")
-raises(function() return s:accessible_nearest(vector(), vector()) end, "TODO(#1130)",
-  "accessible_nearest")
+raises(function() return s:accessible_nearest(vector(), vector()) end, "unestablished",
+  "accessible_nearest without restrictions")
+"#
+        ),
+    )
+}
+
+/// A box restrictor spanning x `x0` … `x1`, z `z0` … `z1`, y −5 … 5.
+fn boxed(x0: f32, x1: f32, z0: f32, z1: f32) -> RestrictorShape {
+    RestrictorShape::placed(
+        &[Shape::Box([
+            [x1 - x0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+            [0.0, 0.0, z1 - z0],
+            [0.0; 3],
+        ])],
+        [(x0 + x1) / 2.0, 0.0, (z0 + z1) / 2.0],
+        [0.0; 3],
+    )
+}
+
+/// Section 5 under registered restrictors (character-paths.md 2 – 4) on
+/// the level's 3 × 3 grid: `zone` (type 0) holds columns 0 and 1 whole,
+/// `fire` (type 2, a default in-restrictor) the centre of vertex 0.
+pub fn restrictions_in_effect() -> Result<(), String> {
+    let mut t = state()?;
+    {
+        let mut o = t.objects.borrow_mut();
+        o.level_graph = Some(super::level::grid());
+        let r = &mut o.restrictors;
+        r.register(
+            1,
+            b"zone".to_vec(),
+            0,
+            boxed(-0.3505, 1.0495, -0.3505, 1.7505),
+        );
+        r.register(2, b"fire".to_vec(), 2, boxed(-0.1, 0.1, -0.1, 0.1));
+        ensure(
+            !r.register(3, b"other".to_vec(), 3, boxed(0.0, 1.0, 0.0, 1.0)),
+            || "type 3 registers".into(),
+        )?;
+    }
+    run(
+        &mut t.s,
+        "5 in effect",
+        &format!(
+            r#"
+local s = obj({STALKER})
+eq(s:in_restrictions(), "fire", "the default in-list")
+eq(s:out_restrictions(), "", "no out-restrictions")
+eq(s:accessible(0), false, "the fire's vertex")
+eq(s:accessible(6), true, "without out-restrictions")
+s:add_restrictions("zone", "")
+eq(s:out_restrictions(), "zone", "added")
+eq(s:base_in_restrictions(), "", "the defaults aren't its own")
+eq(s:accessible(6), false, "outside the zone")
+eq(s:accessible(5), true, "inside it")
+eq(s:accessible(vector():set(0.7, 0, 1.4)), true, "a position inside it")
+eq(s:accessible(vector():set(1.4, 0, 0.7)), false, "a position outside it")
+eq(s:accessible(vector():set(0.0, 0, 0.0)), false, "a position in the fire")
+local out = vector()
+eq(s:accessible_nearest(vector():set(0.1, 0, 0.05), out), 3, "accessible_nearest")
+eq(string.format("%.3f %.3f %.3f", out.x, out.y, out.z), "0.351 0.000 0.349", "its test point")
+s:remove_restrictions("", "")
+eq(s:out_restrictions(), "zone", "nothing removed")
+s:add_restrictions("", "fire")
+s:add_restrictions("fire", "")
+eq(s:out_restrictions(), "fire,zone", "normalised")
+eq(s:in_restrictions(), "fire", "its own in-restriction")
 "#
         ),
     )

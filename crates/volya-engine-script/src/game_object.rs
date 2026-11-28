@@ -28,6 +28,7 @@ pub mod monsters;
 pub mod movement;
 pub mod object_binder;
 pub mod physics;
+pub mod restrictors;
 pub mod sight;
 pub mod vehicles;
 
@@ -714,6 +715,11 @@ pub struct GameObjects {
     pub game_time: u64,
     /// Byte 11 of each level vertex's record (4, `level_vertex_light`).
     pub level_vertex_lights: Vec<u8>,
+    /// The level graph's vertices (character-paths.md), once the level
+    /// is created.
+    pub level_graph: Option<crate::level::LevelVertices>,
+    /// The level's registered restrictors (character-paths.md 2.1).
+    pub restrictors: restrictors::Restrictors,
     /// Spawn data awaiting `net_Spawn`, by token.
     pending: HashMap<u32, (SpawnData, Option<u16>)>,
     next_token: u32,
@@ -743,6 +749,10 @@ pub struct EngineState {
     pub start_dialog: Vec<u8>,
     pub stalker_model: Option<StalkerModel>,
     pub crouch_type: i32,
+    /// A character's out- and in-restriction texts as it comes online
+    /// (character-paths.md 2.3), which a fighter takes as its own.
+    pub out_restrictions: Vec<u8>,
+    pub in_restrictions: Vec<u8>,
 }
 
 impl GameObjects {
@@ -852,6 +862,9 @@ impl GameObjects {
             }
             if object.restrictor.is_some() {
                 object.restrictor = state.restrictor.or(object.restrictor);
+            }
+            if let Some(f) = object.movement.fighter.as_mut() {
+                f.come_online(state.out_restrictions, state.in_restrictions);
             }
             if has_start_dialog(object.class)
                 && let Some(owner) = object.owner.as_mut()
@@ -1025,7 +1038,7 @@ impl Scripts {
         })
     }
 
-    fn game_objects(&self) -> Result<Rc<RefCell<GameObjects>>, Error> {
+    pub(crate) fn game_objects(&self) -> Result<Rc<RefCell<GameObjects>>, Error> {
         self.registered().map(|r| Rc::clone(&r.objects))
     }
 
@@ -1274,6 +1287,9 @@ impl Scripts {
         let Some(object) = objects.borrow_mut().objects.remove(&id) else {
             return Ok(false);
         };
+        // A restrictor unregisters as it is destroyed (character-paths.md
+        // 2.1, believed).
+        objects.borrow_mut().restrictors.unregister(id);
         self.forget_callbacks(id, object.kinds)?;
         self.forget_inventory_object(id);
         self.forget_sound_player(id);

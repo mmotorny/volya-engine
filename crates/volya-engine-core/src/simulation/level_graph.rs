@@ -545,7 +545,7 @@ impl Search {
 /// limits for creatures' movement, remembering the start and goal of the
 /// last search that failed. A new one is made when the creature's
 /// movement is reinitialised.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LevelPathStep {
     last_failure: Option<(u32, u32)>,
 }

@@ -10,28 +10,31 @@
 //! (11). Each object's [`Parts`] hold what the members set and read.
 //!
 //! The spec owns what each call reads or sets at once; what the engine does
-//! behind them over time is the characters' (CH-9 … CH-24), which Volya
-//! Engine doesn't run yet: the requests are kept and nothing follows them
-//! (TODO(#1129)), the level graph and restrictions are outside the scripts
-//! (TODO(#1130)), no one perceives (TODO(#1131)). A member whose answer
-//! needs such a part raises a script error naming its issue; one whose
-//! state the engine keeps answers from it. Until stalker movement (CH-10,
-//! #1233) lands, a lightweight fake places a stalker at its destination
-//! vertex at once ([`Scripts::fake_stalker_movement`]; every spot is
-//! marked FAKE(#1234)).
+//! behind them over time is the characters' (CH-9 … CH-24): the
+//! restrictions and level paths are CH-9's ([`super::restrictors`]); the
+//! rest Volya Engine doesn't run yet: the requests are kept and nothing
+//! follows them (TODO(#1129)), the straight walk under restrictions is
+//! outside the scripts (TODO(#1130)), no one perceives (TODO(#1131)). A
+//! member whose answer needs such a part raises a script error naming its
+//! issue; one whose state the engine keeps answers from it. Until stalker
+//! movement (CH-10, #1233) lands, a lightweight fake places a stalker at
+//! the end of its level path at once ([`Scripts::fake_stalker_movement`];
+//! every spot is marked FAKE(#1234)).
 
 use volya_engine_formats::cp1251;
 use volya_engine_formats::level_ai::LevelAi;
 use volya_engine_formats::model;
 
 use super::members::{Call, boolean, member, number};
-use super::{Context, Event, GameObject, Kinds, ObjectClass};
+use super::{Context, Event, GameObject, GameObjects, Kinds, ObjectClass};
 use crate::Value;
 use crate::classes::EngineClass;
 use crate::loader::Scripts;
 use crate::values::{Vector, to_bits32, to_f32};
 use volya_engine_core::config::{Config, value};
 use volya_engine_core::motion_playback::{AnimatedModel, Clock, Notified};
+use volya_engine_core::simulation::level_graph::{Accessibility, LevelGraph, LevelPathStep};
+use volya_engine_core::simulation::restrictions;
 use volya_engine_core::stalker_motions::{Outcome, StalkerModel, StalkerMotions, StalkerState};
 
 /// The largest 32-bit float (conventions).
@@ -194,12 +197,29 @@ pub struct FighterParts {
     pub disabled_at: [f32; 3],
     /// The path marked to be rebuilt (4.2, 5).
     pub path_outdated: bool,
-    /// The restrictions added, by name (5).
-    pub out_restrictions: Vec<Vec<u8>>,
-    pub in_restrictions: Vec<Vec<u8>>,
+    /// Its own out- and in-restriction texts (5; character-paths.md 2.2,
+    /// 2.3): its spawn data's and what scripts added.
+    pub own_out_restrictions: Vec<u8>,
+    pub own_in_restrictions: Vec<u8>,
+    /// The level path search's memory of its last failure
+    /// (character-paths.md 5 step 2).
+    pub level_path_step: LevelPathStep,
+    /// The last level path found (character-paths.md 5, 6.1).
+    pub level_path: Option<Vec<u32>>,
     /// Its visual memory's vision flag; `None` until set (CH-13,
     /// TODO(#1131)).
     pub vision_enabled: Option<bool>,
+}
+
+impl FighterParts {
+    /// It comes online with its spawn data's restriction texts
+    /// (character-paths.md 2.3), which become its own; its path is marked
+    /// to be rebuilt. TODO(#1254): the names of its dynamic restrictions.
+    pub fn come_online(&mut self, out: Vec<u8>, inside: Vec<u8>) {
+        self.own_out_restrictions = out;
+        self.own_in_restrictions = inside;
+        self.path_outdated = true;
+    }
 }
 
 /// A living object's eye (7.4): `None` until set (its section's values
@@ -280,19 +300,6 @@ pub(crate) fn load(o: &mut GameObject, system: Option<&Config>) -> Result<(), St
 /// A script error for an answer the engine can't give yet (our wording).
 pub(super) fn unavailable(c: &Call, issue: u32) -> String {
     format!("game_object:{}: not available yet (TODO(#{issue}))", c.name)
-}
-
-/// The restrictor names of a restriction text (5): separated by commas,
-/// each trimmed, empty ones skipped (our reading of CH-9's lists).
-pub fn restrictor_names(text: &[u8]) -> Vec<Vec<u8>> {
-    text.split(|&b| b == b',')
-        .map(|n| n.trim_ascii().to_vec())
-        .filter(|n| !n.is_empty())
-        .collect()
-}
-
-fn joined(names: &[Vec<u8>]) -> Value {
-    Value::String(names.join(&b","[..]))
 }
 
 fn none() -> Result<Vec<Value>, String> {
@@ -608,28 +615,15 @@ fn set_point(c: &mut Call, i: i32, set: fn(&mut PatrolPath, i32)) -> Result<Vec<
     none()
 }
 
-/// Whether no restriction is in effect (TODO(#1130): the base
-/// restrictions from the spawn data aren't known: none).
-fn no_restrictions(f: &FighterParts) -> bool {
-    f.out_restrictions.is_empty() && f.in_restrictions.is_empty()
-}
-
-/// 5.
+/// The restrictions of 5 (character-paths.md 2.2 – 4).
 fn restrictions(class: EngineClass, ctx: &Context) -> EngineClass {
     let class = member(class, ctx, "add_restrictions", |c| {
         let (out, inside) = (c.text(0)?, c.text(1)?);
         if let Some(f) = fighter(c)? {
+            // 2.3.
             if !out.is_empty() || !inside.is_empty() {
-                for (list, text) in [
-                    (&mut f.out_restrictions, &out),
-                    (&mut f.in_restrictions, &inside),
-                ] {
-                    for name in restrictor_names(text) {
-                        if !list.contains(&name) {
-                            list.push(name);
-                        }
-                    }
-                }
+                f.own_out_restrictions = restrictions::union(&f.own_out_restrictions, &out);
+                f.own_in_restrictions = restrictions::union(&f.own_in_restrictions, &inside);
             }
             f.path_outdated = true;
         }
@@ -639,63 +633,91 @@ fn restrictions(class: EngineClass, ctx: &Context) -> EngineClass {
         let (out, inside) = (c.text(0)?, c.text(1)?);
         if let Some(f) = fighter(c)? {
             if !out.is_empty() || !inside.is_empty() {
-                for (list, text) in [
-                    (&mut f.out_restrictions, &out),
-                    (&mut f.in_restrictions, &inside),
-                ] {
-                    let names = restrictor_names(text);
-                    list.retain(|n| !names.contains(n));
-                }
+                f.own_out_restrictions = restrictions::difference(&f.own_out_restrictions, &out);
+                f.own_in_restrictions = restrictions::difference(&f.own_in_restrictions, &inside);
             }
             f.path_outdated = true;
         }
         none()
     });
     let class = member(class, ctx, "remove_all_restrictions", |c| {
-        if let Some(f) = fighter(c)?
-            && !no_restrictions(f)
-        {
-            f.out_restrictions.clear();
-            f.in_restrictions.clear();
-            f.path_outdated = true;
+        let id = c.id;
+        let Some((out, inside)) = c.objects.combined_restrictions(id) else {
+            return none();
+        };
+        // TODO(#1254): the simulation object's dynamic lists emptied.
+        if let Some(f) = fighter(c)? {
+            if !out.is_empty() || !inside.is_empty() {
+                f.path_outdated = true;
+            }
+            f.own_out_restrictions.clear();
+            f.own_in_restrictions.clear();
         }
         none()
     });
     let class = member(class, ctx, "in_restrictions", |c| {
-        Ok(vec![
-            fighter(c)?.map_or(Value::string(""), |f| joined(&f.in_restrictions)),
-        ])
+        let combined = c.objects.combined_restrictions(c.id);
+        Ok(vec![Value::String(combined.map_or(Vec::new(), |(_, i)| i))])
     });
     let class = member(class, ctx, "out_restrictions", |c| {
-        Ok(vec![fighter(c)?.map_or(Value::string(""), |f| {
-            joined(&f.out_restrictions)
-        })])
+        let combined = c.objects.combined_restrictions(c.id);
+        Ok(vec![Value::String(combined.map_or(Vec::new(), |(o, _)| o))])
     });
-    // TODO(#1130): the spawn data's base restrictions aren't known: none.
-    let class = member(class, ctx, "base_in_restrictions", |_| {
-        Ok(vec![Value::string("")])
+    let class = member(class, ctx, "base_in_restrictions", |c| {
+        let own = fighter(c)?.map(|f| f.own_in_restrictions.clone());
+        Ok(vec![Value::String(own.unwrap_or_default())])
     });
-    let class = member(class, ctx, "base_out_restrictions", |_| {
-        Ok(vec![Value::string("")])
+    let class = member(class, ctx, "base_out_restrictions", |c| {
+        let own = fighter(c)?.map(|f| f.own_out_restrictions.clone());
+        Ok(vec![Value::String(own.unwrap_or_default())])
     });
     let class = member(class, ctx, "accessible", |c| {
-        match c.arg(0) {
-            Value::Number(_) => drop(to_bits32(c.number(0)?)),
-            _ => drop(c.vector(0)?),
+        enum Of {
+            Vertex(u32),
+            Position([f32; 3]),
         }
-        match fighter(c)? {
-            None => Ok(boolean(false)),
-            Some(f) if no_restrictions(f) => Ok(boolean(true)),
-            Some(_) => Err(unavailable(c, 1130)),
+        let of = match c.arg(0) {
+            Value::Number(_) => Of::Vertex(to_bits32(c.number(0)?) as u32),
+            _ => {
+                let p = c.vector(0)?;
+                Of::Position([p.x, p.y, p.z])
+            }
+        };
+        if fighter(c)?.is_none() {
+            return Ok(boolean(false));
+        }
+        let id = c.id;
+        let answer = c.objects.with_restrictions(id, |g, r, _| match of {
+            Of::Vertex(k) => r.accessible_vertex(g, k),
+            Of::Position(p) => r.accessible_position(g, p),
+        });
+        match answer {
+            Some(a) => Ok(boolean(a)),
+            // Without a level graph nothing is restricted (our choice).
+            None => Ok(boolean(true)),
         }
     });
     member(class, ctx, "accessible_nearest", |c| {
-        c.vector(0)?;
+        let p = c.vector(0)?;
         c.vector(1)?;
         if fighter(c)?.is_none() {
             return Ok(number(-1));
         }
-        Err(unavailable(c, 1130))
+        let id = c.id;
+        let found = (c.objects).with_restrictions(id, |g, r, border| {
+            r.accessible_nearest(g, border, [p.x, p.y, p.z])
+        });
+        // Section 4: without restrictions, or without a candidate,
+        // unestablished (believed a crash): a script error.
+        let Some((k, point)) = found.flatten() else {
+            return Err(format!(
+                "game_object:{}: no accessible vertex near the restrictions' border (unestablished)",
+                c.name
+            ));
+        };
+        let out = c.arg(1).clone();
+        c.o.set(&out, Vector::new(point[0], point[1], point[2]));
+        Ok(number(k as i32))
     })
 }
 
@@ -807,23 +829,36 @@ fn items(class: EngineClass, ctx: &Context) -> EngineClass {
     })
 }
 
-/// FAKE(#1234): stalker movement (CH-10, #1233) until the level graph and
-/// paths exist (CH-8, CH-9). At an update of a living stalker whose
-/// movement is enabled (CH-10 3.1; not disabled, as its first value is
-/// unestablished), its current states are those of a stalker without an
-/// unfinished detail path (3.4): standing still, with the target body and
-/// mental states (and path type, believed). Told to walk or run a level
-/// path without a desired position (3.3: with one the path ends at that
-/// position), it is placed at once where that path ends: at its
-/// destination vertex's x and z, [`ABOVE_PLANE`] over the vertex's plane
-/// (object-visual-and-transform.md 4.1 step 5), its level vertex the
-/// destination, body and head facing the desired direction's x–z heading
-/// when one is set ((0, 1) when its squared length is below 0.001, 5.1),
-/// else as they were. Its path then counts as completed (X 4.1) until
-/// marked to be rebuilt. Simplified: no walking or turning, no game vertex
-/// change, no restrictions.
-pub fn fake_movement_update(o: &mut GameObject, ai: Option<&LevelAi>) {
+/// The way a fake movement takes ([`fake_movement_update`]): from the
+/// fighter's parts, its start vertex, its destination vertex and its
+/// detail path's desired end position, the destination and end position
+/// reached and the level path found, or `None` when no level path is
+/// found.
+pub type Route<'a> =
+    dyn FnMut(&mut FighterParts, u32, u32, [f32; 3]) -> Option<(u32, [f32; 3])> + 'a;
+
+/// FAKE(#1234): stalker movement (CH-10, #1233). At an update of a living
+/// stalker whose movement is enabled (CH-10 3.1; not disabled, as its
+/// first value is unestablished), its current states are those of a
+/// stalker without an unfinished detail path (3.4): standing still, with
+/// the target body and mental states (and path type, believed). Told to
+/// walk or run a level path without a desired position (3.3: with one the
+/// path ends at that position), its level path is built as the level path
+/// type builds it (character-paths.md 6.1, states 4 and 5): the
+/// destination made accessible and the level path searched under its
+/// restrictions by `route`. When one is found, it is placed at once where
+/// that path ends: at the detail path's end position's x and z (the
+/// destination vertex's unless 6.1 replaced it), [`ABOVE_PLANE`] over the
+/// destination vertex's plane (object-visual-and-transform.md 4.1 step
+/// 5), its level vertex the destination, body and head facing the desired
+/// direction's x–z heading when one is set ((0, 1) when its squared length
+/// is below 0.001, 5.1), else as they were. Its path then counts as
+/// completed (X 4.1) until marked to be rebuilt. Without a level path it
+/// stays where it is (6.1: state 4). Simplified: no detail path, no
+/// walking or turning, no game vertex change.
+pub fn fake_movement_update(o: &mut GameObject, ai: Option<&LevelAi>, route: &mut Route) {
     let alive = o.entity.as_ref().is_none_or(|e| e.health > 0.0);
+    let start = o.level_vertex;
     let (Some(s), Some(f)) = (&mut o.movement.stalker, &mut o.movement.fighter) else {
         return;
     };
@@ -844,7 +879,11 @@ pub fn fake_movement_update(o: &mut GameObject, ai: Option<&LevelAi>) {
     if s.arrived && !s.path_outdated && !f.path_outdated {
         return;
     }
-    let Some([x, _, z]) = ai.and_then(|ai| ai.position(vertex)) else {
+    let Some(position) = ai.and_then(|ai| ai.position(vertex)) else {
+        return;
+    };
+    let Some((vertex, [x, _, z])) = route(f, start, vertex, position) else {
+        s.arrived = false;
         return;
     };
     let Some(height) = ai.and_then(|ai| ai.plane_height(vertex, x, z)) else {
@@ -874,17 +913,46 @@ pub fn fake_movement_update(o: &mut GameObject, ai: Option<&LevelAi>) {
     }
 }
 
+impl GameObjects {
+    /// FAKE(#1234): object `id`'s [`fake_movement_update`] over the
+    /// level graph, its level path built under its restrictions
+    /// (character-paths.md 5, 6.1). Without a level graph nothing moves.
+    pub fn fake_movement(&mut self, id: u16) {
+        let Some(vertices) = self.level_graph.clone() else {
+            return;
+        };
+        let Some((out, inside)) = self.combined_restrictions(id) else {
+            return;
+        };
+        let restrictors = &mut self.restrictors;
+        let Some(o) = self.objects.get_mut(&id) else {
+            return;
+        };
+        let accessibility = Accessibility::default();
+        let g = LevelGraph {
+            ai: &vertices.ai,
+            links: &vertices.links,
+            accessibility: &accessibility,
+        };
+        let mut route = |f: &mut FighterParts, start: u32, goal: u32, end: [f32; 3]| {
+            let border = restrictors.border(&g, &out, &inside);
+            let r = restrictors.restrictions(&out, &inside);
+            let d = r.accessible_destination(&g, &border, goal, end)?;
+            let path = r.level_path(&g, &border, &mut f.level_path_step, start, d.vertex);
+            f.level_path = path.clone();
+            path.map(|_| (d.vertex, d.end_position))
+        };
+        fake_movement_update(o, Some(&vertices.ai), &mut route);
+    }
+}
+
 impl Scripts {
     /// FAKE(#1234): object `id`'s stalker movement at the end of its think
     /// step, after its decision planner (CH-10 conventions;
-    /// [`fake_movement_update`]), over the started level's vertices.
+    /// [`GameObjects::fake_movement`]).
     pub fn fake_stalker_movement(&mut self, id: u16) {
-        let vertices = self.level_vertices();
-        let Some(basics) = self.game_object_state.as_ref() else {
-            return;
-        };
-        if let Some(o) = basics.objects.borrow_mut().get_mut(id) {
-            fake_movement_update(o, vertices.as_ref().map(|v| &*v.ai));
+        if let Some(basics) = self.game_object_state.as_ref() {
+            basics.objects.borrow_mut().fake_movement(id);
         }
     }
 }

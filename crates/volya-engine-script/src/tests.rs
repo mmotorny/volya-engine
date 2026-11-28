@@ -1559,6 +1559,11 @@ mod movement_sight_and_memory {
     }
 
     #[test]
+    fn space_restrictions_in_effect() {
+        section(checks::restrictions_in_effect);
+    }
+
+    #[test]
     fn sight() {
         section(checks::sight);
     }

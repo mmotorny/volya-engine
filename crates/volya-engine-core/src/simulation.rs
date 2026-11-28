@@ -20,6 +20,7 @@
 pub mod graph;
 pub mod level_graph;
 pub mod navigation;
+pub mod restrictions;
 pub mod supplies;
 mod travel;
 

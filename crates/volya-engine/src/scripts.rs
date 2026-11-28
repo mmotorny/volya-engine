@@ -23,6 +23,7 @@ use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::dialogs::Dialogs;
 use crate::core::scripted_motion_channels::{ChannelCall, ChannelEvent, ChannelSounds};
+use crate::core::simulation::restrictions::RestrictorShape;
 use crate::core::simulation::{ACTOR_ID, NO_ID};
 use crate::core::vfs::Vfs;
 use crate::core::zones;
@@ -892,6 +893,19 @@ pub fn spawn_client_object(
     {
         return Ok(());
     }
+    // character-paths.md 2.1: a restrictor of type 0, 1 or 2 registers as
+    // it comes online, whether or not it spawns in the scripts.
+    if let Some((shapes, restrictor_type)) = restrictor_type_of(&object.record) {
+        let h = &object.record.header;
+        let shape = RestrictorShape::placed(shapes, h.position, h.angles);
+        let name = cp1251::encode(&h.name).unwrap_or_else(|| h.name.as_bytes().to_vec());
+        (scripts.objects().borrow_mut().restrictors).register(
+            object.id,
+            name,
+            restrictor_type,
+            shape,
+        );
+    }
     if !binding_runs(system, &object) {
         return Ok(());
     }
@@ -996,7 +1010,18 @@ pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::R
     } else {
         0
     };
+    // character-paths.md 2.3: a character's own restriction texts as it
+    // comes online.
+    let (out_restrictions, in_restrictions) = match object.record.object.monster_like() {
+        Some(m) => (
+            game_text(&m.out_restrictions),
+            game_text(&m.in_restrictions),
+        ),
+        None => Default::default(),
+    };
     Ok(EngineState {
+        out_restrictions,
+        in_restrictions,
         visual: object.model.map(|(m, names)| visual_of(m, names)),
         physics: object.physics,
         restrictor: restrictor_of(&object.record),
@@ -1267,6 +1292,27 @@ fn shapes_of(record: &ObjectRecord) -> Option<&[Shape]> {
         Object::Climbable(o) => &o.shapes,
         _ => return None,
     })
+}
+
+/// The shapes and restrictor type of a record that has both (sav.md
+/// 7.4.2; character-paths.md 1.1).
+fn restrictor_type_of(record: &ObjectRecord) -> Option<(&[Shape], u8)> {
+    Some(match &record.object {
+        Object::Zone(o) => (&o.shapes, o.restrictor_type),
+        Object::Anomaly(o) => (&o.anomaly.zone.shapes, o.anomaly.zone.restrictor_type),
+        Object::VisualAnomaly(o) => (&o.anomaly.zone.shapes, o.anomaly.zone.restrictor_type),
+        Object::TorridZone(o) => (&o.zone.shapes, o.zone.restrictor_type),
+        Object::LevelChanger(o) => (&o.shapes, o.restrictor_type),
+        Object::Restrictor(o) => (&o.shapes, o.restrictor_type),
+        Object::SmartZone(o) => (&o.restrictor.shapes, o.restrictor.restrictor_type),
+        Object::TeamBase(o) => (&o.restrictor.shapes, o.restrictor.restrictor_type),
+        _ => return None,
+    })
+}
+
+/// The game's bytes of a record's text.
+fn game_text(text: &str) -> Vec<u8> {
+    cp1251::encode(text).unwrap_or_else(|| text.as_bytes().to_vec())
 }
 
 /// A restrictor's shape in level space (M 6.2, whose derivation is the
