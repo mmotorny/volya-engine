@@ -102,6 +102,27 @@ fn the_novices_way_to_its_seat() {
             45_947
         ]
     );
+    // 4: the walk to the seat's vertex, from the stalker's position and
+    // from its vertex's centre.
+    let mut cells = Vec::new();
+    assert!(g.walk_to_vertex_visiting(NOVICE_VERTEX, NOVICE, SEAT, |k| cells.push(k)));
+    assert_eq!(
+        cells,
+        [
+            43_968, 44_635, 44_634, 44_633, 44_632, 45_294, 45_293, 45_292, 45_291, 45_949, 45_948,
+            45_947
+        ]
+    );
+    cells.clear();
+    let start = ai.position(NOVICE_VERTEX).unwrap();
+    assert!(g.walk_to_vertex_visiting(NOVICE_VERTEX, start, SEAT, |k| cells.push(k)));
+    assert_eq!(
+        cells,
+        [
+            43_968, 43_967, 44_634, 44_633, 44_632, 44_631, 45_293, 45_292, 45_291, 45_290, 45_948,
+            45_947
+        ]
+    );
 }
 
 /// 1.3 on `l01_escape`: every link that names a vertex is valid, not the

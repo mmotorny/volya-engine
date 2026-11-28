@@ -3,13 +3,10 @@
 
 //! The level graph at run time (docs/behavior/level-graph.md, cited by
 //! section): the neighbours of a vertex (2.1), the accessibility bits
-//! (2.2), the straight-line tests over linked cells (3.1, 3.2, 3.4) and
+//! (2.2), the straight-line tests over linked cells (3.1–3.4) and
 //! the two searches (4.1, 4.2), over the current level's `level.ai`
 //! positions and links ([`super::navigation::Navigation`]). The lookup of
 //! a vertex for a point (2.3) is [`super::navigation::Navigation::vertex_for_point`].
-//!
-//! The walk to a vertex (3.3) is not here: its inputs are disputed in
-//! review (#1242, #1245).
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
@@ -184,14 +181,56 @@ impl<'a> LevelGraph<'a> {
         k0: u32,
         a: [f32; 3],
         b: [f32; 3],
-        mut visit: impl FnMut(u32),
+        visit: impl FnMut(u32),
     ) -> Option<u32> {
         // 1.
         let goal_cell = self.ai.packed_at(b)?;
+        self.walk(
+            k0,
+            [a[0], a[2]],
+            [b[0], b[2]],
+            |next| self.ai.packed(next) == Some(goal_cell),
+            visit,
+        )
+    }
+
+    /// The walk to a vertex (3.3) from vertex `k0` and point `a` (x and z
+    /// used) to vertex `ke`: whether it reaches `ke`, accessible. `k0` is
+    /// not compared with `ke`.
+    pub fn walk_to_vertex(&self, k0: u32, a: [f32; 3], ke: u32) -> bool {
+        self.walk_to_vertex_visiting(k0, a, ke, |_| {})
+    }
+
+    /// [`Self::walk_to_vertex`], calling `visit` with each vertex the walk
+    /// is at, `k0` first.
+    pub fn walk_to_vertex_visiting(
+        &self,
+        k0: u32,
+        a: [f32; 3],
+        ke: u32,
+        visit: impl FnMut(u32),
+    ) -> bool {
+        if !self.valid(ke) {
+            return false;
+        }
+        self.walk(k0, [a[0], a[2]], self.centre(ke), |next| next == ke, visit)
+            .is_some()
+    }
+
+    /// The walk of 3.2 (steps 2 and 3) from vertex `k0` along the line
+    /// from `a` through `b` (x–z), distances measured to `b`, until a
+    /// crossed neighbour `ends` it: that neighbour if accessible.
+    fn walk(
+        &self,
+        k0: u32,
+        a: [f32; 2],
+        b: [f32; 2],
+        ends: impl Fn(u32) -> bool,
+        mut visit: impl FnMut(u32),
+    ) -> Option<u32> {
         if !self.valid(k0) {
             return None;
         }
-        let (a, b) = ([a[0], a[2]], [b[0], b[2]]);
         let d = [b[0] - a[0], b[1] - a[1]];
         let to_b = |c: [f32; 2]| {
             let (dx, dz) = (c[0] - b[0], c[1] - b[1]);
@@ -208,7 +247,7 @@ impl<'a> LevelGraph<'a> {
                 if Some(next) == came_from || !self.crosses(next, a, d) {
                     continue;
                 }
-                if self.ai.packed(next) == Some(goal_cell) {
+                if ends(next) {
                     if !self.accessible(next) {
                         return None;
                     }

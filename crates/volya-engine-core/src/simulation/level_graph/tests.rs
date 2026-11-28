@@ -161,6 +161,41 @@ fn walk_to_a_point() {
 }
 
 #[test]
+fn walk_to_a_vertex() {
+    let (ai, links) = grid(5, 5, &[]);
+    let mut acc = Accessibility::default();
+    let walk = |acc: &Accessibility, k0, a, ke| {
+        let mut cells = Vec::new();
+        let r = view(&ai, &links, acc).walk_to_vertex_visiting(k0, a, ke, |k| cells.push(k));
+        (r, cells)
+    };
+    // The same staircase as the walk to its centre.
+    assert_eq!(
+        walk(&acc, 0, centre(&ai, 0), 12),
+        (true, vec![0, 1, 6, 7, 12])
+    );
+    // The line runs from the start point, not the start vertex's centre:
+    // from near 0's +x side it goes +x before +z.
+    let (r, cells) = walk(&acc, 0, [0.3, 0.0, -0.3], 12);
+    assert!(r);
+    assert_eq!(cells[1], 5, "{cells:?}");
+    // The end vertex inaccessible, or one on the way: false.
+    acc.clear(&[12]);
+    assert!(!walk(&acc, 0, centre(&ai, 0), 12).0);
+    acc.set(&[12]);
+    acc.clear(&[10]);
+    assert!(!walk(&acc, 0, centre(&ai, 0), 20).0);
+    // An invalid end, the start itself, and a missing link: false.
+    let open = Accessibility::default();
+    assert!(!walk(&open, 0, centre(&ai, 0), 25).0);
+    assert!(!walk(&open, 12, centre(&ai, 12), 12).0);
+    let (ai2, links2) = grid(5, 5, &[(10, 2)]);
+    assert!(!view(&ai2, &links2, &open).walk_to_vertex(0, centre(&ai, 0), 20));
+    // No off-grid step: a start point off the grid still walks.
+    assert!(walk(&open, 0, [-0.3, 0.0, 0.0], 20).0);
+}
+
+#[test]
 fn step_test_in_a_direction() {
     let (ai, links) = grid(5, 5, &[(12, 2)]);
     let mut acc = Accessibility::default();
