@@ -175,6 +175,24 @@ impl Objects<'_> {
     }
 }
 
+/// What a function registered with [`Lua::register_with_objects`] gets:
+/// new objects for its results.
+pub struct ObjectMaker {
+    state: Rc<State>,
+}
+
+impl ObjectMaker {
+    /// A new object of engine class `class` holding `part`, owned by the
+    /// script side and collected like a constructed one
+    /// ([`Objects::new_object`]).
+    pub fn new_object<T: Any>(&self, class: &str, part: T) -> Value {
+        let id = self
+            .state
+            .insert(Rc::from(class), Rc::new(RefCell::new(Box::new(part))));
+        Value::Object(EnginePart(id))
+    }
+}
+
 impl EngineClass {
     pub fn new(name: &str) -> Self {
         EngineClass {
@@ -722,6 +740,20 @@ impl Lua {
             ffi::volya_register_object_function_protected(self.state.as_ptr(), &mut function)
         };
         self.check(status)
+    }
+
+    /// Sets the global `name` to a function running `f`, which may return
+    /// new objects of engine classes ([`ObjectMaker::new_object`]), as
+    /// methods registered `…_with_objects` do.
+    pub fn register_with_objects(
+        &mut self,
+        name: &str,
+        mut f: impl FnMut(&ObjectMaker, &[Value]) -> Result<Vec<Value>, String> + 'static,
+    ) -> Result<(), Error> {
+        let maker = ObjectMaker {
+            state: Rc::clone(&self.classes),
+        };
+        self.register(name, move |args| f(&maker, args))
     }
 
     /// A Rust function C calls with an engine part's id, then arguments.

@@ -63,7 +63,7 @@ fn state(system: &str) -> Result<(Scripts, Shared), String> {
 }
 
 /// Runs `body` after the classes' prelude; its failures.
-fn run(s: &mut Scripts, name: &str, body: &str) -> Result<(), String> {
+pub(super) fn run(s: &mut Scripts, name: &str, body: &str) -> Result<(), String> {
     let code = format!("{PRELUDE}{body}\nreturn failures");
     let results = s
         .exec(&format!("={name}"), code.as_bytes())

@@ -476,22 +476,18 @@ impl Context {
         description: &str,
         arguments: &[&str],
     ) -> String {
-        let report = FatalReport {
-            expression,
-            function,
-            file: file!(),
-            line: line as i32,
-            description,
-            arguments,
-        };
-        self.services.borrow_mut().console.log_mut().fatal(&report);
-        let message = [expression, description]
-            .into_iter()
-            .chain(arguments.iter().copied())
-            .collect::<Vec<_>>()
-            .join(" ");
-        *self.fatal.borrow_mut() = Some(message.clone());
-        message
+        report_fatal(
+            &self.services,
+            &self.fatal,
+            Fatal {
+                function,
+                file: file!(),
+                line,
+                expression,
+                description,
+                arguments,
+            },
+        )
     }
 
     /// `get_console():execute(line)` (2.2).
@@ -499,6 +495,49 @@ impl Context {
         let line = cp1251::decode(&line[..line.len().min(LINE_LENGTH)]);
         self.services.borrow_mut().console.exec(&line);
     }
+}
+
+/// A fatal error's report (CL 3.8): where it was raised and its rows.
+pub(crate) struct Fatal<'a> {
+    pub function: &'a str,
+    pub file: &'a str,
+    pub line: u32,
+    pub expression: &'a str,
+    pub description: &'a str,
+    pub arguments: &'a [&'a str],
+}
+
+/// A fatal error (CL 3.8): its report goes to the console's log, and the
+/// state stops (`fatal` holds the message), as the original program ends.
+/// The error to raise.
+pub(crate) fn report_fatal(
+    services: &RefCell<EngineServices>,
+    fatal: &RefCell<Option<String>>,
+    report: Fatal,
+) -> String {
+    let Fatal {
+        function,
+        file,
+        line,
+        expression,
+        description,
+        arguments,
+    } = report;
+    services.borrow_mut().console.log_mut().fatal(&FatalReport {
+        expression,
+        function,
+        file,
+        line: line as i32,
+        description,
+        arguments,
+    });
+    let message = [expression, description]
+        .into_iter()
+        .chain(arguments.iter().copied())
+        .collect::<Vec<_>>()
+        .join(" ");
+    *fatal.borrow_mut() = Some(message.clone());
+    message
 }
 
 /// The text argument `args[i]` of `what` (our wording for a mismatch; the

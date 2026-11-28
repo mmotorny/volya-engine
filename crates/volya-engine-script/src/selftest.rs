@@ -1,14 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The runtime's behaviour, the script loader, script classes and the
-//! object factory, checked on every target: natively by
+//! The runtime's behaviour, the script loader, script classes, the
+//! object factory, the engine services, the value types and configuration
+//! and files, checked on every target: natively by
 //! `cargo test`, in the browser by the `script_selftest` op (docs/testing.md,
 //! Shared conformance checks).
 
 use crate::{ErrorKind, Lua, Value};
 
 pub mod classes;
+pub mod files;
 mod loading;
 pub mod object_factory;
 pub mod services;
@@ -37,6 +39,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = values::check() {
+        fail(e);
+    }
+    if let Err(e) = files::check() {
         fail(e);
     }
     if failures.is_empty() {

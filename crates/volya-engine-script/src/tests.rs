@@ -141,6 +141,54 @@ mod services {
     }
 }
 
+/// Configuration and files' checks, one test per section of
+/// docs/behavior/script-api-configuration-and-files.md (all of them run in
+/// [`selftest`] too, on every target).
+mod files {
+    use crate::selftest::files as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn configuration_objects() {
+        section(checks::configuration_objects);
+    }
+
+    #[test]
+    fn readers() {
+        section(checks::readers);
+    }
+
+    #[test]
+    fn token_classes() {
+        section(checks::tokens);
+    }
+
+    #[test]
+    fn the_file_system() {
+        section(checks::file_system);
+    }
+
+    #[test]
+    fn command_line_and_user_name() {
+        section(checks::command_line);
+    }
+
+    #[test]
+    fn the_logic_reads_of_a_door() {
+        section(checks::logic_reads);
+    }
+}
+
 /// The value types' checks, one test per section of
 /// docs/behavior/script-api-value-types-and-math.md (all of them run in
 /// [`selftest`] too, on every target).
