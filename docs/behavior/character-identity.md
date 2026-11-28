@@ -2,9 +2,9 @@
 
 Behaviour specification, for S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition), of how a character's
 identity is filled in: which specific character it gets from its profile (the profile's own specific
-character, or a random choice among the descriptions of the profile's class), when that choice is made, and
-what the chosen description then fills in: the specific character, community, rank, reputation and name of
-the Trader-like block, the money, the model, the team, the terrain masks and the PDA's specific character;
+character, or a random choice among the specific characters of the profile's class), when that choice is
+made, and what the chosen specific character then fills in: the specific character, community, rank,
+reputation and name of the Trader-like block, the money, the model, the team, the terrain masks and the PDA's specific character;
 and what the `community`, `rank` and `spec_rank` keys of the character and monster sections give. It is
 CH-2 of `docs/behavior/characters-scope.md` (cited as `scope`), section 5.
 
@@ -15,11 +15,9 @@ Visual blocks and the layouts per kind, 9 chunk 9, 11.2 the load order), `docs/b
 1.4 (string-table lookup), `docs/behavior/original-determinism.md` 2.2 (the shared random generator),
 `docs/behavior/console-log.md` (the report of a fatal error), `docs/formats/ltx-config.md`.
 
-The description format is CH-1 (`character-descriptions`), investigated at the same time and not yet
-approved. This specification uses its terms and does not specify the format; section 1.2 lists exactly what
-it takes from CH-1, and every statement resting on that ground is marked **(CH-1)**. **Disputed in review:**
-CH-1 is approved, as `docs/formats/character-descriptions.md`; it is not a draft investigated alongside this
-one.
+The format of the profiles and specific characters is CH-1, `docs/formats/character-descriptions.md` (cited
+as CH-1). This specification uses its terms and does not specify the format; section 1.2 lists exactly what
+it takes from CH-1, and every statement resting on that ground is marked **(CH-1)**.
 
 Conventions:
 
@@ -27,9 +25,9 @@ Conventions:
   records of `spawns\all.spawn` with them). A character's **object** is its simulation object, whose saved
   state is `sav` 7.4; the **online character** is its counterpart on the loaded level. **Stalker** and
   **trader** are `sav` 7.4.2's kinds.
-- **Profile** is a `<character>` of `config\gameplay\npc_profile.xml`; **description** is a
-  `<specific_character>` of the files of `[profiles] specific_characters_files` (`scope` 1.3). The
-  **specific character** of an object is the id of a description.
+- **Profile** and **specific character** are CH-1's: a `<character>` of `config\gameplay\npc_profile.xml`
+  and a `<specific_character>` entry of the files of `[profiles] specific_characters_files` (`scope` 1.3).
+  The **specific character of an object** is the id of such an entry; what it gives is that entry's.
 - **Unset**: an empty specific character or name, community −1, rank or reputation −2,147,483,647.
 - **Draw** means one draw of the shared random generator (`original-determinism.md` 2.2): the state *s*
   becomes *s* · 214,013 + 2,531,011 (mod 2³²) and the draw is (*s* ≫ 16) AND 32,767 [B11]; in the
@@ -63,21 +61,21 @@ A new object starts with the initial values of the table before its state is rea
 record of `spawns\all.spawn` leaves the specific character, name, community, rank and reputation unset
 (`scope` 1.1) and names a profile (205 distinct ones) [D4].
 
-### 1.2 From the descriptions (CH-1)
+### 1.2 From the specific characters (CH-1)
 
-What this specification takes from the description files, as the program reads them (CH-1 owns the
+What this specification takes from the specific-character files, as the program reads them (CH-1 owns the
 reading, its messages and the elements not listed here):
 
 - **Profile**: if it has a `specific_character` element, that id, and nothing else is used; otherwise its
   `class` (lower-cased) and its `rank` and `reputation` (unset when absent) [B3]. No profile of the shipped
   `npc_profile.xml` has `rank` or `reputation` [D6].
-- **Description index**: the descriptions are numbered 0 … 742 in the order of the files in
-  `specific_characters_files` and, within a file, of the `specific_character` children of its root element
-  [D1].
-- **Per description**: its id; **no_random** and **team_default**, each set only when the attribute's value is
-  exactly 1 (both set is an assertion failure); its **class list**, lower-cased (each `class` element adds an
+- **Registration index** (CH-1 3.1): the specific characters are numbered 0 … 742 in the order of the files
+  in `specific_characters_files` and, within a file, of the `specific_character` children of its root
+  element [D1].
+- **Per specific character**: its id; **no_random** and **team_default**, each set only when the attribute's
+  value is exactly 1 (both set is an assertion failure); its **class list**, lower-cased (each `class` element adds an
   entry; the reader takes the text of the first `class` element for every entry, so the list holds the first
-  class repeated: **(CH-1)**, immaterial for the shipped data, where every description has exactly one
+  class repeated: **(CH-1)**, immaterial for the shipped data, where every specific character has exactly one
   `class` [D3]); its **community** as the position of the `community` text in the community list (1.3); its
   `rank` and `reputation`; `name` (a string id); `visual`; `terrain_sect`; `icon`; and `money` `min` and `max`
   (0 when absent; a `max` below `min` is read as `min`) [B4, B5, B6, S3, S8].
@@ -101,25 +99,25 @@ The **choice** returns an object's specific character, making one first if it is
 3. **Explicit**: the object's profile is read (1.2). If it names a specific character, that one is **set**
    (section 3) and returned [B3]. `no_random` plays no part here.
 4. **Random choice** otherwise, from two lists that start empty, the **candidates** and the **defaults**.
-   Every description is visited in index order [B4]; for each:
+   Every specific character is visited in registration-index order [B4]; for each:
    1. one with `no_random` is skipped [B4];
    2. unless the profile's class is empty, one whose class list does not contain the profile's class is
       skipped (exact comparison of the lower-cased texts) [B5];
    3. one with `team_default` is added to the defaults [B6];
-   4. if the profile has a rank and the description's rank differs from it by 10 or more (|difference| ≥ 10),
-      it is not a candidate; likewise for the reputation [B7];
-   5. if the simulation exists and the description's id is in the **in-use registry** (2.1), it is not a
+   4. if the profile has a rank and the specific character's rank differs from it by 10 or more
+      (|difference| ≥ 10), it is not a candidate; likewise for the reputation [B7];
+   5. if the simulation exists and the specific character's id is in the **in-use registry** (2.1), it is not a
       candidate [B8];
    6. otherwise it is added to the candidates [B8].
 
    Then: if the defaults are empty, this is an assertion failure "no default specific character set for
-   class" (with the profile's class), even when there are candidates [B9]. Otherwise the chosen description
-   is candidates[*a* mod *c*] when there are *c* > 0 candidates, else defaults[*a* mod *d*] with *d*
+   class" (with the profile's class), even when there are candidates [B9]. Otherwise the chosen specific
+   character is candidates[*a* mod *c*] when there are *c* > 0 candidates, else defaults[*a* mod *d*] with *d*
    defaults, *a* being one draw; it is set (section 3) and returned [B10, B11].
 
-So candidates are unused, eligible descriptions; the defaults ignore rank, reputation and use, and are the
-fallback when every eligible description is in use. With the shipped data the rank and reputation test never
-applies (no profile has them) [D6].
+So candidates are unused, eligible specific characters; the defaults ignore rank, reputation and use, and
+are the fallback when every eligible specific character is in use. With the shipped data the rank and
+reputation test never applies (no profile has them) [D6].
 
 ### 2.1 The in-use registry
 
@@ -137,13 +135,38 @@ Nothing else of the choice and set adds or removes entries. Believed: nothing el
 either (no other access to it was found), so ids are never released while the objects that took them die
 or are destroyed. The value is always 1 here; the order of the saved entries is not defined (`sav` 9).
 
+### 2.2 What a choice loads
+
+CH-1 3.2 loads profiles and specific characters by id and leaves to this specification which ones are loaded
+and when:
+
+- Every choice that reaches step 3 loads the object's profile by its id [B3, E2]; a profile id that the
+  profile files do not define is CH-1 3.2's fatal error there.
+- A random choice loads every specific character, by registration index, before testing it (step 4.1),
+  whatever its class or flags [B4, E2]. An entry's contents are read the first time it is loaded (CH-1 3.2),
+  so the first random choice of a run reads all 743 specific characters, and a content error of CH-1 5 in any
+  of them, of whatever class, appears then. In this edition none has one (CH-1 5.1, 5.5). The spawn file's
+  reading (4.2 step 2, and 4.3) makes the first random choice at record 93 (`esc_lager1`, profile
+  `esc_stalker_novice`): every character record before it has an explicit profile [E3].
+- The set loads the specific character it sets, after its registry step (section 3 step 1) [E2]. A random
+  choice only sets ids it has loaded; reading a profile takes its `specific_character` as text without loading
+  it [B3], so an id that no specific character has is CH-1 3.2's fatal error at the set. In
+  this edition every explicit profile names a defined specific character (CH-1 4).
+
 ## 3. Setting a specific character
 
-Setting description *D* as an object's specific character does, in this order [S1–S9]:
+Setting an empty id is an assertion failure, before any of the steps below [E1]. No choice passes one: the
+explicit case sets only a non-empty id (2 step 3), and a random choice sets the id of a registered specific
+character, all of which are non-empty in this edition (CH-1 3.1).
+
+Setting the specific character *D* on an object does, in this order [S1–S9]:
 
 1. **Registry**: as 2.1, then *D*'s id is stored as the specific character [S1].
 2. **Model**: if *D*'s `visual` is not empty, it becomes the model name (extension removed, lower-cased),
-   replacing the Visual block's [S2].
+   replacing the Visual block's [S2]. The text is not checked here: a `visual` that names no model file is
+   stored and saved like any other, and the model lookup of `objects` 1 fails on it when the character
+   comes online, a fatal error there (believed: the lookup is the one every object with a model makes,
+   `objects` 2; the game was not run). The one such specific character of this edition is in section 9.
 3. **Community and team**: if the community is unset (−1), it becomes *D*'s community position; then, for a
    stalker, the Creature block's team becomes that community's number. A community that is already set is
    kept, and the team is then not touched [S3, S10].
@@ -220,29 +243,40 @@ After a New Game a character therefore has [W1–W8, S1–S8]:
 | specific character, the PDA's specific character | the supplies choice |
 | community; a stalker's team | the supplies choice |
 | name | the supplies choice (a generated name drawn anew) |
-| money | the supplies choice if its description has a money range, else the spawn-file choice's if its has one, else the record's |
+| money | the supplies choice if its specific character has a money range, else the spawn-file choice's if its has one, else the record's |
 | rank, reputation | the spawn-file choice (never unset again) |
-| model name | the supplies choice's `visual` (every description has one [D17]) |
+| model name | the supplies choice's `visual` (every specific character has one [D17]) |
 | terrain masks of a stalker | the section's `terrain`, then the supplies choice's `terrain_sect` |
 
-For an explicit profile both choices give the same description. For a class profile the two choices are
+For an explicit profile both choices give the same specific character. For a class profile the two choices are
 different whenever an unused candidate remains; when none remains the supplies choice falls back on the
-defaults, which may repeat any of them. Which descriptions are chosen depends on the generator's state,
+defaults, which may repeat any of them. Which specific characters are chosen depends on the generator's state,
 which comes from a time-stamp-counter read and every earlier draw (`original-determinism.md` 2.2): it is not
 reproducible from the data.
 
-Consequence for stalkers' models (**believed**, a correction to `objects` 2 item 3): `objects` has a
-stalker show its record's model whatever its profile, from the order of the blocks in its state; but the
-supplies choice sets the description's model after that (step 3 above, 3 step 2), and nothing found sets it
-back. For 651 of the 1,073 stalker records some candidate's visual differs from the record's [D17]. The
-trader's is the same either way (section 8).
+**A stalker's model.** Reading the record object's state at creation leaves the record's model name, the
+Visual block being read after the Trader-like block (4.1, `objects` 2 item 3); the supplies step that
+follows sets the supplies choice, whose `visual` replaces it (section 3 step 2) [W8, W4, W5, S2]. Nothing
+sets it back: the specific character's `visual` is used by the set only [M1]; apart from the set, the
+program sets a model name only when an object is constructed (from its section's `visual`, before its state
+is read), in multiplayer, for phantoms, for physics-skeleton objects made anew, and on a change-model event
+that only phantoms send [M2]; no script function sets one [M4]. **Disputed in review:** [M2] enumerates
+only the uses of the program's model-name setter (the one that removes the extension and lower-cases); the
+reading of a Visual block also sets the model name, stored as read without that setter, and is missing from
+this list; that it never runs again on an existing object is not checked, so "nothing sets it back" is
+believed, not established. Writing the Visual block writes the model
+name as set [M3], so the save and the online character (which takes the object's model name, `objects` 2)
+carry it. A stalker therefore shows the `visual` of its supplies choice, not its record's: for 651 of the
+1,073 stalker records some candidate's visual differs from the record's [D17]. The trader's is the same
+either way (section 8).
 
 ### 4.3 Load
 
 `sav` 11.2: the spawn file is read again (step 3), so every character record object makes a choice and the
 in-use registry fills; the saved objects (step 4) already have their specific characters, so reading them
 makes no choice and adds nothing; chunk 9 (step 6) then replaces the registry by the saved one [W1, U2].
-No supplies step runs. A stalker loaded from a save therefore has only the terrain masks of its section's
+No supplies step runs. A stalker loaded from a save has its saved model name (its Visual block, read after
+the Trader-like block, which makes no choice) [W1, B2], and only the terrain masks of its section's
 `terrain` (step 4 of section 3 does not run again); every stalker record's section has `terrain =
 255,255,255,255,0,1`, whose mask 255,255,255,255 every game vertex matches (`offline` 1.6), so its added
 masks never changed a path [D18].
@@ -263,16 +297,16 @@ When a stalker or trader comes online in the single-player game [O1]:
 - an empty character profile on its object is an assertion failure;
 - it copies the object's community, rank, reputation and profile, makes the choice on the object (which
   changes nothing: the specific character is always set by then) and takes the object's specific character,
-  whose description gives it the other properties CH-1 reads (its icon, start dialog and the rest; their
+  whose entry gives it the other properties CH-1 reads (its icon, start dialog and the rest; their
   uses belong to their own specifications);
 - its name is the object's character name.
 
-A description's `start_dialog` and `actor_dialog` ids are stored as text when it is read, without being looked
+A specific character's `start_dialog` and `actor_dialog` ids are stored as text when it is read, without being looked
 up (CH-1) [B13]; an id that no dialog file defines (`scope`, "Gaps found in review") is therefore accepted by
 the identity, and what it does when a talk uses it is the dialogue's (believed; `dialogue-scope`).
 
 So the name the talk window and the crosshair show is the Trader-like block's character name, and the
-picture the description's `icon` (believed: as `scope` 3, B-chars 3, and the panels' specifications use them).
+picture the specific character's `icon` (believed: as `scope` 3, B-chars 3, and the panels' specifications use them).
 **Disputed in review:** only that the online character's name is the object's character name is checked here;
 that the talk window and the crosshair show that name is not, so it is believed as well, like the picture.
 
@@ -287,8 +321,8 @@ that the talk window and the crosshair show that name is not, so it is believed 
   `m_izgoy` (both `rank = 1`), are not monsters': it is not the Trader-like rank, and the trader's object is
   not monster-like (section 3), so it is believed unused for the trader; `m_izgoy` has no record [D12b].
 - `community` and `spec_rank` (143 sections each, character and monster ones): the program does not read
-  them: `spec_rank` is not named in `xrGame.dll`, and the text `community` is used only by the description
-  reader and as the name of a script method [D15, O3]. `scripts\se_respawn.script` reads both from the
+  them: `spec_rank` is not named in `xrGame.dll`, and the text `community` is used only by the
+  specific-character reader and as the name of a script method [D15, O3]. `scripts\se_respawn.script` reads both from the
   sections it respawns, and uses them only in its functions `lstats` and `estats` (statistics printouts),
   which no shipped script calls [D14]; so they have no effect (believed: those functions are reached only by
   hand, from a console script call).
@@ -304,7 +338,7 @@ specification (`scope` 1, "character").
 ## 8. Worked example: the trader
 
 The trader is record 84 (`scope` 4): profile `escape_trader`, money 1,000,000, model `actors\trader\trader`,
-identity unset [D11]. The profile names the description `escape_trader` (`character_desc_escape.xml`,
+identity unset [D11]. The profile names the specific character `escape_trader` (`character_desc_escape.xml`,
 `no_random` 1): community `trader`, rank 330, reputation 23, name `escape_trader_name`, visual
 `actors\trader\trader`, money `min` = `max` = 100,000, no `terrain_sect`, and a name that is not generated
 [D11, D7]. At a New Game:
@@ -317,7 +351,7 @@ identity unset [D11]. The profile names the description `escape_trader` (`charac
    and sets `escape_trader` again (the registry already has it), giving the same values; the PDA's specific
    character is `escape_trader`; his `supplies` (`[spawn] wpn_knife`, CH-6) are created, his custom data
    having no `[dont_spawn_character_supplies]` (`scope` 4).
-3. Online he copies these; his name is the text of `escape_trader_name`, his picture the description's icon
+3. Online he copies these; his name is the text of `escape_trader_name`, his picture the specific character's icon
    `ui_npc_u_trader`.
 
 His identity is thus the same in every game and needs no random choice (`scope` 6: "the explicit choice").
@@ -327,29 +361,41 @@ His identity is thus the same in every game and needs no random choice (`scope` 
 - 1,074 character records name 205 profiles: 14 profiles name a specific character (one record each, among
   them `escape_trader`), 191 only a class (1,060 records) [D4].
 - For every one of those 191 classes the candidates before the in-use test equal its defaults and are not
-  empty, so no shipped record reaches the assertion of 2 [D5]. Records by the number of such descriptions of
+  empty, so no shipped record reaches the assertion of 2 [D5]. Records by the number of such specific characters of
   their profile's class: 1 (369 records), 2 (112), 3 (140), 4 (98), 5 (148), 6 (47), 7 (33), 8 (30), 24 (83)
-  [D5]. Profiles shared by more records than their class has descriptions give repeated identities, from the
+  [D5]. Profiles shared by more records than their class has specific characters give repeated identities, from the
   defaults.
 - `no_random` is set on `actor`, `mp_actor`, `escape_trader`, `bar_barman`; `team_default` is 1 on 738
-  descriptions, absent on 4 and 3 (so not set) on `val_monolith_regular_default1`; none has both [D2].
-- 520 descriptions have a generated name `GENERATE_NAME_<suffix>`: `stalker` 344, `sergeant` 96, `bandit` 39,
+  specific characters, absent on 4 and 3 (so not set) on `val_monolith_regular_default1`; none has both [D2].
+- 520 specific characters have a generated name `GENERATE_NAME_<suffix>`: `stalker` 344, `sergeant` 96, `bandit` 39,
   `private` 17, `lieutenant` 17, `captain` 5, `science` 2; the seven sections `[stalker_names_<suffix>]` give
   (`name_cnt`, `last_name_cnt`) `stalker` (102, 599), `bandit` (36, 180), `science` (14, 27), `private`,
   `sergeant`, `lieutenant`, `captain` (1, 200) each, and every id below those counts is in the string table;
   no string id contains `GENERATE_NAME_` [D7, D8].
-- 226 descriptions have `money`; (`min`, `max`): (600, 2,000) 112, (200, 600) 47, (2,000, 5,000) 40,
+- 226 specific characters have `money`; (`min`, `max`): (600, 2,000) 112, (200, 600) 47, (2,000, 5,000) 40,
   (5,000, 10,000) 22, (100,000, 110,000) 3, (100,000, 100,000) 1 (the trader), (0, 200) 1, which leaves the
   money unchanged (3 step 7) [D9].
 - Every `terrain_sect` names a section of the configuration [D18].
+- Two profiles have a class that no specific character has (CH-1 4): `esc_plemiannik` and
+  `gar_newbie_in_tonnel`, each its own class. A choice for either finds neither a candidate nor a default:
+  the assertion failure of section 2. None is ever made: no record names them, no section's
+  `character_profile`, no other file of `config\`, `scripts\` or `spawns\` (only `npc_profile.xml`, which
+  defines them), and no string of `xrGame.dll`; the script interface reads a profile's name but sets none
+  [E4].
+- `ds_zomb_12` (CH-1 5.7) has the `visual` `actors\stalker_zombi\stalker_zombie_8`, already lower case and
+  without an extension, which no archive file matches (no path ending `stalker_zombie_8.ogf`): setting it
+  makes that text the model name, with the outcome of section 3 step 2 [E5]. It is the only specific
+  character of its class (`team_default` 1, `no_random` off), and only the class profile `ds_zomb_12` has
+  that class, which no profile names explicitly; no record, no section's `character_profile`, no script and
+  no string of `xrGame.dll` names that profile (only `character_desc_kishka.xml` and `npc_profile.xml` hold
+  the id), so in this edition it is never chosen [E5].
 
 ## 10. Unestablished
 
-- Which descriptions the random choices pick in a given game: the generator's state at each choice (its
+- Which specific characters the random choices pick in a given game: the generator's state at each choice (its
   seed and the number of draws made before, by every consumer) (2, 4.2).
 - That nothing else of the program adds to or removes from the in-use registry, or changes a set specific
   character (2.1; believed from the absence of other accesses found).
-- The stalkers' model after a New Game (4.2, believed: the description's), against `objects` 2 item 3.
 - What uses a monster's `rank`, and whether any composed key name reads `community` or `spec_rank` (6).
 - How the player's identity is filled (7) and what multiplayer does (2 step 1).
 - What follows an assertion failure in the running game (believed: the game ends).
@@ -360,36 +406,17 @@ His identity is thus the same in every game and needs no random choice (`scope` 
 - Date: 2026-11-27. Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG); binary
   `bin\xrGame.dll`.
 - Data examined: winning copies of `config\` (`system.ltx` tree, `gameplay\npc_profile.xml` and the 15
-  description files, `creatures\game_relations.ltx`, the Russian string tables), `scripts\` and
+  specific-character files, `creatures\game_relations.ltx`, the Russian string tables), `scripts\` and
   `spawns\all.spawn`, as extracted for `pda-scope`, read with the helpers of `checks/characters-scope/`
   (spawn reader written from `sav` 7.2–7.4).
 - Analysis: static analysis (the existing headless Ghidra decompilation and instruction listing of the whole
   of `xrGame.dll`) of the choice, the set, the Trader-like block's reading and writing, the object's
   supplies, post-registration and creation steps, New Game, the spawn file's reading, the simulation's
-  registries and the loading of chunk 9 part 6, the online character's creation, the monsters' rank reading
-  and the shared generator's draw; data surveys of the descriptions, profiles, sections and string tables.
-  No debugging or execution; the game was not run.
-- Checks: `checks/character-identity/checks.py` (58 assertions), with `export.py` (the binary evidence in
+  registries and the loading of chunk 9 part 6, the online character's creation, the monsters' rank reading,
+  the shared generator's draw, every place that sets a model name or reads a specific character's `visual`,
+  and the Visual block's writing; the script interface listed in `scripts\lua_help.script`; data surveys of
+  the specific characters, profiles, sections, string tables and the archive listing. No debugging or
+  execution; the game was not run.
+- Checks: `checks/character-identity/checks.py` (68 assertions), with `export.py` (the binary evidence in
   `ev/`) and `vtx.py`; all pass.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
-
-## Gaps found in review
-
-- Terms: what this specification calls a **description** and its **description index** are CH-1's
-  **specific character** (the entry) and **registration index** (CH-1 3.1); the two specifications' names
-  should be one.
-- The believed correction of 4.2 (the stalkers' model after a New Game) applies to
-  `docs/behavior/object-visual-and-transform.md` section 2 item 3 (`objects`).
-- Setting a specific character with an empty id is an assertion failure (the set checks its id first); not
-  stated in section 3 (no caller of the choice passes an empty id).
-- Which profile and specific-character entries each choice loads, which CH-1 3.2 leaves to this
-  specification: the random choice loads every specific character in index order to test its flags and
-  classes, so CH-1's content errors (CH-1 5) of any specific character, of whatever class, appear at the
-  first random choice; an explicit profile's id that no specific character has is CH-1 3.2's fatal error at
-  the set. Not stated.
-- The two profiles whose class no specific character has (CH-1 4: `esc_plemiannik`, `gar_newbie_in_tonnel`)
-  reach the assertion of section 2 if a choice is ever made for them; section 9 does not say so, nor that no
-  record, no section's `character_profile` and no other shipped file names them.
-- CH-1 5.7's `ds_zomb_12`, whose `visual` names no model: what becoming the model name does is not stated
-  (CH-1 leaves it here); only the profile `ds_zomb_12`, of the same class, can choose it, and no record, no
-  section's `character_profile` and no script names that profile.

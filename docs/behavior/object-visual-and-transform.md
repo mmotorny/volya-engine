@@ -28,7 +28,7 @@ the record with section `actor`.
 
 **Checks.** Bracketed ids [OV-*n*] name the checks of the dirty workspace's
 `checks/level-objects-split/run_all.py` (decoders `sp.py`, `refs.py`, `chars.py`, `named.py`, `xform.py`,
-`orders.py` beside it).
+`orders.py` beside it; OV-14 runs checks of `checks/character-identity/checks.py`).
 
 ## 1. Looking up a visual name
 
@@ -51,19 +51,21 @@ takes the simulation object's name (for every kind, alive or dead at a New Game;
    name lower-cased).
 2. The object state is then read in the order of its blocks (sav.md 7.4.2). A Visual block replaces the name
    with the record's visual name (used as stored).
-3. A **Trader-like** block selects the object's specific character when it is read: if its "specific
-   character" field is empty, one is chosen from the "character profile", which names a `<character>` of
-   `config\gameplay\npc_profile.xml` (the profile's own `<specific_character>` if it names one, else a random
-   choice among the `<specific_character>` descriptions of the files listed by
-   `[profiles] specific_characters_files`, in `config\gameplay\`, whose `<class>` matches the profile's and
-   that are not marked `no_random`). If the chosen description has a non-empty `<visual>`, that visual
-   (extension removed, lower-cased) replaces the name at that moment. Consequences:
+3. A **Trader-like** block selects the object's specific character when it is read, and setting a
+   specific character replaces the name with that specific character's non-empty `<visual>` (extension
+   removed, lower-cased); the choice and the set are `docs/behavior/character-identity.md` (cited as
+   `identity`), sections 2 to 4. Consequences:
    - **trader** (`AI_TRD_S`, layout Object, Visual, Trader-like) and **player** (Creature, then Trader-like):
-     the description's visual wins over the record's;
+     the specific character's visual wins over the record's;
    - **stalker** (`AI_STL_S`, layout Trader-like first, then Monster-like with its Visual block): the record's
-     Visual block is read after the selection and **restores the record's visual name**. A stalker shows its
-     record's visual whatever its profile (its specific character still decides other properties, outside
-     this specification).
+     Visual block is read after the selection and restores the record's visual name; but creating the object
+     then runs its supplies step, which sets a specific character again (`identity` 4.1, 4.2), and its
+     `<visual>` replaces the name once more. Nothing sets it back (`identity` 4.2). **Disputed in review:**
+     the evidence for "nothing sets it back" covers only the model-name setter that the set uses; reading a
+     Visual block stores the name without it, and that this never runs again on an existing stalker is not
+     checked, so this is believed. So after a New Game a
+     stalker shows the visual of the specific character that step set, not its record's; one loaded from a
+     save shows its saved visual name (`identity` 4.3) [OV-14].
 4. **Dead creatures** (stalkers and monsters with health 0) show the same visual name. The section's
    `corpse_visual` is used instead only for a body whose death time is non-zero and lies more than
    `[monsters_common] corpse_remove_game_time_interval` game hours in the past; every dead body of the shipped
@@ -116,13 +118,19 @@ Distances are from the actor's stored position.
 Online objects with a model, without the actor: 352 (32 stalkers, the trader and 319 other objects,
 including the 55 crows and the monster). The 319 objects other than stalkers and the trader use 101 distinct
 model files with 163,064 vertices in total and 388,632 indices at full detail (for type-4 meshes the indices
-of detail level 0, i.e. 3 × its triangle count; counted once per object) [OV-9]. For every online object the
-visual is the record's visual name (section 2); for the trader, whose profile `escape_trader` names the
-description `escape_trader` (`no_random`), the description's `<visual>` `actors\trader\trader` equals the
-record's [OV-4]. Visuals of stalkers as drawn (section 2: the records'), e.g. `esc_lager1`
-`actors\novice\green_stalker_2`, `esc_lager2` `actors\novice\green_stalker_10`, `esc_specnaz1`
-`actors\soldier\soldier_antigas`, `esc_blokpost_commander` `actors\soldier\soldier_beret_1`,
-`esc_stalker_corps1_0001` `actors\neytral\stalker_neytral_balon_8` [OV-5].
+of detail level 0, i.e. 3 × its triangle count; counted once per object) [OV-9]. For every online object
+other than the stalkers the visual is the record's visual name (section 2); for the trader, whose profile
+`escape_trader` names the specific character `escape_trader` (`no_random`), that specific character's
+`<visual>` `actors\trader\trader` equals the record's [OV-4]. A stalker shows the `<visual>` of the
+specific character its supplies step chose (section 2 item 3), one of those its profile offers
+(`identity` 4.2); which one depends on the random choice. Records' visuals [OV-5] and the visuals offered
+[OV-14], e.g.: `esc_lager1` (record `actors\novice\green_stalker_2`) and `esc_lager2` (record
+`actors\novice\green_stalker_10`), profile `esc_stalker_novice`: one of `actors\novice\green_stalker_2`,
+`_3`, `_4` and `_5`, so `esc_lager2` never shows its record's; `esc_specnaz1` (record
+`actors\soldier\soldier_antigas`): always `actors\soldier\soldier_spetsnaz`; `esc_blokpost_commander`:
+always `actors\soldier\soldier_beret_1`, its record's; `esc_stalker_corps1_0001` (record
+`actors\neytral\stalker_neytral_balon_8`): one of that, `actors\neytral\stalker_neytral_hood_2` and
+`actors\neytral\stalker_neytral_hood_uzor`.
 
 ### 5.2 Named objects
 
@@ -172,6 +180,8 @@ transposed rotation 56 (of 105 with a triangle) [OV-10, OV-11].
   unchanged on 2026-11-27 when that specification was split by system.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\xrGame.dll`, `bin\xrRender_R1.dll`, `bin\XR_3DA.exe`.
+- The stalkers' visual (section 2 item 3, section 5.1) was corrected on 2026-11-27 from the static analysis
+  of `identity` (its checks, run by OV-14).
 - Data examined: `spawns\all.spawn`, `game.graph`, the `config\` tree (`system.ltx` includes,
   `config\gameplay\npc_profile.xml`, `character_desc_*.xml`), every `.ogf` file under `meshes\` and
   `levels\*\meshes\`, `levels\l01_escape\level.cform`.
