@@ -380,6 +380,17 @@ impl Scripts {
         self.lua.with_part(part, f)
     }
 
+    /// The state, for the engine's registrations ([`crate::services`]).
+    pub(crate) fn lua_mut(&mut self) -> &mut Lua {
+        &mut self.lua
+    }
+
+    /// The fatal error's message once raised: an engine function setting it
+    /// stops the state as the loader's fatal error does.
+    pub(crate) fn fatal_flag(&self) -> Rc<RefCell<Option<String>>> {
+        Rc::clone(&self.fatal)
+    }
+
     /// The failures since the last call, oldest first.
     pub fn take_failures(&mut self) -> Vec<Failure> {
         std::mem::take(&mut self.failures.borrow_mut())

@@ -25,6 +25,7 @@ mod libc;
 pub mod loader;
 pub mod object_factory;
 pub mod selftest;
+pub mod services;
 
 use std::collections::HashSet;
 use std::ffi::{CString, c_int, c_void};

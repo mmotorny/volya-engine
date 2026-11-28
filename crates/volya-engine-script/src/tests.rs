@@ -103,6 +103,44 @@ mod object_factory {
     }
 }
 
+/// The engine services' checks, one test per section of
+/// docs/behavior/script-api-engine-services.md (all of them run in
+/// [`selftest`] too, on every target).
+mod services {
+    use crate::selftest::services as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn the_console() {
+        section(checks::console);
+    }
+
+    #[test]
+    fn the_render_device() {
+        section(checks::device);
+    }
+
+    #[test]
+    fn global_functions() {
+        section(checks::functions);
+    }
+
+    #[test]
+    fn classes() {
+        section(checks::classes);
+    }
+}
+
 #[test]
 fn rust_panics_become_lua_errors() {
     let mut lua = Lua::new().unwrap();

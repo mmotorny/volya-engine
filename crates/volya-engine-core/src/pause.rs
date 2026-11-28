@@ -12,8 +12,8 @@
 //! this module has the main menu, the interface sequences' items and the
 //! input focus.
 //! TODO(#334): the `pause` action, the level-change window, loading a
-//! saved game during a game, the scripts' device pause and `demo_record`'s
-//! Pause key.
+//! saved game during a game and `demo_record`'s Pause key. The scripts'
+//! device pause is [`Pause::device`] (TODO(#941): the app's pause).
 
 /// An item's `pause_state` (section 3.1): `on`, `off`, or anything else
 /// (missing, empty, another value), which leaves the pause unchanged.
@@ -78,6 +78,13 @@ impl Pause {
             Some((false, true)) => self.on = true,
             _ => {}
         }
+    }
+
+    /// The scripts' device pause switches the pause on or off
+    /// (docs/behavior/script-api-engine-services.md 3.5; its caller tests the
+    /// game type).
+    pub fn device(&mut self, on: bool) {
+        self.on = on;
     }
 
     /// The program loses (`false`) or regains the input focus.
@@ -216,6 +223,19 @@ mod tests {
         p.item_started(Some("on"));
         p.item_ended();
         assert!(p.is_on());
+    }
+
+    #[test]
+    fn the_device_pause() {
+        let mut p = Pause::default();
+        p.device(true);
+        assert!(p.is_on());
+        // Not nested: on again, then off once.
+        p.device(true);
+        p.device(false);
+        assert!(!p.is_on());
+        p.device(false);
+        assert!(!p.is_on());
     }
 
     #[test]
