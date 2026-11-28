@@ -116,6 +116,9 @@ pub struct Common {
     pub class_registrators: Vec<String>,
     /// Script names to load.
     pub scripts: Vec<String>,
+    /// `game_type_clsid_factory`: the game-type function's name
+    /// (docs/behavior/script-api-engine-entry-points.md 2.2).
+    pub game_type_function: Option<String>,
 }
 
 impl Common {
@@ -135,6 +138,10 @@ impl Common {
         Ok(Common {
             class_registrators: list("class_registrators"),
             scripts: list("script"),
+            game_type_function: script
+                .get("common", "game_type_clsid_factory")
+                .flatten()
+                .map(|v| v.trim().to_owned()),
         })
     }
 }

@@ -244,6 +244,7 @@ fn started(names: &[&str]) -> Result<Scripts, String> {
     let common = Common {
         class_registrators: names.iter().map(|n| (*n).to_owned()).collect(),
         scripts: Vec::new(),
+        game_type_function: None,
     };
     s.call_class_registrators(&common).map_err(|e| e.message)?;
     Ok(s)
@@ -327,6 +328,7 @@ eq(calls[2], "game_registrator", "in the list's order")
     let common = Common {
         class_registrators: vec!["bad.register".into()],
         scripts: Vec::new(),
+        game_type_function: None,
     };
     let failed = s.call_class_registrators(&common);
     ensure(

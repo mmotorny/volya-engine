@@ -13,6 +13,7 @@
 //! turns true and the platform returns to its own interface.
 
 use std::io;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -49,6 +50,8 @@ use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
+use crate::script::entry_points::{EngineCall, GameScripts};
+use crate::script::loader::Trees;
 use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
 use crate::statistics_overlay::{FrameTimes, StatisticsOverlay};
 use crate::title_menu::{Opening, TitleMenu};
@@ -672,6 +675,9 @@ pub struct App {
     /// The HUD's hint static (trader-door.md 5.2), read when first shown
     /// and again for another layout.
     quick_info: Option<QuickInfo>,
+    /// The game's scripts, once the platform started them
+    /// ([`App::start_scripts`]).
+    scripts: Option<GameScripts>,
 }
 
 /// The layout surface of the main menu while it asks for the
@@ -873,6 +879,7 @@ impl App {
             window: ConsoleWindow::default(),
             menu_was_active: false,
             quick_info: None,
+            scripts: None,
             applied: console.generation(),
             console,
             screens: MenuScreens::default(),
@@ -922,6 +929,27 @@ impl App {
             load_memory: LoadMemory::default(),
             load_open: Vec::new(),
         })
+    }
+
+    /// Program start's startup of the game's scripts over the game's
+    /// `trees` (docs/behavior/script-api-engine-entry-points.md 3.1 step
+    /// 2): from now on New Games make the engine's calls into scripts
+    /// ([`crate::scripts`]). A script error is the original's fatal error
+    /// at startup.
+    pub fn start_scripts(&mut self, trees: Rc<dyn Trees>) -> io::Result<()> {
+        self.scripts = Some(crate::scripts::start(&self.data, trees)?);
+        Ok(())
+    }
+
+    /// The engine's calls into scripts so far, oldest first (none before
+    /// [`App::start_scripts`]).
+    pub fn script_calls(&self) -> &[EngineCall] {
+        self.scripts.as_ref().map_or(&[], GameScripts::calls)
+    }
+
+    /// The game's scripts, once started.
+    pub fn game_scripts(&mut self) -> Option<&mut GameScripts> {
+        self.scripts.as_mut()
     }
 
     pub fn data(&self) -> &GameData {
@@ -1132,6 +1160,12 @@ impl App {
         if let Some(error) = failed {
             self.fatal(tree, error, input, audio);
         }
+        // The frame's end for the device scripts see (script API B 3.4):
+        // its precache phase counts down; the app draws its own loading
+        // image over the level's first frames.
+        if let Some(scripts) = &self.scripts {
+            scripts.services().borrow_mut().device.end_frame();
+        }
         input.set_pad_cursor(self.cursor_shown() && !self.screens.typing());
     }
 
@@ -1221,6 +1255,9 @@ impl App {
         ));
         log.save();
         self.error = Some(error);
+        if let (Some(Phase::Loading { .. }), Some(scripts)) = (&self.phase, &self.scripts) {
+            crate::scripts::load_ended(scripts);
+        }
         let now = self.clock;
         let title = self.opening(false);
         if let Some(Phase::Level {
@@ -1503,6 +1540,16 @@ impl App {
         // clock starts at the first update and leaves out the hidden page's
         // time, during which the pause is on anyway (focus loss).
         self.global_clock.frame(self.clock, self.pause.is_on());
+        // The render device as scripts see it moves on with every frame
+        // (script API B 3.3; TODO(#934): gap 2's simplest reading).
+        if let Some(scripts) = &self.scripts {
+            let elapsed = self.frame_ms as f32 / 1000.0;
+            (scripts.services().borrow_mut().device).frame(
+                self.global_clock.now(),
+                elapsed,
+                self.pause.is_on(),
+            );
+        }
         if let Some(Phase::Level { level, .. }) = &mut self.phase {
             // The lamps' clock (hanging-lamps.md 4.3).
             level.set_global_clock(self.global_clock.now());
@@ -1608,6 +1655,9 @@ impl App {
                     // level is made (texture-quality-filtering.md 8.1).
                     self.samplers.reset(&self.console);
                     self.loads += 1;
+                    if let Some(scripts) = &self.scripts {
+                        crate::scripts::new_game(scripts);
+                    }
                 }
             }
             Phase::Loading { stages, .. } => {
@@ -1645,6 +1695,16 @@ impl App {
                         Ok(None)
                     }
                     NewGame::Stages(loading) => {
+                        // The engine's calls into scripts of the caption,
+                        // before its own work; a script error ends the
+                        // game.
+                        if loading.runs_work()
+                            && let Some(scripts) = self.scripts.as_mut()
+                            && let Err(e) = crate::scripts::stage(scripts, loading.stage(), data)
+                        {
+                            self.failed.get_or_insert(e.message);
+                            return;
+                        }
                         let captions = loading.screen().state().captions;
                         loading.set_physics_settings(PhysicsSettings::from_console(&self.console));
                         let step = loading.step(tree, data, now);
@@ -1670,6 +1730,9 @@ impl App {
                         step.map(|level| level.map(|l| (l, loading.screen().clone())))
                     }
                 };
+                if let (Ok(Some(_)) | Err(_), Some(scripts)) = (&step, &self.scripts) {
+                    crate::scripts::load_ended(scripts);
+                }
                 match step {
                     Ok(None) => {}
                     Ok(Some((level, screen))) => {

@@ -585,6 +585,14 @@ impl Loading {
         &self.screen
     }
 
+    /// Whether the next [`Loading::step`] runs the work of the caption
+    /// shown: not while the loading holds, and not the first caption's
+    /// while the platform makes the prefetched models.
+    pub fn runs_work(&self) -> bool {
+        matches!(self.hold, Hold::None)
+            && !(self.stage() == Stage::PrefetchingObjects && self.prepare)
+    }
+
     /// The caption shown.
     pub fn stage(&self) -> Stage {
         self.stages[self.current]

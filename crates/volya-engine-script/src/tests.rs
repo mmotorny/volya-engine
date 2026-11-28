@@ -599,3 +599,51 @@ fn strtod_matches_the_system_on_decimals() {
         assert_eq!(unsafe { end.offset_from(c.as_ptr()) }, len, "{input:?}");
     }
 }
+
+/// The engine entry points' checks, one test per section of
+/// docs/behavior/script-api-engine-entry-points.md (all of them run in
+/// [`selftest`] too, on every target).
+mod entry_points {
+    use crate::selftest::entry_points as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn finding_and_calling() {
+        section(checks::finding_and_calling);
+    }
+
+    #[test]
+    fn the_common_script_list() {
+        section(checks::initialize);
+    }
+
+    #[test]
+    fn the_game_type_function() {
+        section(checks::game_type);
+    }
+
+    #[test]
+    fn the_start_callback() {
+        section(checks::start_callback);
+    }
+
+    #[test]
+    fn the_tutorial_thresholds() {
+        section(checks::tutorial_thresholds);
+    }
+
+    #[test]
+    fn the_weapon_parameters() {
+        section(checks::weapon_parameters);
+    }
+
+    #[test]
+    fn the_new_game_call_order() {
+        section(checks::call_order);
+    }
+}

@@ -372,6 +372,16 @@ pub fn with_trees<T>(f: impl FnOnce(&dyn Vfs, &dyn Vfs) -> T) -> Result<T, JsVal
     })
 }
 
+/// The game's trees as the scripts read them, each read lent through
+/// [`with_trees`] (docs/architecture/scripts.md, Loading scripts).
+pub struct GameTrees;
+
+impl volya_engine::script::loader::Trees for GameTrees {
+    fn with_trees(&self, f: &mut dyn FnMut(&dyn Vfs, &dyn Vfs)) -> std::io::Result<()> {
+        with_trees(|tree, root| f(tree, root)).map_err(|e| std::io::Error::other(format!("{e:?}")))
+    }
+}
+
 /// A file the archive tree hides (tests: the `debug_hide_file` op), as a
 /// missing one would be: a fatal error the game meets.
 #[cfg(feature = "test-ops")]

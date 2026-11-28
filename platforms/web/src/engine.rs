@@ -183,6 +183,10 @@ pub async fn launch() -> Result<serde_json::Value, JsValue> {
                 data.set_user_config(user);
             }
             let mut app = App::new(data).map_err(error)?;
+            // Program start's startup of the game's scripts
+            // (script-api-engine-entry-points.md 3.1).
+            app.start_scripts(std::rc::Rc::new(crate::game::GameTrees))
+                .map_err(error)?;
             // Its normal exit releases what the renderer holds
             // (docs/behavior/console-diagnostics.md 2.5).
             app.set_device_release(Box::new(crate::gpu::release));

@@ -7,9 +7,11 @@
 //! original's C-style comments) and run without its machine-code compiler,
 //! behind a thin safe API; [`loader`] loads the game's script files,
 //! [`classes`] gives scripts classes deriving from engine classes,
-//! [`object_factory`] keeps the class ids and creates objects by them, and
+//! [`object_factory`] keeps the class ids and creates objects by them,
 //! [`services`], [`values`], [`files`] and [`game_object`] register the
-//! engine's names of the script API. See docs/architecture/scripts.md.
+//! engine's names of the script API, and [`entry_points`] calls into
+//! scripts as the engine does, in its order. See
+//! docs/architecture/scripts.md.
 //!
 //! Lua raises errors with longjmp, which must never cross Rust frames: every
 //! Lua call that can raise runs in C inside `lua_cpcall` (csrc/volya_glue.c),
@@ -21,6 +23,7 @@
 #![allow(unsafe_code)]
 
 pub mod classes;
+pub mod entry_points;
 mod ffi;
 pub mod files;
 pub mod game_object;

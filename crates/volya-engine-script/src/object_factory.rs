@@ -496,7 +496,7 @@ impl Scripts {
 
     /// Stops the state with fatal error `message`, as the original stops
     /// the game.
-    fn stop(&mut self, message: String) -> Error {
+    pub(crate) fn stop(&mut self, message: String) -> Error {
         *self.fatal.borrow_mut() = Some(message.clone());
         fatal(message)
     }
