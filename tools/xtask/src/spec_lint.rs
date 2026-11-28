@@ -245,7 +245,7 @@ fn addresses(line: &str, named: bool) -> Vec<String> {
 }
 
 /// A bare hexadecimal number with a decimal digit after a letter, as
-/// addresses have (`[position removed]`), unlike a number with a word after it (`12abc`).
+/// addresses have (`9a2b3c`), unlike a number with a word after it (`12abc`).
 fn placed(token: &str) -> bool {
     token
         .chars()
@@ -308,16 +308,16 @@ mod tests {
     #[test]
     fn flags_positions_in_shipped_binaries() {
         for (text, value) in [
-            ("The string at offset `[position removed]` holds it.", "[position removed]"),
+            ("The string at offset `9a2b3c` holds it.", "9a2b3c"),
             (
-                "`xrLUA.dll` contains the format `%.14g` at `[position removed]`.",
-                "[position removed]",
+                "`xrLUA.dll` contains the format `%.14g` at `0x6a2b3`.",
+                "0x6a2b3",
             ),
-            ("`[position removed]`, `[position removed]`) in `xrLUA.dll`", "[position removed]"),
+            ("`0x2a2b3`, `0x4a2b3`) in `xrLUA.dll`", "0x2a2b3"),
             ("It starts at offset 290816 in `xrGame.dll`.", "290816"),
             ("The handler's RVA is 0x1a2b3.", "0x1a2b3"),
             ("the table at address 0x10203040", "0x10203040"),
-            ("Both (at `[position removed]`, `[position removed]`)\nin `xrLUA.dll`.", "[position removed]"),
+            ("Both (at `0x3a2b3`, `0x5a2b3`)\nin `xrLUA.dll`.", "0x3a2b3"),
         ] {
             assert_eq!(
                 flagged(text).first().map(String::as_str),
@@ -339,9 +339,9 @@ mod tests {
             "The directory is at offset 0x37940 of `gamedata.db0`.",
             "`g_corpsenum`: `12abc` → 12; renderer c5, checks B11 in xrGame.dll",
             "| `dm_lightning-01.dm` | 42,360 | `353A41DD` |",
-            "The string at offset `[position removed]` <!-- spec-lint: data position -->",
-            "Seed [position removed] <!-- spec-lint: constant -->",
-            "The value at `[position removed]`.\n\nA paragraph about `xrLUA.dll`.",
+            "The string at offset `9a2b3c` <!-- spec-lint: data position -->",
+            "Seed 9a2b3c <!-- spec-lint: constant -->",
+            "The value at `0x6a2b3`.\n\nA paragraph about `xrLUA.dll`.",
         ] {
             assert!(flagged(text).is_empty(), "{text}: {:?}", flagged(text));
         }
