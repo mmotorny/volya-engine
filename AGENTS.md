@@ -43,6 +43,7 @@
 - Patching third-party code: a permissively licensed project's patch is a file in the repo that Bazel applies (as `third_party/inno/`); a copyleft project's patch lives only on a branch of a fork under the user's account, fetched at a pinned commit, so the repo stays permissive.
 - Never use or derive from leaked X-Ray source or its forks (e.g. OpenXRay).
 - Knowledge of the original game's formats and behavior enters only through docs/clean-room.md; never from memory.
+- Never ask the user what the original's binaries or data can establish: send it to a dirty investigator. The user decides only what they can't (deviations, design, priorities, outward-facing actions).
 - Name code after the approved specs' own words, never the original program's internal terms.
 - The orchestrating session and implementers stay clean: never read the dirty workspace (`volya-engine-dirty`, a sibling folder of the checkout, never committed) or dirty agents' findings; dirty agents report only a verdict and a path.
 - Never commit game assets, including test fixtures; tests needing game data skip when it's absent.
