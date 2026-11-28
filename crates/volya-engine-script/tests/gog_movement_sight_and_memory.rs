@@ -295,7 +295,8 @@ fn the_traders_scheme_calls() {
     })
     .unwrap();
     let s = scripts.scripts();
-    // Without their binders, whose own calls aren't this test's.
+    // Bound by an empty binding, which finds no function (spec L 3.1):
+    // their binders' own calls aren't this test's.
     for (class, data) in [
         (ObjectClass::Player, spawn_data(0, "actor", "O_ACTOR")),
         (
@@ -307,7 +308,7 @@ fn the_traders_scheme_calls() {
             spawn_data(2, "m_trader", "AI_TRADE"),
         ),
     ] {
-        s.spawn_engine_object_unbound(class, data).unwrap();
+        (s.spawn_engine_object_with_binding(class, data, Some(b""))).unwrap();
     }
     let handle = |id: u16| Value::Object(s.game_object(id).unwrap());
     let (actor, dog, trader) = (handle(0), handle(1), handle(2));

@@ -317,6 +317,9 @@ pub fn client_spawning(
     }
     scripts.story().borrow_mut().info_portions = spawning.info_portions;
     scripts.scripts().exec("=fake_player", FAKE_PLAYER)?;
+    scripts
+        .scripts()
+        .exec("=fake_buy_supplies", FAKE_BUY_SUPPLIES)?;
     for object in spawning.objects {
         spawn_client_object(scripts, &data.system, &mut characters, object)?;
     }
@@ -660,10 +663,7 @@ pub fn spawn_client_object(
     characters: &mut Characters,
     object: ClientObject,
 ) -> Result<(), Error> {
-    // FAKE(#1121): the trader spawns without his binder, his logic not
-    // run (#1077): his talk stays enabled from the New Game.
-    let unbound = object.record.kind() == Kind::Trader;
-    if !unbound && !binding_runs(system, &object) {
+    if !binding_runs(system, &object) {
         return Ok(());
     }
     let mut data = SpawnData::from_record(object.id, &object.record, system).map_err(io_fatal)?;
@@ -691,9 +691,6 @@ pub fn spawn_client_object(
     }
     let created = scripts.scripts().create_client_object(data.class_id)?;
     let spawned = match created.object {
-        CreatedObject::Script(client) if unbound => {
-            scripts.scripts().spawn_unbound(client, data).map(|_| ())
-        }
         CreatedObject::Script(client) => scripts.scripts().spawn(client, data).map(|_| ()),
         CreatedObject::Engine { entry_id, sides } => {
             let game_type = scripts.services().borrow().game_type as u32;
@@ -705,12 +702,9 @@ pub fn spawn_client_object(
             };
             // TODO(#1120): the player bound by the fake of its binding.
             let binding = (class == ObjectClass::Player).then_some(FAKE_PLAYER_BINDING);
-            let spawned = if unbound {
-                scripts.scripts().spawn_engine_object_unbound(class, data)
-            } else {
-                (scripts.scripts()).spawn_engine_object_with_binding(class, data, binding)
-            };
-            spawned.map(|_| ())
+            (scripts.scripts())
+                .spawn_engine_object_with_binding(class, data, binding)
+                .map(|_| ())
         }
     };
     spawned.map_err(|f| override_fatal(scripts, f))
@@ -734,14 +728,20 @@ pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::R
 /// Whether `object` spawns in the scripts: one without a binding function
 /// (spec L 3.1; an empty value finds none), a door under the door scheme,
 /// whose binder (`bind_physic_object.init`, L 8) runs on the script
-/// interface implemented so far, or the player, under the fake of its
-/// binding (TODO(#1120)). TODO(#1077): every object, once the interface the
-/// other binders call is implemented.
+/// interface implemented so far, the trader, whose binder
+/// (`bind_monster.bind`) runs his scheme `mob_trader`, or the player, under
+/// the fake of its binding (TODO(#1120)). TODO(#1077): every object, once
+/// the interface the other binders call is implemented.
 fn binding_runs(system: &Config, object: &ClientObject) -> bool {
     let section = object.record.header.section.as_str();
     match system.get(section, "script_binding") {
         None | Some(None) => true,
-        Some(Some(name)) => name.trim().is_empty() || object.door || object.id == ACTOR_ID,
+        Some(Some(name)) => {
+            name.trim().is_empty()
+                || object.door
+                || object.id == ACTOR_ID
+                || object.record.kind() == Kind::Trader
+        }
     }
 }
 
@@ -902,6 +902,14 @@ end
 function __volya_fake_player_binding(obj)
   obj:bind_object(__volya_fake_player_binder(obj))
 end
+"#;
+
+/// FAKE(#1148): script API S's `buy_supplies(ini, section)` (5.6), which
+/// the shipped `trade_manager.update` calls on the trader from his binder's
+/// update, restocks nothing: the owner's items and the server's creation of
+/// items aren't implemented (#1110).
+const FAKE_BUY_SUPPLIES: &[u8] = br#"
+function game_object.buy_supplies(self, ini, section) end
 "#;
 
 /// The binding function of [`FAKE_PLAYER`] (TODO(#1120)).

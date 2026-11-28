@@ -13,6 +13,7 @@
 #[path = "../../volya-engine-formats/tests/support/gog_archives.rs"]
 mod gog_archives;
 
+use std::cell::Cell;
 use std::io;
 use std::rc::Rc;
 use std::time::Instant;
@@ -87,8 +88,9 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
 
     let (mut input, mut audio) = (Input::new(), Silent);
     let mut t = 0.0;
+    let frame = Cell::new(16.0);
     let mut step = |app: &mut App, input: &mut Input| {
-        t += 16.0;
+        t += frame.get();
         let start = Instant::now();
         app.update(&trees.tree, t, input, &mut audio);
         input.end_frame();
@@ -184,8 +186,8 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         .map(|o| {
             let binding = system.get(o.record.header.section.as_str(), "script_binding");
             let binding = binding.flatten().map(|b| b.trim().to_owned());
-            // The doors, the player under the fake of its binding (#1120),
-            // and the trader spawned without his (#1121).
+            // The doors, the player under the fake of its binding (#1120)
+            // and the trader, whose binder runs his scheme.
             let trader = o.record.kind() == volya_engine_formats::object::Kind::Trader;
             let runs = level.doors().holds(o.id) || o.id == 0 || trader;
             (o.id, binding.filter(|b| !b.is_empty() && !runs))
@@ -204,8 +206,8 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
     drop(sim);
     let scripts = app.game_scripts().unwrap();
     // TODO(#1077): every one, once the interface their binders call is
-    // implemented; now those without a binding function, the doors and the
-    // player.
+    // implemented; now those without a binding function, the doors, the
+    // trader and the player.
     let expected: Vec<u16> = (online.iter())
         .filter(|(_, b)| b.is_none())
         .map(|&(id, _)| id)
@@ -290,7 +292,62 @@ end
     press(&mut input, Key::Escape);
     step(&mut app, &mut input);
     assert!(matches!(app.state(), AppState::Level { intro: None, .. }));
+
+    // The trader's binder (`bind_monster.bind`) runs his scheme
+    // `mob_trader` over `esc_trader.ltx` (trader-and-crows-scope.md 1.1):
+    // a New Game starts the start chain with his talk off; it is on from
+    // `new_start_intro3`, after the 5 s wait, `spinka_idle` (1.667 s) and
+    // his first phrase `vstuplenie` (23.367 s), whose ends the global motion
+    // channel raises (TC2).
+    let trader = |app: &mut App| {
+        let scripts = app.game_scripts().unwrap();
+        let state = scripts.scripts().exec(
+            "=trader",
+            b"local t = db.trader if t == nil then return nil end \
+              return db.storage[t:id()].active_section, t:is_talk_enabled(), t:clsid() == clsid.script_trader",
+        );
+        match state.unwrap().as_slice() {
+            [Value::String(s), Value::Boolean(talk), Value::Boolean(true)] => {
+                (String::from_utf8_lossy(s).into_owned(), *talk)
+            }
+            other => panic!("the trader's scheme: {other:?}"),
+        }
+    };
+    let start = trader(&mut app);
+    assert_eq!(start, ("mob_trader@new_start_wait".to_owned(), false));
+    let mut chain = vec![start];
+    frame.set(33.0);
+    let mut ms = 0.0;
+    while ms < 40_000.0 && chain.last().unwrap().0 != "mob_trader@new_start_intro3" {
+        step(&mut app, &mut input);
+        ms += 33.0;
+        let now = trader(&mut app);
+        if *chain.last().unwrap() != now {
+            eprintln!("the trader at {ms} ms: {now:?}");
+            chain.push(now);
+        }
+    }
+    frame.set(16.0);
+    let sections: Vec<(&str, bool)> = chain.iter().map(|(s, t)| (s.as_str(), *t)).collect();
+    assert_eq!(
+        sections,
+        [
+            ("mob_trader@new_start_wait", false),
+            ("mob_trader@new_start_intro1", false),
+            ("mob_trader@new_start_intro2", false),
+            ("mob_trader@new_start_intro3", true),
+        ],
+        "the trader's start chain"
+    );
+    assert!(
+        ms >= 5_000.0 + 1_667.0 + 23_367.0 - 2_000.0,
+        "the start chain took {ms} ms"
+    );
     let scripts = app.game_scripts().unwrap();
+    assert!(
+        scripts.scripts().player_holds("esc_trader_hello_played"),
+        "intro1 gave esc_trader_hello_played"
+    );
 
     // Spec L 5.2, 8: each level frame runs the door's scheduled update,
     // its binder's `update(delta)`, `delta` the frame's 16 ms.

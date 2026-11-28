@@ -428,8 +428,19 @@ export const tests = {
     const trader = s.level.talk.picked;
     assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)}`);
     const at = s.level.player.position;
-    key("KeyF");
-    s = await until((s) => s.talk, "the talk screen");
+    // His talk is off until his scheme reaches mob_trader@new_start_intro3
+    // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
+    // logic starts: Use until it opens.
+    const deadline = performance.now() + 45000;
+    for (;;) {
+      key("KeyF");
+      try {
+        s = await until((s) => s.talk, "the talk screen", 1500);
+        break;
+      } catch (e) {
+        if (performance.now() > deadline) throw e;
+      }
+    }
     // 3: both sides talking; his start dialog in progress; the window
     // titled with his name; talk-window-input.md 1.2: the cursor shown.
     assertEqual(s.level.talk.partner, trader, "the partner");
