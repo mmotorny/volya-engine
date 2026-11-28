@@ -15,7 +15,8 @@
 //! again gives the same value.
 //!
 //! [`conditions`] tests a dialog's and a phrase's conditions and runs a
-//! phrase's effects (DG-2).
+//! phrase's effects (DG-2); [`flow`] proceeds through a dialog in a talk
+//! (DG-4).
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -31,6 +32,7 @@ use crate::info_portions::{Declarations, read_gameplay};
 use crate::vfs::Vfs;
 
 pub mod conditions;
+pub mod flow;
 
 /// The dialogs loaded so far, by dialog index, and the documents read for
 /// them, by list item.

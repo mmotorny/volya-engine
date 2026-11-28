@@ -14,7 +14,8 @@
 //! [`InfoPortions`] and the script functions ([`DialogFunctions`]).
 //! Characters are named by object id. Which character's list is built when
 //! and how a talk starts are DG-3's; which sayable phrase is said, and the
-//! partner's answer when it is told (4.2 step 7), DG-4's.
+//! partner's answer when it is told (4.2 step 7), DG-4's
+//! ([`super::flow`]).
 //!
 //! A dialog's own effects are never run (1), and phrase 0's conditions are
 //! never tested (1, 4.1): neither has a use here.
@@ -305,7 +306,7 @@ impl DialogInProgress {
     /// run on the player character, then every continuation is tested with
     /// the listener first and the speaker second, those true kept, ordered
     /// by goodwill, greater first. None true is fatal. Telling the listener
-    /// (step 7) is the caller's, with what this returns.
+    /// (step 7) is the caller's ([`super::flow`]), with what this returns.
     pub fn say(&mut self, phrase: usize, world: &mut dyn DialogWorld) -> io::Result<Told> {
         if !self.sayable.contains(&phrase) {
             return Err(io::Error::new(
