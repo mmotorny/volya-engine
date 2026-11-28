@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
 use std::time::Instant;
 
+use volya_engine::characters::Characters;
+use volya_engine::core::character_identity::{model_name, trader_like};
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{StdVfs, Vfs, read};
 use volya_engine::data::GameData;
@@ -156,17 +158,21 @@ fn level_objects_from_game_data() {
             )
         };
 
-        // object-visual-and-transform.md 5.1: the stalkers' visuals are their records'.
-        for (name, visual) in [
-            ("esc_lager1", "actors\\novice\\green_stalker_2"),
-            ("esc_lager2", "actors\\novice\\green_stalker_10"),
-            ("esc_specnaz1", "actors\\soldier\\soldier_antigas"),
-            ("esc_blokpost_commander", "actors\\soldier\\soldier_beret_1"),
-            (
-                "esc_stalker_corps1_0001",
-                "actors\\neytral\\stalker_neytral_balon_8",
-            ),
+        // The stalkers' visuals are their supplies choices' descriptions'
+        // (character-identity.md 4.2, believed; object-visual-and-transform.md
+        // 5.1 has the records', TODO(#1020)).
+        let sim = screen.simulation().unwrap();
+        let mut characters = Characters::new(tree, data);
+        for name in [
+            "esc_lager1",
+            "esc_lager2",
+            "esc_specnaz1",
+            "esc_blokpost_commander",
+            "esc_stalker_corps1_0001",
         ] {
+            let record = &sim.by_name(name).unwrap().record;
+            let id = trader_like(record).unwrap().specific_character.clone();
+            let visual = model_name(&characters.specific_character(&id).unwrap().visual);
             assert_eq!(named(name).visual.to_lowercase(), visual, "{name}");
         }
         for name in ["esc_wolf", "esc_trup_scene", "esc_suicidal_flesh"] {

@@ -34,6 +34,7 @@ use crate::core::character::condition::Activity;
 use crate::core::character::hits::{Hit, HitType, TYPE_COUNT};
 use crate::core::character::inventory::Place;
 use crate::core::character::{self, CharacterState, HitMovement, SpecificCharacter};
+use crate::core::character_identity::Identities;
 use crate::core::climbing::Ladder;
 use crate::core::clock::GameClock;
 use crate::core::collision::{CollisionWorld, geometry};
@@ -1003,9 +1004,21 @@ pub fn new_game_player(
     let player = player_record(&new.spawn, new.actor.index, &data.system)?;
     let dir = data.aliases.path("$game_levels$", &new.level)?;
     let clock = GameClock::new_game(&*alife(tree, data)?)?;
-    let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn, new.graph)?;
+    let random = Shared::default();
+    let (mut sim, mut character) = new_game_simulation(tree, data, &new.spawn, new.graph, &random)?;
     first_switch_pass(tree, data, &mut sim, &mut character, &dir, &clock)?;
     Ok((player, character))
+}
+
+/// The New Game's offline simulation before its first switch pass, made
+/// as a New Game makes it, drawing from `random` (tests and debugging).
+pub fn new_game_offline_simulation(
+    tree: &dyn Vfs,
+    data: &GameData,
+    random: &Shared,
+) -> io::Result<Simulation> {
+    let new = read_new_game(tree, data)?;
+    new_game_simulation(tree, data, &new.spawn, new.graph, random).map(|(sim, _)| sim)
 }
 
 /// `config\alife.ltx`, or the system configuration where it holds
@@ -1023,14 +1036,16 @@ fn alife<'a>(tree: &dyn Vfs, data: &'a GameData) -> io::Result<Cow<'a, Config>> 
 /// A New Game's offline simulation (offline-simulation.md) and player
 /// character: every record of `spawn_file` created and registered (8.1),
 /// read in place, the player character
-/// supplying the player (player-state.md sections 2, 3). The current
-/// level's navigation data and the first switch pass come later
-/// ([`first_switch_pass`]).
+/// supplying the player (player-state.md sections 2, 3), the stalkers'
+/// and traders' identities chosen with draws from `random`
+/// (character-identity.md 4.2). The current level's navigation data and
+/// the first switch pass come later ([`first_switch_pass`]).
 fn new_game_simulation(
     tree: &dyn Vfs,
     data: &GameData,
     spawn_file: &[u8],
     graph: GameGraph,
+    random: &Shared,
 ) -> io::Result<(Simulation, CharacterState)> {
     let alife = alife(tree, data)?;
     let mut spawn_file = io::Cursor::new(spawn_file);
@@ -1041,12 +1056,26 @@ fn new_game_simulation(
         AlifeConfig::read(&alife, &data.system)?,
     );
     let mut character = None;
-    sim.new_game_in(&mut spawn_file, &data.system, &mut |player, first_id| {
-        let c = new_game_character(tree, data, player, first_id)?;
-        let n = u16::try_from(c.item_count()).map_err(|_| invalid("too many items"))?;
-        character = Some(c);
-        Ok(n)
-    })?;
+    let mut descriptions = Characters::new(tree, data);
+    let communities = characters::communities(tree, data)?;
+    let mut identities = Identities {
+        descriptions: &mut descriptions,
+        system: &data.system,
+        strings: &data.strings,
+        communities: &communities,
+        random,
+    };
+    sim.new_game_in(
+        &mut spawn_file,
+        &data.system,
+        &mut |player, first_id| {
+            let c = new_game_character(tree, data, player, first_id)?;
+            let n = u16::try_from(c.item_count()).map_err(|_| invalid("too many items"))?;
+            character = Some(c);
+            Ok(n)
+        },
+        Some(&mut identities),
+    )?;
     let character = earlier(character, "player character")?;
     Ok((sim, character))
 }
@@ -1797,7 +1826,8 @@ impl NewGameLoad {
                 let new = read_new_game(tree, data)?;
                 self.dir = data.aliases.path("$game_levels$", &new.level)?;
                 let clock = GameClock::new_game(&*alife(tree, data)?)?;
-                let (sim, character) = new_game_simulation(tree, data, &new.spawn, new.graph)?;
+                let (sim, character) =
+                    new_game_simulation(tree, data, &new.spawn, new.graph, &self.random)?;
                 self.name = Some(new.level);
                 self.actor = Some(new.actor);
                 self.spawn_path = new.spawn_path;

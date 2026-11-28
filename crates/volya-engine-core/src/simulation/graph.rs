@@ -187,8 +187,9 @@ impl Graph {
 }
 
 /// A key that is exactly four comma-separated numbers, as a mask: each
-/// number (decimal digits, our reading) taken modulo 256.
-fn mask_key(key: &str) -> Option<TerrainMask> {
+/// number (decimal digits, our reading) taken modulo 256 (also
+/// character-identity.md 3 step 4).
+pub fn mask_key(key: &str) -> Option<TerrainMask> {
     let parts: Vec<&str> = key.split(',').map(str::trim).collect();
     if parts.len() != 4
         || parts

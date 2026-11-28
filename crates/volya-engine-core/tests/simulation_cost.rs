@@ -99,7 +99,7 @@ fn simulation_memory_and_update_time() {
         paths,
         AlifeConfig::read(&alife, &system).unwrap(),
     );
-    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5))
+    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5), None)
         .unwrap();
     let created = t.elapsed();
     let after_registry = held();

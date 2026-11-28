@@ -21,6 +21,7 @@ use std::collections::hash_map::Entry;
 use std::io;
 
 use crate::core::character;
+use crate::core::character_identity::Descriptions;
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
@@ -217,11 +218,12 @@ impl<'a> Characters<'a> {
         Ok(&self.specific_characters[&index])
     }
 
-    /// A Trader-like block's specific character (object-visual-and-transform.md
-    /// 2, item 3; player-state.md 2.2): the block's own if named, else its
-    /// profile's. A profile that names none chooses at random among the
-    /// specific characters of its class (CH-2); we give none then.
-    // TODO(#338): the random choice.
+    /// The player's Trader-like block's specific character
+    /// (player-state.md 2.2): the block's own if named, else its profile's;
+    /// none for a profile that names none. A stalker's or trader's is
+    /// chosen by docs/behavior/character-identity.md
+    /// ([`crate::core::character_identity`]); the player's is outside it
+    /// (section 7).
     pub fn for_trader(&mut self, trader: &TraderLike) -> io::Result<Option<&SpecificCharacter>> {
         let id = if trader.specific_character.is_empty() {
             match &self.profile(&trader.character_profile)?.specific_character {
@@ -232,6 +234,26 @@ impl<'a> Characters<'a> {
             trader.specific_character.to_string()
         };
         self.specific_character(&id).map(Some)
+    }
+}
+
+/// The descriptions of docs/behavior/character-identity.md 1.2: CH-1's
+/// profiles and specific characters, by id and registration index.
+impl Descriptions for Characters<'_> {
+    fn profile(&mut self, id: &str) -> io::Result<&Profile> {
+        Characters::profile(self, id)
+    }
+
+    fn count(&self) -> usize {
+        self.specific_character_count()
+    }
+
+    fn at(&mut self, index: usize) -> io::Result<&SpecificCharacter> {
+        self.specific_character_at(index)
+    }
+
+    fn find(&mut self, id: &str) -> io::Result<&SpecificCharacter> {
+        self.specific_character(id)
     }
 }
 

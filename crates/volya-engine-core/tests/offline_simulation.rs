@@ -937,7 +937,7 @@ fn new_game(vfs: &dyn Vfs) -> Simulation {
         AlifeConfig::read(&alife, &system).unwrap(),
     );
     // The five supplies (player-state.md 3.1); the bolt comes later (3.2).
-    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5))
+    sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5), None)
         .unwrap();
     let level = sim.current_level().unwrap();
     let name = g.level(level).unwrap().name.clone();

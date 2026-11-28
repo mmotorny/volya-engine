@@ -26,7 +26,6 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::characters::Characters;
 use crate::core::collision::CollisionWorld;
 use crate::core::object_light;
 use crate::core::simulation::{NO_ID, Simulation};
@@ -35,7 +34,7 @@ use crate::data::GameData;
 use crate::render::world::{DetailWindow, LEVEL_CHUNK, ObjectGeometry, model_vertex};
 use volya_engine_formats::lanims;
 use volya_engine_formats::model::{self, Mat4, Model, transform, transform_point};
-use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord, TraderLike};
+use volya_engine_formats::object::{HangingLamp, Kind, Object, ObjectRecord};
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
@@ -78,54 +77,24 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
 }
 
 /// The visual name an online object shows (`OV` 2): the record's
-/// Visual block, replaced for a trader by its specific character's
-/// `<visual>`; `None` without a model (`OV` 3: no Visual block, an
+/// Visual block, which a stalker's or trader's specific character has
+/// already set (docs/behavior/character-identity.md 3 step 2, 4.2);
+/// `None` without a model (`OV` 3: no Visual block, an
 /// empty name, or the actor, whose body the first-person view does not
 /// draw). The configuration's `visual` key is overridden by the Visual
 /// block in every kind that has one, so it is not read. A dead body's
 /// `corpse_visual` (`OV` 2, item 4) is not handled: it applies only to
 /// a body with a non-zero death time, and every dead body of the shipped
 /// file has death time 0 (our omission).
-pub fn visual_name(
-    object: &LevelObject,
-    character_visual: &mut dyn FnMut(&TraderLike) -> io::Result<Option<String>>,
-) -> io::Result<Option<String>> {
+// TODO(#1020): `OV` 2 item 3 has a stalker keep its record's model; CH-2
+// 4.2 (believed) gives it its supplies choice's, which the New Game sets.
+pub fn visual_name(object: &LevelObject) -> Option<String> {
     let record = &object.record;
     if record.kind() == Kind::Player {
-        return Ok(None);
+        return None;
     }
-    let Some(visual) = record.object.visual() else {
-        return Ok(None);
-    };
-    let mut name = visual.model.clone();
-    if let Object::Trader(t) = &record.object
-        && let Some(v) = character_visual(&t.trader)?
-    {
-        name = v.into();
-    }
-    Ok((!name.is_empty()).then_some(name.to_string()))
-}
-
-/// A visual name without its extension, lower-cased (`OV` 2).
-fn plain_name(name: &str) -> String {
-    let name = name.to_lowercase();
-    match name.rfind('.') {
-        Some(dot) if !name[dot..].contains('\\') => name[..dot].to_owned(),
-        _ => name,
-    }
-}
-
-/// The `<visual>` of the Trader-like block's specific character (`OV` 2,
-/// item 3; [`Characters::for_trader`]) as a visual name; without one
-/// the record's visual is kept.
-pub fn character_visual(
-    characters: &mut Characters,
-    trader: &TraderLike,
-) -> io::Result<Option<String>> {
-    Ok(characters
-        .for_trader(trader)?
-        .map(|c| plain_name(&c.visual))
-        .filter(|v| !v.is_empty()))
+    let name = &record.object.visual()?.model;
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// The file of visual name `name` (`OV` 1): `name` as given, then
@@ -997,7 +966,6 @@ pub fn spawn(
     let set = SETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let mut chunks = Chunks::new(set, LEVEL_CHUNK);
     let mut scratch = ObjectGeometry::default();
-    let mut characters = Characters::new(tree, data);
     // Models by file path, and by visual name (located once each).
     let mut by_path: HashMap<String, usize> = HashMap::new();
     let mut by_name: HashMap<String, usize> = HashMap::new();
@@ -1011,7 +979,7 @@ pub fn spawn(
         if o.online {
             *classes.entry(o.record.class_id.as_str()).or_default() += 1;
         }
-        let name = visual_name(o, &mut |t| character_visual(&mut characters, t))?;
+        let name = visual_name(o);
         let model = match &name {
             Some(name) if by_name.contains_key(&name.to_lowercase()) => {
                 Some(by_name[&name.to_lowercase()])
@@ -1399,15 +1367,6 @@ mod tests {
             Some((-0.0f32).to_bits())
         );
         assert_eq!(whole.bone(&names, "a"), Some(a));
-    }
-
-    #[test]
-    fn visual_names_lose_extensions() {
-        assert_eq!(
-            plain_name("Actors\\Trader\\trader.ogf"),
-            "actors\\trader\\trader"
-        );
-        assert_eq!(plain_name("weapons\\vodka\\vodka"), "weapons\\vodka\\vodka");
     }
 
     #[test]

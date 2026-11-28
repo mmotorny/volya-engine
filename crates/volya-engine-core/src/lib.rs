@@ -10,6 +10,7 @@ pub mod audio;
 pub mod c_heap;
 pub mod camera;
 pub mod character;
+pub mod character_identity;
 pub mod climbing;
 pub mod clock;
 pub mod collision;

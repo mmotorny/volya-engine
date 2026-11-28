@@ -22,10 +22,11 @@ pub mod navigation;
 mod travel;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io;
 use std::ops::{ControlFlow, Range};
 
+use crate::character_identity::{Identities, InUse};
 use crate::config::{Config, value};
 use crate::switching::{Candidate, StartState, SwitchDistances, distance, switched};
 use graph::{Graph, terrain_masks};
@@ -366,6 +367,8 @@ pub struct Simulation {
     /// The next id the pool hands out.
     next_id: u16,
     scripts: Box<dyn SmartTerrains>,
+    /// The specific characters taken (character-identity.md 2.1).
+    in_use: InUse,
 }
 
 impl std::fmt::Debug for Simulation {
@@ -406,6 +409,7 @@ impl Simulation {
             actor_items: 0..0,
             next_id: 1,
             scripts: Box::new(NoScripts),
+            in_use: InUse::default(),
         }
     }
 
@@ -420,15 +424,25 @@ impl Simulation {
     /// actor's supplies are created by its character state: `supplies` is
     /// called with the actor's record and the first id they take, and says
     /// how many ids they took. Other objects' supplies are not created
-    /// (their rules are outside the spec). Then the post-registration step
-    /// runs in increasing id.
+    /// (their rules are outside the spec). With `identities`, the
+    /// characters' identities are chosen (character-identity.md 4.2): every
+    /// character record's spawn-file choice while the spawn file is read,
+    /// then each created stalker's and trader's supplies choice. Then the
+    /// post-registration step runs in increasing id (it changes no
+    /// identity, 4.1).
     pub fn new_game(
         &mut self,
         spawn_file: &[u8],
         system: &Config,
         supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
+        identities: Option<&mut Identities>,
     ) -> io::Result<()> {
-        self.new_game_in(&mut io::Cursor::new(spawn_file), system, supplies)
+        self.new_game_in(
+            &mut io::Cursor::new(spawn_file),
+            system,
+            supplies,
+            identities,
+        )
     }
 
     /// As [`Self::new_game`], reading the spawn file from `spawn_file` an
@@ -438,7 +452,26 @@ impl Simulation {
         spawn_file: &mut (impl io::Read + io::Seek),
         system: &Config,
         supplies: &mut dyn FnMut(&ObjectRecord, u16) -> io::Result<u16>,
+        mut identities: Option<&mut Identities>,
     ) -> io::Result<()> {
+        // character-identity.md 4.2 step 2: every record is read into a
+        // record object, so every character record makes its choice now, in
+        // record order; what its packets then hold is kept by object index.
+        let mut chosen = HashMap::new();
+        if let Some(identities) = identities.as_deref_mut() {
+            let in_use = &mut self.in_use;
+            spawn::for_each_record_in(spawn_file, |r| {
+                let section = volya_engine_formats::object::section(r.spawn)?;
+                let class = class_of(system, &section)?;
+                if matches!(Kind::from_class_id(class), Ok(Kind::Stalker | Kind::Trader)) {
+                    let mut record = ObjectRecord::parse(r.spawn, r.update, class, true)?;
+                    if let Some(c) = identities.spawn_file_choice(&mut record, in_use)? {
+                        chosen.insert(r.index, c);
+                    }
+                }
+                Ok(ControlFlow::Continue(()))
+            })?;
+        }
         let mut next = self.next_id;
         // The records' texts, each distinct one held once (#787).
         let strings = RefCell::new(Strings::new());
@@ -449,6 +482,10 @@ impl Simulation {
             let actor = is_actor(&record);
             let id = if actor { ACTOR_ID } else { take(&mut next, 1)? };
             record.header.id = id;
+            // 4.2 step 3: the record object's identity; no new choice.
+            if let Some(c) = chosen.remove(&r.index) {
+                c.apply(&mut record);
+            }
             self.register(record, Some(r.index), system)?;
             if actor {
                 let record = &self.objects[&id].record;
@@ -456,11 +493,32 @@ impl Simulation {
                 let first = take(&mut next, n)?;
                 self.actor_items = first..first + n;
             }
+            if let Some(identities) = identities.as_deref_mut()
+                && let Some(o) = self.objects.get_mut(&id)
+            {
+                // The supplies step's choice (4.1).
+                let masks = o.travel.as_mut().map(|t| &mut t.config.masks);
+                identities.supplies(&mut o.record, masks, &mut self.in_use)?;
+            }
             Ok(ControlFlow::Continue(()))
         })?;
         self.next_id = next;
         self.post_register();
         Ok(())
+    }
+
+    /// The specific characters taken (character-identity.md 2.1), as a
+    /// save's chunk 9 part 6 holds them.
+    pub fn in_use(&self) -> &InUse {
+        &self.in_use
+    }
+
+    /// Replaces the in-use registry by a save's (character-identity.md
+    /// 4.3: chunk 9 part 6).
+    // TODO(#75): loading a save reads chunk 9 part 6 into it, and saving
+    // writes it there.
+    pub fn set_in_use(&mut self, in_use: InUse) {
+        self.in_use = in_use;
     }
 
     /// An id from the pool for an object created after the New Game's
