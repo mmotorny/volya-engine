@@ -270,6 +270,39 @@ end
     assert!(matches!(app.state(), AppState::Level { intro: None, .. }));
     let scripts = app.game_scripts().unwrap();
 
+    // Spec L 5.2, 8: each level frame runs the door's scheduled update,
+    // its binder's `update(delta)`, `delta` the frame's 16 ms.
+    scripts
+        .scripts()
+        .exec(
+            "=count",
+            br#"
+updates, last_delta = 0, nil
+local binder = bind_physic_object.generic_physics_binder
+local update = binder.update
+binder.update = function(self, delta)
+  if self.object:name() == "trader_door" then
+    updates, last_delta = updates + 1, delta
+  end
+  return update(self, delta)
+end
+"#,
+        )
+        .unwrap();
+    for _ in 0..10 {
+        step(&mut app, &mut input);
+    }
+    let scripts = app.game_scripts().unwrap();
+    let counted = scripts
+        .scripts()
+        .exec("=counted", b"return updates, last_delta")
+        .unwrap();
+    assert_eq!(
+        counted,
+        [Value::Number(10.0), Value::Number(16.0)],
+        "the door's updates"
+    );
+
     // Script API O 5, 6.1 and 10 in the app's level frames: the door's
     // fast call (ours, standing in for the scheme's `close_door`) runs once
     // a frame until it returns true; the player's use action on the door

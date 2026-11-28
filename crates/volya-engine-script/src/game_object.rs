@@ -492,6 +492,9 @@ pub struct GameObject {
     pub visible: bool,
     /// Marked for destruction (the engine's "destroy" state, 5.2).
     pub destroying: bool,
+    /// The server time of its previous scheduled update (spec L 5.2), its
+    /// spawning's before the first (our choice).
+    pub updated_at: u32,
     /// The simulation part's custom data (3).
     pub custom_data: Vec<u8>,
     pub entity: Option<Entity>,
@@ -552,6 +555,7 @@ impl GameObject {
             enabled: true,
             visible: true,
             destroying: false,
+            updated_at: 0,
             custom_data: data.custom_data.clone(),
             entity,
             conditions: kinds.has(Kinds::LIVING).then(Conditions::default),
@@ -753,6 +757,7 @@ impl GameObjects {
             .number(data.class_id);
         let mut object = GameObject::new(class, data, clsid);
         object.client = client;
+        object.updated_at = self.server_time;
         if let Some(state) = self.prepared.remove(&data.id) {
             object.visual = state.visual;
             if object.physics.is_some() {

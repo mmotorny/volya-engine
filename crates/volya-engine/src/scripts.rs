@@ -25,6 +25,7 @@ use crate::objects::{LoadedModel, Names};
 use crate::script::classes::OverrideFailure;
 use crate::script::entry_points::{GameScripts, Startup};
 use crate::script::files::FileSystem;
+use crate::script::game_object::object_binder::update_delta;
 use crate::script::game_object::{
     EngineState, Event, GameObjects, ObjectClass, Physics, Restrictor, SpawnData, Visual,
 };
@@ -207,21 +208,24 @@ pub fn client_spawning(
 
 /// The scripts' part of a level frame, after the level's update: the
 /// server and game times; the player's placement, its feet and its body's
-/// heading (our reading of M 4); the objects that went offline or were
-/// removed destroyed, those that came online spawned (M 2.1); the player's
-/// use action on the object it targeted (M 6.3), which raises its
-/// `use_object` (spec O 4, id 15); the events the level's systems raised on
-/// its objects (spec O 4: the player's death, the items used up on it,
-/// taken and dropped); the level's call list updated, after the physics
-/// steps and the objects' updates (O 6.1: the door scheme's fast call);
-/// then what the members asked of the engine ([`apply_events`]). No system
-/// of the app perceives sounds yet, so none is queued (O 4, id 17).
+/// heading (our reading of M 4); unless the game is `paused`, each
+/// object's scheduled update ([`scheduled_updates`]); the objects that
+/// went offline or were removed released and destroyed (L 5.5), those
+/// that came online spawned (M 2.1); the player's use action on the object
+/// it targeted (M 6.3), which raises its `use_object` (spec O 4, id 15);
+/// the events the level's systems raised on its objects (spec O 4: the
+/// player's death, the items used up on it, taken and dropped); the
+/// level's call list updated, after the physics steps and the objects'
+/// updates (O 6.1: the door scheme's fast call); then what the members
+/// asked of the engine ([`apply_events`]). No system of the app perceives
+/// sounds yet, so none is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
     level: &mut LevelScreen,
     tree: &dyn Vfs,
     data: &GameData,
     now: u64,
+    paused: bool,
 ) -> Result<(), Error> {
     {
         let mut o = scripts.objects().borrow_mut();
@@ -232,10 +236,20 @@ pub fn level_frame(
             player.placement = model::transform(p.state().position, [0.0, -p.heading(), 0.0]);
         }
     }
+    if !paused {
+        scheduled_updates(scripts, now as u32)?;
+    }
     let changes = level.take_script_changes();
-    for &id in changes.offline.iter().chain(&changes.removed) {
-        let destroyed = scripts.scripts().destroy_object(id);
-        destroyed.map_err(|f| override_fatal(scripts, f))?;
+    // The scripts' objects among them (one left out of the scripts' spawning
+    // has none).
+    let queue: Vec<u16> = {
+        let o = scripts.objects().borrow();
+        let queued = changes.offline.iter().chain(&changes.removed);
+        queued.copied().filter(|&id| o.get(id).is_some()).collect()
+    };
+    if !queue.is_empty() {
+        let released = scripts.scripts().release_destroyed(&queue);
+        released.map_err(|f| override_fatal(scripts, f))?;
     }
     for &id in &changes.online {
         if let Some(object) = level.client_object(id) {
@@ -256,6 +270,44 @@ pub fn level_frame(
     }
     scripts.scripts().update_level_calls()?;
     apply_events(scripts, level);
+    Ok(())
+}
+
+/// The scheduled updates of a level frame at server time `now` (spec L
+/// 5.2): every object not marked for destruction (talk.md 5.1 for the
+/// characters; our reading for the others), in id
+/// order, gets its binder's `update(delta)`, `delta` the time since its
+/// previous update ([`update_delta`]). The scheduler's own rules are
+/// unestablished (L 5.2): our choice, every object every frame, the
+/// maximum scheduling interval taken as 0 (so at most 1000 ms), and none
+/// while the game is paused. The engine's own updates are the level's. A
+/// script error is fatal.
+fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
+    let due: Vec<(u16, u32)> = {
+        let mut o = scripts.objects().borrow_mut();
+        let ids: Vec<u16> = o.iter().filter(|o| !o.destroying).map(|o| o.id).collect();
+        ids.into_iter()
+            .filter_map(|id| {
+                let object = o.get_mut(id)?;
+                let elapsed = now.wrapping_sub(object.updated_at);
+                object.updated_at = now;
+                Some((id, update_delta(elapsed, 0)))
+            })
+            .collect()
+    };
+    for (id, delta) in due {
+        // An object an earlier update destroyed gets none.
+        let gone = scripts
+            .objects()
+            .borrow()
+            .get(id)
+            .is_none_or(|o| o.destroying);
+        if gone {
+            continue;
+        }
+        let updated = scripts.scripts().scheduled_update(id, delta);
+        updated.map_err(|f| override_fatal(scripts, f))?;
+    }
     Ok(())
 }
 

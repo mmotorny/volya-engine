@@ -1145,8 +1145,14 @@ impl App {
         // script error ends the game.
         if let (Some(Phase::Level { level, .. }), Some(scripts)) =
             (&mut self.phase, &mut self.scripts)
-            && let Err(e) =
-                crate::scripts::level_frame(scripts, level, tree, &self.data, self.clock)
+            && let Err(e) = crate::scripts::level_frame(
+                scripts,
+                level,
+                tree,
+                &self.data,
+                self.clock,
+                self.pause.is_on(),
+            )
         {
             self.failed.get_or_insert(e.message);
         }
