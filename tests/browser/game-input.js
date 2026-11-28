@@ -1720,11 +1720,35 @@ export const tests = {
         );
       }
     };
-    // Facing the start view, the trader is under the crosshair: Use shows
-    // (docs/behavior/talk.md 2.1); a tap starts a talk, the controls turn to
-    // the cursor's, and their Menu (the key bound to `quit`) ends it
-    // (talk-window-input.md 3.2).
-    assert(!s.level.player.hint && s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)}`);
+    // The trader's body is a little over 2 m from the start (use-action.md
+    // 2.1, 2.2: the crosshair meets his bones' shapes within take_dist):
+    // the arrows nudge the view to him, a few steps forward bring him
+    // within reach.
+    const nudge = async (code) => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
+      await sleep(15);
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
+      await sleep(60);
+      return state();
+    };
+    const aim = async (yaw, pitch) => {
+      for (let i = 0; i < 200 && Math.abs(s.level.yaw - yaw) > 0.01; i++) s = await nudge(s.level.yaw > yaw ? "ArrowLeft" : "ArrowRight");
+      for (let i = 0; i < 200 && Math.abs(s.level.pitch - pitch) > 0.01; i++) s = await nudge(s.level.pitch < pitch ? "ArrowDown" : "ArrowUp");
+      return s;
+    };
+    const startView = { yaw: s.level.yaw, pitch: s.level.pitch };
+    const steps = [];
+    s = await aim(startView.yaw - 0.045, startView.pitch + 0.15);
+    for (let i = 0; i < 30 && s.level.talk.picked === null; i++) {
+      s = await nudge("KeyW");
+      steps.push(s.level.player.position.map((v) => +v.toFixed(3)));
+    }
+    const traderView = { yaw: s.level.yaw, pitch: s.level.pitch };
+    // The trader under the crosshair: Use shows (docs/behavior/talk.md
+    // 2.1); a tap starts a talk, the controls turn to the cursor's, and
+    // their Menu (the key bound to `quit`) ends it (talk-window-input.md
+    // 3.2).
+    assert(!s.level.player.hint && s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(traderView)} from ${JSON.stringify(startView)}, steps ${JSON.stringify(steps)}`);
     for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
     assert(!use.hidden, "Use shown for the trader");
     tap(use);
@@ -1810,11 +1834,13 @@ export const tests = {
     await until((s) => !s.level.player.hint && s.level.talk.picked === null, "nothing to use turned away");
     for (let i = 0; i < 50 && !use.hidden; i++) await sleep(20);
     assert(use.hidden, "Use hidden once nothing is under the crosshair");
-    // Turned back to the start view, the trader again.
+    // Turned back to the trader, him again.
     const quarter = (await state()).level.yaw;
     down("ArrowLeft");
     await until((s) => s.level.yaw < quarter - Math.PI / 2 + 0.08, "the left arrow to turn back", 3000);
     up("ArrowLeft");
+    s = await state();
+    await aim(traderView.yaw, traderView.pitch);
     await until((s) => s.level.talk.picked !== null, "the trader under the crosshair again");
     return "";
   },

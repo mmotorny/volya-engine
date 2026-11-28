@@ -424,6 +424,15 @@ export const tests = {
         up("KeyW");
       }
       s = await until((s) => !s.level.player.moving, "the walk to end");
+      // Stopped, the crosshair may have slid off his bones' shapes over the
+      // desk (use-action.md 2.1): the down arrow nudges it back onto him.
+      for (let i = 0; i < 20 && s.level.talk.picked === null; i++) {
+        down("ArrowDown");
+        await sleep(15);
+        up("ArrowDown");
+        await sleep(60);
+        s = await state();
+      }
     }
     const trader = s.level.talk.picked;
     assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)}`);
