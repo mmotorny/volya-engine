@@ -3,8 +3,8 @@
 
 //! `xtask spec-lint <draft.md>…`: flags content a clean spec may not
 //! contain (docs/clean-room.md) before a draft goes to review. It catches
-//! mechanical slips only (decompiler output, code blocks, mangled symbols);
-//! the reviewer still judges everything else.
+//! mechanical slips only (decompiler output, code blocks, mangled symbols,
+//! address-shaped values); the reviewer still judges everything else.
 
 use std::fs;
 
@@ -54,6 +54,23 @@ const MNEMONICS: &[&str] = &[
     "mov", "push", "pop", "call", "jmp", "jnz", "jz", "lea", "cmp", "xor", "ret", "fld", "fstp",
 ];
 
+/// Words that make a number right after them a position in a file.
+const OFFSET_WORDS: &[&str] = &["offset", "offsets", "address", "addresses", "rva", "va"];
+
+/// Words that make a number right after them a place in code or memory.
+const MEMORY_WORDS: &[&str] = &["address", "addresses", "rva", "va"];
+
+/// Words that make a hexadecimal number after them a hash or checksum
+/// (matched as prefixes: `CRC-32`, `SHA-256`, `prefixes`).
+const HASH_WORDS: &[&str] = &["crc", "md5", "sha", "hash", "checksum", "prefix"];
+
+/// Markers that declare a line's address-shaped values a constant or a
+/// position in a game data file (docs/clean-room.md).
+const MARKERS: &[&str] = &[
+    "<!-- spec-lint: constant -->",
+    "<!-- spec-lint: data position -->",
+];
+
 /// Code fence languages that would hold code rather than data.
 const CODE_FENCES: &[&str] = &["c", "cpp", "c++", "asm", "nasm", "x86", "lua"];
 
@@ -81,7 +98,13 @@ pub fn run(paths: &[&str]) -> Result {
 /// Returns (1-based line, problem) for every finding.
 fn lint(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
-    for (i, raw) in text.lines().enumerate() {
+    let lines: Vec<&str> = text.lines().collect();
+    let names_binary = |j: usize| {
+        lines
+            .get(j)
+            .is_some_and(|l| tokens(l).iter().any(|t| binary(t)))
+    };
+    for (i, raw) in lines.iter().enumerate() {
         let line = raw.trim();
         let n = i + 1;
         if let Some(lang) = line.strip_prefix("```") {
@@ -123,8 +146,111 @@ fn lint(text: &str) -> Vec<(usize, String)> {
                 "`::` scope: likely an internal class or function name".into(),
             ));
         }
+        if !MARKERS.iter().any(|m| line.contains(m)) {
+            // A binary named on the line or next to it in its paragraph.
+            let named = (i.saturating_sub(1)..=i + 1)
+                .any(|j| names_binary(j) && (j == i || !lines[j].trim().is_empty()));
+            for problem in addresses(line, named) {
+                out.push((n, problem));
+            }
+        }
     }
     out
+}
+
+/// What kind of number a token is.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Number {
+    /// `0x` and hexadecimal digits; the field is the digit count.
+    Prefixed(usize),
+    /// Hexadecimal digits with a letter and a decimal digit, no prefix; the
+    /// field is the digit count.
+    Bare(usize),
+    /// Any other number (decimal, or hexadecimal digits without a letter).
+    Plain,
+}
+
+fn number(token: &str) -> Option<Number> {
+    if let Some(digits) = token
+        .strip_prefix("0x")
+        .or_else(|| token.strip_prefix("0X"))
+    {
+        return (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_hexdigit()))
+            .then_some(Number::Prefixed(digits.len()));
+    }
+    let digits = token.replace([',', '_'], "");
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let letters = digits.chars().any(|c| c.is_ascii_alphabetic());
+    let decimals = digits.chars().any(|c| c.is_ascii_digit());
+    match (letters, decimals) {
+        (true, true) => Some(Number::Bare(digits.len())),
+        (false, true) => Some(Number::Plain),
+        _ => None,
+    }
+}
+
+/// A shipped binary's file name (`xrGame.dll`, `bin\XR_3DA.exe`).
+fn binary(token: &str) -> bool {
+    let t = token.to_ascii_lowercase();
+    t.len() > 4 && (t.ends_with(".dll") || t.ends_with(".exe"))
+}
+
+/// A line's tokens without the punctuation and Markdown around them.
+fn tokens(line: &str) -> Vec<&str> {
+    line.split(|c: char| {
+        c.is_whitespace() || matches!(c, '`' | '(' | ')' | '[' | ']' | '*' | '|' | '"' | ';')
+    })
+    .map(|t| t.trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_')))
+    .filter(|t| !t.is_empty())
+    .collect()
+}
+
+/// Address-shaped values in one line, for the reviewer to judge. `named`:
+/// the line or a line next to it in its paragraph names a shipped binary.
+fn addresses(line: &str, named: bool) -> Vec<String> {
+    let tokens = tokens(line);
+    let lower: Vec<String> = tokens.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let span = |i: usize, back: usize, ahead: usize| {
+        (i.saturating_sub(back)..(i + ahead + 1).min(tokens.len())).filter(move |&j| j != i)
+    };
+    let mut out = Vec::new();
+    for (i, token) in tokens.iter().enumerate() {
+        let Some(kind) = number(token) else { continue };
+        let after = |words: &[&str]| span(i, 2, 0).any(|j| words.contains(&lower[j].as_str()));
+        let beside_binary = |reach| span(i, reach, reach).any(|j| binary(tokens[j]));
+        // Addresses in 32-bit binaries have at most 8 digits; longer values
+        // are hashes, and hashes and checksums are often named before them.
+        let hex = matches!(kind, Number::Prefixed(5..=8) | Number::Bare(5..=8));
+        let hash = span(i, 4, 0).any(|j| HASH_WORDS.iter().any(|w| lower[j].starts_with(w)));
+        let problem = if after(OFFSET_WORDS) && beside_binary(6) {
+            "a position in a shipped binary"
+        } else if matches!(kind, Number::Bare(5..=7)) && !hash && placed(token) {
+            "a bare hexadecimal number of 5 to 7 digits"
+        } else if hex && after(MEMORY_WORDS) {
+            "a hexadecimal number after an address word"
+        } else if hex && !hash && named && (beside_binary(3) || after(&["at", "offset"])) {
+            "a hexadecimal number beside a shipped binary's name"
+        } else {
+            continue;
+        };
+        out.push(format!(
+            "address-shaped `{token}` ({problem}): positions in shipped binaries are \
+             rejected; mark a constant or a data-file position with `{}` or `{}`",
+            MARKERS[0], MARKERS[1]
+        ));
+    }
+    out
+}
+
+/// A bare hexadecimal number with a decimal digit after a letter, as
+/// addresses have (`[position removed]`), unlike a number with a word after it (`12abc`).
+fn placed(token: &str) -> bool {
+    token
+        .chars()
+        .skip_while(|c| !c.is_ascii_alphabetic())
+        .any(|c| c.is_ascii_digit())
 }
 
 /// Words of identifier characters (and `?@$` for mangled names).
@@ -165,6 +291,59 @@ mod tests {
                 problems.iter().any(|p| p.contains(needle)),
                 "missing {needle}: {problems:?}"
             );
+        }
+    }
+
+    /// The address-shaped values `lint` reports, in order.
+    fn flagged(text: &str) -> Vec<String> {
+        lint(text)
+            .into_iter()
+            .filter_map(|(_, p)| {
+                let rest = p.strip_prefix("address-shaped `")?;
+                Some(rest[..rest.find('`')?].to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn flags_positions_in_shipped_binaries() {
+        for (text, value) in [
+            ("The string at offset `[position removed]` holds it.", "[position removed]"),
+            (
+                "`xrLUA.dll` contains the format `%.14g` at `[position removed]`.",
+                "[position removed]",
+            ),
+            ("`[position removed]`, `[position removed]`) in `xrLUA.dll`", "[position removed]"),
+            ("It starts at offset 290816 in `xrGame.dll`.", "290816"),
+            ("The handler's RVA is 0x1a2b3.", "0x1a2b3"),
+            ("the table at address 0x10203040", "0x10203040"),
+            ("Both (at `[position removed]`, `[position removed]`)\nin `xrLUA.dll`.", "[position removed]"),
+        ] {
+            assert_eq!(
+                flagged(text).first().map(String::as_str),
+                Some(value),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn passes_constants_hashes_colours_and_data_positions() {
+        for text in [
+            "Keys (−1, 0x00E9CE72), (0, 0x00FFC066); 6,665 bytes, CRC-32 0xBFA9BD87.",
+            "`xrGame.dll` (6,246,400 bytes, `19938b4b9fa11e3b4b6462ce7e7a12ac`)",
+            "`bin\\xrRender_R1.dll` (SHA-256 prefixes `c5d0008f`, `60f6b66b`)",
+            "bytes, CRC-32 0x4E93C6F1); binaries `bin\\xrParticles.dll`",
+            "Bit 31 (`0x80000000`) is the flag; flags 0x10000 and 0x20000.",
+            "Start a fresh state at `0x0131A9D3`. The AI flags start at 0x1ff.",
+            "The directory is at offset 0x37940 of `gamedata.db0`.",
+            "`g_corpsenum`: `12abc` → 12; renderer c5, checks B11 in xrGame.dll",
+            "| `dm_lightning-01.dm` | 42,360 | `353A41DD` |",
+            "The string at offset `[position removed]` <!-- spec-lint: data position -->",
+            "Seed [position removed] <!-- spec-lint: constant -->",
+            "The value at `[position removed]`.\n\nA paragraph about `xrLUA.dll`.",
+        ] {
+            assert!(flagged(text).is_empty(), "{text}: {:?}", flagged(text));
         }
     }
 }

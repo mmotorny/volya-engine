@@ -47,7 +47,8 @@ Tasks:
               from the working tree and compares their frames of the parity
               suite's views in headless Chrome.
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
-  spec-lint   Flag decompiler output, code and mangled names in clean-room spec drafts.
+  spec-lint   Flag decompiler output, code, mangled names and binary addresses in
+              clean-room spec drafts.
   wait-memory Return once memory pressure is normal (run before heavy work).
   d3d9probes release
               Build the Direct3D 9 probes' Windows runner zip and publish it

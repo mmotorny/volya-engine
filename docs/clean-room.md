@@ -37,7 +37,7 @@ Allowed:
 Rejected:
 
 - Disassembly listings, decompiled code, pseudo-code, or prose that transliterates code step by step.
-- Binary addresses, internal symbol or function names, class or source file names. Any position inside a shipped binary (an address, an offset, the place of a string or table) is a binary address, also when given as evidence (decided by the user, 2026-11-27): the spec states the fact, the position stays in the dirty checks. Positions in game data files (archives, levels, configuration) are evidence and stay allowed.
+- Binary addresses, internal symbol or function names, class or source file names. Any position inside a shipped binary (an address, an offset, the place of a string or table) is a binary address, also when given as evidence (decided by the user, 2026-11-27): the spec states the fact, the position stays in the dirty checks. Positions in game data files (archives, levels, configuration) are evidence and stay allowed. spec-lint flags address-shaped values (bare hexadecimal numbers of 5 to 7 digits, hexadecimal numbers beside a shipped binary's name or after address, offset, at, RVA or VA, "at offset N in X.dll") for the reviewer to judge; a line whose values are a constant or a data-file position carries `<!-- spec-lint: constant -->` or `<!-- spec-lint: data position -->`.
 - Structure mirroring the original program's code organization rather than the data.
 - Anything taken from the leaked X-Ray source, OpenXRay or other derivatives, or documents of unclear provenance.
 
