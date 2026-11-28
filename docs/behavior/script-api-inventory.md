@@ -23,13 +23,17 @@ Builds on (not repeated here):
   a missing section, 2.4); spec C, `docs/behavior/script-api-class-ids-and-the-object-factory.md` (class ids);
   spec O, `docs/behavior/script-api-object-event-callbacks.md` (the callback id 15 `use_object`); spec R,
   `docs/behavior/script-api-dialogs-and-trade.md` (trade parameters, their item lists, the show list and the
-  defaults, 5.2 and 5.3).
+  defaults, 5.2 and 5.3); spec X, `docs/behavior/script-api-movement-sight-and-memory.md` (a fighter's seen,
+  heard and hitting records and their enabled flag, 7; `best_enemy`, the enemy its enemy choice selected; and
+  `accessible(pos)`, `accessible(v)` under its restrictions, 5).
 - `docs/behavior/player-state.md` (cited as `pstate`: the inventory's 11 slots, belt and backpack and where a
   taken item goes, 3.3; the active slot and the pending active slot, 3.3; eating, 5), `docs/behavior/use-action.md`
   (cited as `use`: inventory boxes, 5; the take request, its server log lines and event 1, and event 3, 9.2),
   `docs/behavior/player-hits.md` (hit types *t* 0 … 10, the outfit's protections *p_t* and condition *c*),
   `docs/behavior/character-identity.md` (specific characters, money), `docs/behavior/original-determinism.md`
-  2.2 (the generator step), `docs/behavior/console-log.md` 3.8 (failed checks).
+  2.2 (the generator step), `docs/behavior/console-log.md` 3.8 (failed checks), `docs/formats/sav.md` (an
+  object's **state flags** and an ammunition object's **rounds left**, in its state and its update),
+  `docs/formats/ltx-config.md` (sections and keys).
 
 Conventions:
 
@@ -58,7 +62,7 @@ Conventions:
 `checks/script-api-inventory/run_all.py` (`python3 -I run_all.py`): it reads the game library's bytes and run-time
 type information, the evidence of read-only headless static analysis (produced by `gh.py` beside it; spec M's
 registration evidence as M's checks produced it), the listing, the scoping spec's scan and the shipped scripts.
-All checks pass (`ALL PASS 28`).
+All checks pass (`ALL PASS 38`).
 
 ## 1. What this spec owns
 
@@ -372,8 +376,9 @@ The number of rounds in the weapon's magazine; 0 for any other object [S-20].
 For a weapon, the rounds in its magazine plus, when it has a holder [S-20]:
 
 - the rounds of every ammunition item in the holder's belt and backpack (not in slots) whose section is one of the
-  weapon's ammunition types (**believed**: its section's `ammo_class` list), each counted at its current number of
-  rounds;
+  weapon's **ammunition types** (the comma-separated items of its section's `ammo_class`, read when it loads;
+  **believed** with spaces around the items dropped), each counted at its current number of rounds (7.5)
+  [S-28, S-34];
 - a further count the holder keeps beside a second item-section text when that text is set (what sets them is
   **unestablished**; **believed**: rounds the holder is yet to receive).
 
@@ -395,6 +400,28 @@ only [S-21]. The dying-fire flag is set at random (one chance in two, when a set
 routine of the stalker (**believed**: when it dies); while it is set the stalker goes on firing for up to 500 ms
 (**believed**) [S-21]. The same routine makes the stalker's slots no longer count for trade (2.2) [S-9].
 `death_manager.keep_item` unloads the weapons of a dead character's slots 1 and 2 [S-25].
+
+### 7.5 An ammunition item's rounds
+
+An ammunition item (the classes of `sav.md`'s ammunition row, `AMMO`, `A_*`) holds a number of rounds, a 16-bit
+count, and a **box size**, its section's `box_size` (read as an integer, kept as 16 bits) [S-34]. The count:
+
+- is the box size when the item loads its section [S-34];
+- when the item is spawned, becomes the rounds left of its spawn data (`sav.md`, the ammunition state); a value
+  above the box size becomes the box size, in the item and in its spawn data [S-34];
+- when the item's update data is read (`sav.md`, the ammunition update's rounds left), becomes that value
+  (**believed**: the server's updates of the object) [S-34];
+- falls by 1 each time a round is taken from it (**believed**: by a weapon loading its magazine); an item with no
+  rounds gives none [S-34];
+- rises when a weapon unloads its magazine keeping the rounds (not `unload_magazine`, 7.4; **believed** the
+  player's unloading): for each round type, one ammunition item of that type the holder carries is filled up to
+  its box size (**believed**: the rest of the rounds become new ammunition) [S-34].
+
+No other routine of the game library changes it [S-34]. An ammunition object the server makes from a section
+starts with rounds left = the section's `box_size` (**believed** so also those of a restock, 5.6, and of a
+character's supplies) [S-34]. So `get_ammo_total` counts each box at its rounds now: 20 for a full `ammo_9x18_fmj` box, 10 for an
+`ammo_12x70_buck` box [S-35]. An ammunition item answers that it is useful to the AI (8.3) only while it holds
+at least one round [S-33].
 
 ## 8. Other item members (static)
 
@@ -419,16 +446,201 @@ character's torch, `enable.script` for a radio [S-25].
 `true` for an inventory box (`use` 5; class id `O_INVBOX`) that holds no item, `false` for one that holds any
 and for every other object (no diagnostics) [S-23].
 
-### 8.3 `obj:best_item()`, `obj:best_weapon()`
+### 8.3 `obj:best_item()` and the item memory
 
-- `best_item()`: for a fighter (M 2.2), the handle of the item its item memory has chosen (spec X's), nil when
-  none; nil for any other object, without diagnostics [S-24].
-- `best_weapon()`: for a stalker, nil when its health is 0 or less; otherwise the handle of its **best weapon**,
-  nil when none [S-24]. The best weapon is kept while it stays usable and its rating is unchanged (within 0.00001);
-  otherwise it is chosen again among the weapons of its inventory by the AI's weapon rating, and, failing those,
-  with the help of items its item memory knows of (**believed**: a weapon it could load with ammunition it has
-  seen) [S-24]; the rating and that choice are **unestablished** here (spec X). For any other object: nil,
-  diagnostics only [S-24].
+`best_item()`: for a fighter (M 2.2), the handle of the object its **item memory** has selected, nil when none;
+nil for any other object, without diagnostics [S-24].
+
+Every fighter has an item memory: a list of objects and one **selected** object [S-31]. Each update of the
+fighter's memory (the update of its seen, heard and hitting records, X 7; **believed** each update of its AI) does,
+in this order [S-31]:
+
+1. the records are updated; the item memory's list is emptied (the selection is kept);
+2. the seen records (only while the fighter's sight memory is on; what turns it off is **unestablished**), then
+   the heard records, then the hitting records are walked in their order, each enabled record (**believed** the
+   flag of X's `enable_memory_object`) once: a living object (M 2.2) that the fighter's enemy choice accepts (X, `best_enemy`)
+   is not an item; any other object is added to the end of the list when it is not in it yet and the fighter's
+   **item test** accepts it. For a fighter whose memory belongs to a group, only the group's records are walked
+   and stalkers are not added (the group is **unestablished** here). **Disputed in review:** the enemy-choice
+   test applies to every seen record, but to heard and hitting records only when a flag derived from the memory
+   group is set; for a fighter whose memory belongs to no group it is never applied to them, so such an object
+   goes straight to the item test;
+3. the enemy choice is updated; then the **selection** is made: the object of the list with the smallest **item
+   value**, the first of equal ones; none when the list is empty.
+
+After the update (**believed** in the same AI update), while the fighter's health is above 0, the selection is
+dropped when its level vertex or its position is not accessible to the fighter (X 5: `accessible(v)`,
+`accessible(pos)`) [S-31].
+
+The item test and the item value [S-31, S-32, S-33]:
+
+- **Monsters** (the 17 fighter classes other than `CAI_Stalker`): an object whose position and level vertex are
+  accessible to the monster and which is a living object (M 2.2) with health 0 or less: a body. Every value is 0,
+  so the selection is the first body accepted.
+- **A stalker**: an object that passes the **common test** below and then: it is an item that answers it is useful
+  and has its useful flag (both below); it is a weapon (the 19 weapon classes); no item the stalker carries
+  **covers** it (below); it is not the bolt; and the stalker can take it: the object's engine flag (the one the
+  common test asks of the fighter) is clear, the item's `can_take` holds, and its weight added to the
+  inventory's total weight is not above the stalker's carrying limit (where the limit comes from is
+  **unestablished**). The value is the squared distance from the stalker's position to the object's (0.001 when
+  that is below 0.0000001): the nearest such weapon is selected. (The stalker's test also has effects of its own
+  for some kinds of object; they do not change its answer and are **unestablished** here.)
+
+The **common test** of an object *O* for a fighter *F* (the item memory's own test) holds when all of these do
+[S-31, S-33]:
+
+- *O*'s spawn data had state flags (`sav.md`) bit 0x10 set when *O* was spawned;
+- *F* has no parent (M's `parent()`), and an engine flag of *F* that the game library only tests is clear (set
+  outside it, **believed**; its meaning is **unestablished**);
+- *O* uses AI locations: the 19 creature classes and the grenades (`CF1`, `CRGD5`) always; the bolt,
+  `CPhysicObject`, `CSpaceRestrictor` and the anomalous zones never; every other object (the other items, the
+  player) when its state flags had bit 0x80 set when it was spawned;
+- *O*'s position and its level vertex are accessible to *F* (X 5);
+- when *O* is an item: it answers that it is useful, and its **useful flag** is set: the flag is set when the item
+  is spawned, then follows bit 0x20 of the state flags of its spawn data;
+- the level graph exists and *O*'s level vertex is below its number of vertices.
+
+Whether an item answers that it is **useful** [S-33]: ammunition while it holds at least one round (7.5); the
+eatables (2.1) when their `can_take` holds and their portions left are not 0 (**believed** the portions); the bolt
+never; grenades and artefacts by tests of their own (**unestablished**); every other item when its section's
+`can_take` holds (true when the key is absent).
+
+A carried item *I* **covers** a seen weapon *W* when *I* is a weapon other than *W* itself (**believed**: compared
+by the object's id), the two are **comparable**, and *I* is at least as good [S-32]. With *t*(·) the
+`ef_weapon_type` of a weapon's section, they are comparable by *t*(*I*): 2, 3 or 4: always; 1, 5, 9 or 10: when
+*t*(*W*) = *t*(*I*); 6, 7 or 8: when *t*(*W*) is 6, 7 or 8; any other value: never. **Disputed in review:** any
+other value of *t*(*I*) (0, or above 10, including 4,294,967,295 when absent) is comparable always, like 2, 3 and
+4. *I* is at least as good when,
+in this order:
+
+1. the stalker carries ammunition of *I* (an item of its list of all items, 2.2, whose section is one of *I*'s
+   ammunition types) but none of *W*: yes; ammunition of *W* but none of *I*: no;
+2. otherwise, when their conditions (M's `condition()`) differ by 0.05 or more: whether *I*'s is at least *W*'s;
+3. otherwise, when *t*(*I*) ≠ *t*(*W*): whether *t*(*I*) > *t*(*W*) (unsigned);
+4. otherwise: whether the **rank** of *I* is at least that of *W*.
+
+The **rank** of a weapon is the number *k* of the first of the sections `rank_0` … `rank_4` of the game's settings
+whose `available_items` text contains the weapon's section name as a substring (any part of the text: `wpn_pm` is
+found in `mp_wpn_pm`, `wpn_toz34` first in `rank_4`'s `wpn_toz34_arena`) [S-32]. The five texts are read once and
+kept. A weapon found in none is a failed check (`res!=-1`, `cannot find rank for`; fatal, **believed**); of the 111
+sections whose `class` begins with `WP_` or `W_`, five are in none: `mounted_weapon`, `mp_wpn_beretta`,
+`mp_wpn_hpsa`, `mp_wpn_toz34`, `stationary_mgun` [S-32]. The rank of *W* is looked up for every weapon the test
+reaches (step 4 needs it), that of *I* only in step 4 [S-32].
+
+### 8.4 `obj:best_weapon()`
+
+For a stalker: nil when its health is 0 or less; otherwise its **best weapon** is brought up to date (below) and
+its handle returned, nil when there is none [S-24, S-29]. For any other object: nil, diagnostics only [S-24]. The
+shipped scripts call it on every evaluation of the weapon evaluators of `state_mgr_weapon.script` and when
+`state_mgr.script` sets a character's item (8.6) [S-35].
+
+Terms [S-29, S-30]:
+
+- The **enemy** is the object the stalker's `best_enemy()` returns (X), or the stalker itself when there is none.
+- A weapon is **usable** when its `get_ammo_total()` (7.2, the further count included) is not 0 or it has no
+  ammunition types; no other item is usable.
+- The **rating** of a weapon is that of 8.5 for the stalker, the enemy and the weapon.
+
+The stalker keeps a best weapon, a **stored rating**, a mark "chosen" and two remembered pick-ups (a weapon to
+take and ammunition to take) [S-29]. Each call:
+
+1. **Keep.** When "chosen" is set and the best weapon is set and usable: with no enemy (`best_enemy()` nil) it is
+   kept; otherwise it is kept when its rating now is within 0.00001 of the stored rating. Kept: nothing more.
+2. **Carried weapons.** Otherwise "chosen" is set, the best weapon, the pick-ups and the stored rating (0) are
+   cleared, and each usable item of the stalker's list of all items (2.2) is taken in order, with the value *v*:
+   with no enemy, the weapon's `ef_weapon_type` (unsigned, 4,294,967,295 when absent); with an enemy, its rating.
+   It becomes the best weapon, *v* the stored rating, when *v* exceeds the stored rating by 0.00001 or more, or *v*
+   is within 0.00001 of it and there is no best weapon yet or its `ef_weapon_type` is greater (unsigned) than the
+   best weapon's. When a best weapon is found, nothing more.
+3. **Seen weapons.** Otherwise each object of the item memory's list (8.3), in order, that is an item passing the
+   common test (8.3) is looked at, its rating computed as for the weapon it names, and taken only when that rating
+   is greater than the stored rating (which it then becomes):
+   - a weapon **ready** for the stalker (rounds in its magazine, no ammunition types, or the stalker carries
+     ammunition of it): it becomes the weapon to take; the best weapon stays none;
+   - otherwise ammunition for which the stalker carries a weapon (the first of its list of all items whose
+     ammunition types include the ammunition's section): that carried weapon becomes the best weapon, the
+     ammunition the ammunition to take. (A stalker's item memory holds only weapons, 8.3, so this case does not
+     arise for it.)
+4. **Weapons with known ammunition.** When step 3 remembered nothing: each such object that is a weapon for which
+   ammunition is known — it has no ammunition types, or an object of the item memory's list is an item of one of
+   them — is taken when its rating is greater than the stored rating: it becomes the weapon to take (and that
+   object the ammunition to take); the best weapon stays none. **Disputed in review:** for a weapon with no
+   ammunition types the ammunition to take is the weapon itself.
+
+So `best_weapon()` returns a carried weapon (step 2), or nil; a seen weapon to take is not returned (what uses the
+pick-ups is **unestablished** here) [S-29]. "Chosen" is cleared whenever the stalker's enemy choice selects a
+different enemy, none included (**believed** clear when the stalker is made) [S-29]: so with no enemy the chosen
+weapon stays while it is usable, and a better weapon taken meanwhile is considered only when the enemy changes, the
+weapon stops being usable or, with an enemy, its rating changes.
+
+### 8.5 The weapon rating
+
+The rating of a weapon *W* for a stalker *S* against an enemy *E* is the value of the evaluation function of the
+file `common\WeaponEffectiveness.efd` in the game's `$game_ai$` folder (`ai\common\weaponeffectiveness.efd` in the
+archives; 1,796 bytes) for three inputs [S-26]. The game library loads 24 such files when its AI is first used
+(**believed**; `common\MainWeaponValue.efd` and others for other purposes); a missing file gives the message `!
+Evaluation function : File not found "%s"` and a failed check [S-26].
+
+The file, little-endian [S-26]:
+
+| Field | Size | In this file |
+|---|---|---|
+| version | u32 | 1; any other value gives `! Evaluation function (%s) : Not supported version of the Evaluation Function Contructor` and a failed check |
+| (second word) | u32 | 1 (read with the version, not used) |
+| input count *n* | u32 | 3 |
+| value counts | *n* × u32 | 12, 12, 3 |
+| input function numbers | *n* × u32 | 24, 43, 0 |
+| own function number | u32 | 61 |
+| minimum, maximum | 2 × f32 | 1, 100 (used when this function is itself an input) |
+| pattern count | u32 | 1 |
+| patterns | each: u32 *m*, *m* × u32 input positions | one: 3; 0, 1, 2 |
+| values | per pattern, the product of its inputs' value counts × f32 | 432 values, 13 distinct (0.9996 … 99.9606) |
+
+Evaluation [S-27]: each input *i* is computed (below) and made an index *a_i* in 0 … count − 1. Inputs 24 and 43
+have the range 1 … 12: a value *x* ≤ 1 gives 0, *x* ≥ 12 gives count − 1, otherwise ⌊(count − 1)(*x* − 1)/11 +
+0.5⌋, the sum rounded to single precision before its integer part is taken (so the integer types 1 … 12 give 0 …
+11). Input 0 has the range 3 … 20 and three indices: ≤ 3 gives 0, ≥ 20 gives 2, otherwise 1. Each pattern indexes
+its values with its inputs in its order, the first most significant: here *k* = (12 *a*₀ + *a*₁) · 3 + *a*₂. The
+rating is the sum over the patterns of their value at their index: here value [*k*]. It is not limited to the
+minimum and maximum.
+
+The inputs [S-28]:
+
+- **24, the weapon's type**: the rated weapon *W*'s section `ef_weapon_type`, unsigned (4,294,967,295 when
+  absent, so index 11).
+- **43, the enemy's weapon type**: the same input for *E*, with no weapon given (the enemy-weapon parameter it
+  reads is not set by `best_weapon`; the game library's writers of it found store none: **believed** none). For
+  the 17 monster classes: *E*'s section `ef_weapon_type` (4,294,967,295 when absent). For a stalker, the trader
+  or the player: the greatest `ef_weapon_type` (unsigned) of the weapons in *E*'s slots whose
+  `get_ammo_total()` (further count included) is above their magazine size (`ammo_mag_size`) divided by 10
+  (integer division); 0 when there is none. For any other object (not an inventory owner): 0.
+- **0, the distance**: between *S*'s and *E*'s positions (0 when *E* is *S*).
+
+### 8.6 Worked example: a novice at the beginners' village campfire
+
+The seven characters `esc_lager1` … `esc_lager7` of `l01_escape` (smart terrain `esc_lager`) have the profile
+`esc_stalker_novice`; its eight specific characters in `config\gameplay\character_desc_escape.xml` carry either
+`wpn_bm16` and `ammo_12x70_buck` or `wpn_pm` and `ammo_9x18_fmj = 1`, besides the items and food of their includes
+[S-35]. `wpn_pm`: `ef_weapon_type` 5, `ammo_class` `ammo_9x18_fmj, ammo_9x18_pmm`, `ammo_mag_size` 8;
+`ammo_9x18_fmj`: `box_size` 20; `wpn_bm16`: 7, `ammo_12x70_buck,ammo_12x76_zhekan,ammo_12x76_dart`, 2;
+`ammo_12x70_buck`: 10 [S-35]. Their weapon evaluators (`eva_state_mgr_weapon` and the others of
+`state_mgr_weapon.script`) call `best_weapon()` on each evaluation and treat nil as "no weapon" [S-35].
+
+A novice with `wpn_pm` and one `ammo_9x18_fmj` box (20 rounds, 7.5; **believed** one box made by the server)
+sits at the campfire with no enemy. The first call finds "chosen" clear (step 2): of its items only the pistol
+is a weapon, and it is usable (the box alone gives rounds), so it becomes the best weapon with the stored value 5.
+Every later call keeps it while it stays usable (step 1). A novice with `wpn_bm16` gets it the same way, value 7.
+
+When a dog (`dog_weak`, `ef_weapon_type` 2) becomes its enemy 10 m away, "chosen" is cleared and step 2 rates the
+pistol: *a*₀ = 4, *a*₁ = 1, *a*₂ = 1, value [148] = 69.9724 (the shotgun: value [220] = 69.9724) [S-35]. As the
+dog closes to 2 m the pistol's rating becomes value [147] = 39.9842, no longer within 0.00001 of the stored
+rating, so step 2 runs again and picks the pistol again, its only weapon [S-35].
+
+Had the pistol no rounds left (magazine empty, no box), it would not be usable: step 2 finds nothing, and a
+`wpn_bm16` with rounds in its magazine that the novice saw lying near (its item memory accepts it: the pistol's
+type 5 is not comparable with 7, so it does not cover it) is rated against the novice itself: *a*₀ = 6, *a*₁ = 0
+(no slot weapon with enough rounds), *a*₂ = 0, value [216] = 89.9645 > 0, so it becomes the weapon to take and
+`best_weapon()` returns nil [S-35]; the evaluators then answer as for "no weapon".
 
 ## 9. Worked example: a dead character's items
 
@@ -453,7 +665,7 @@ scripts) per name [S-25]: `object` 41 (51), `money` 10 (10), `active_item` 8 (10
 
 ## 11. Verification facts
 
-All reproduced by `run_all.py` (28 PASS lines, no failure):
+All reproduced by `run_all.py` (38 PASS lines, no failure):
 
 - Scope: 29 listed items, the candidate `invulnerable` (M's), 21 used names, 26 (54) loadable scripts [S-2]; 30
   registered forms paired with implementations [S-3].
@@ -470,6 +682,18 @@ All reproduced by `run_all.py` (28 PASS lines, no failure):
   S-21]; attachable items, boxes, best item and weapon [S-22 – S-24].
 - Script use, the worked example, and `buy_supplies`' caller, its trade files and the sorted order of
   `[supplies_start]` [S-25].
+- The weapon rating: the file `common\WeaponEffectiveness.efd` and its layout (version 1, 3 inputs 24, 43, 0 of 12,
+  12, 3 values, own number 61, 1 … 100, one pattern, 432 values) [S-26]; the discretisation (rounded down after
+  adding 0.5, emulated from the instructions), the index and the sum [S-27]; the three inputs, their ranges (1 …
+  12, 3 … 20) and the keys they read, the 17 monster classes that answer with their own type [S-28].
+- The best-weapon choice: keep, carried weapons (tolerance 0.00001, ties by type), seen weapons, weapons with known
+  ammunition, the reset on a change of enemy [S-29]; the item tests it uses [S-30].
+- The item memory: the update's order, the adding, the smallest value, the accessibility check, the monsters'
+  bodies and the stalker's nearest weapon [S-31]; covering, comparability, condition tolerance 0.05, the rank from
+  `rank_0` … `rank_4` (five weapon sections in none), the carrying test [S-32]; the state flags 0x10, 0x20 and 0x80,
+  `can_take`, the useful answers by class [S-33].
+- An ammunition item's rounds and their five writers; a new ammunition object's `box_size` [S-34]; the novices of
+  `esc_lager`, their supplies and sections, and the ratings of the worked example [S-35].
 
 ## 12. Unestablished
 
@@ -479,23 +703,40 @@ All reproduced by `run_all.py` (28 PASS lines, no failure):
   (3.4); what reads the restock record (5.6; believed the trader's prices).
 - The holder's further count in `get_ammo_total` and what sets it (7.2).
 - When the inventory restores a saved active slot (4.1); the protection value of hit type 9 (4).
-- The initial enabled flag of attachable items without `attach_angle_offset` (8.1); the AI's weapon rating and the
-  item memory's choice (8.3, spec X); the conditions of the dying-fire flag (7.4).
+- The initial enabled flag of attachable items without `attach_angle_offset` (8.1); the conditions of the dying-fire
+  flag (7.4).
+- In the item memory (8.3): what turns a fighter's sight memory off, the memory group and its filter, the meaning of
+  the fighter's engine flag in the common test, the stalker's carrying limit, the usefulness tests of grenades and
+  artefacts, and the effects of the stalker's item test on other objects.
+- In the best-weapon choice (8.4): what uses the remembered weapon and ammunition to take; the "chosen" mark's
+  value when the stalker is made (believed clear).
+- The enemy-weapon parameter of the weapon rating (8.5; believed never set to an object).
+- What else changes an ammunition item's rounds through its update data (7.5; believed the server's updates).
 - What `iterate_inventory`'s function may do to the inventory during the iteration (3.3).
 - Everything that depends on A (argument matching, nil for handle arguments, calls of missing members).
+
+## Gaps found in review
+
+- The item memory's update for a fighter whose memory belongs to a group: after the enemy choice is updated, a
+  second walk of the seen, heard and hitting records may run under a group condition, adding to the same list
+  before the selection, followed by a second enemy-choice update; when it runs is not stated.
 
 ## Provenance
 
 - Date: 2026-11-28.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build); the game library identified above;
   the archive file tree of `gamedata.db0` … `gamedata.dbd` as extracted for earlier approved specs
-  (`scripts\*.script`, `config\` item sections).
+  (`scripts\*.script`, `config\` item and weapon sections, `config\mp\mp_ranks.ltx`,
+  `config\gameplay\character_desc_escape.xml`, `ai\common\weaponeffectiveness.efd`, `spawns\all.spawn`).
 - Analysis: static analysis with Ghidra (headless, read-only) of the registration of these `game_object` members
   and of their argument matching and conversions; of the member implementations and the engine routines they
   reach (the inventory's item lists, slots and slot switching, its update, taking items, the item's section keys,
   trade permissions, eating, the restock routine and its spawning, money and its event, the server's handling of
   the drop, take, destroy, position and money events, the weapon's magazine and ammunition counting, unloading,
-  attachments, the inventory box, the best item and weapon); run-time type information read from the file bytes;
+  attachments, the inventory box, the best item and weapon; the evaluation-function files' reader and evaluation
+  and the rating's inputs; the fighter's memory update and its item memory, the stalker's and the monsters' item
+  tests and values, the weapon comparison and ranks; the ammunition item's rounds and the server's ammunition
+  object); run-time type information read from the file bytes; the game data's evaluation-function file decoded;
   the scoping spec's script scan reused; the listing and the scripts read as text. No binary was executed.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
 
