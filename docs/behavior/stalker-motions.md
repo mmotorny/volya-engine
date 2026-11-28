@@ -131,6 +131,45 @@ The eight specific characters of class `esc_stalker_novice` (`character_desc_esc
 | `cr_torso_0_idle_`, `cr_torso_0_walk_`, `cr_escape_` | empty |
 | in-place names 0 – 5 of `norm_` and of `cr_` | present |
 
+The other stalker models list further motion files after `stalker_animation` (measured, the 182 models) [D11]:
+
+| Motion files after `stalker_animation` | Models |
+|---|---|
+| none | 57 |
+| `critical_hit_grup_4`; `_6`; `_3`; `_5`; `_7` | 24; 16; 15; 13; 4 |
+| `soldiers_animation`, `critical_hit_grup_5`; the same with `_6`; `soldiers_animation` alone | 14; 2; 3 |
+| `zombie_animation`, `critical_hit_grup_1` | 10 |
+| `bandits_animation` alone; with `critical_hit_grup_3`; with `_4`; with `stalker_drunk` | 5; 4; 3; 1 |
+| `exoskeleton_animation`, `critical_hit_grup_2`; the same with `_7` | 5; 1 |
+| `critical_hit_grup_7`, `zombie_wounded` | 3 |
+| `ucheniy` | 2 |
+
+What each further file does to the lists (2.2, the last file first) [D12]: no file adds a list that is empty with
+`stalker_animation` alone, makes a list shorter, or changes a `cr_` or `dmg_norm_` list; the critical-hit files and
+`zombie_animation` replace every motion of the lists they change, the others the elements named; in the shipped
+sequences no list takes motions from two further
+files, and where two define the same names (`bandits_animation`, then `stalker_drunk`) the later one's are taken.
+In the table a list name without a prefix is that of `norm_`; *S* is the item slots 1, 2, 3, 4, 8, 9, 10.
+
+| File | Motions it replaces in the lists (a list named alone: all its motions; lengths with the file) |
+|---|---|
+| `critical_hit_grup_1`, `_7` | `norm_2_critical_hit_` `torso_` (2), `hend_left_`, `hend_right_` (1 each) |
+| `critical_hit_grup_2` | `norm_2_critical_hit_` `head_`, `hend_left_`, `hend_right_`, `torso_` (3 each), `legs_left_`, `legs_right_` (2 each) |
+| `critical_hit_grup_3`, `_4` | `norm_2_critical_hit_` `head_`, `hend_left_`, `hend_right_`, `legs_left_`, `legs_right_` (3 each), `torso_` (2) |
+| `critical_hit_grup_5`, `_6` | the six `norm_2_critical_hit_` lists (3 each) |
+| `soldiers_animation` | `norm_idle_1`; element 1 of `torso_`*s*`_idle_` for *s* = 0 and *S*; `torso_`*s*`_strap_` (both) and `_unstrap_` (all four) for *s* in *S* |
+| `bandits_animation` | as `soldiers_animation`, and element 1 of `walk_fwd_` and of `torso_`*s*`_walk_` for *s* = 0 and *S* |
+| `stalker_drunk` | element 1 of `walk_fwd_` and of `torso_0_walk_` |
+| `exoskeleton_animation` | element 1 of `run_fwd_` and of `torso_`*s*`_run_` for *s* = 0 and *S* |
+| `ucheniy` | `head_talk_0`, `norm_idle_1`, `norm_turn_left_0`, `norm_turn_right_0`; `walk_back_` (1); element 1 of `walk_fwd_`, `torso_0_idle_`, `torso_0_walk_` |
+| `zombie_animation` | both head motions; `norm_idle_0`, `_1` and the four turns; all of `walk_fwd_`, `_back_`, `_ls_`, `_rs_`, `run_fwd_`, `run_back_` and `damage_` (12); `torso_0_` `aim_`, `idle_`, `walk_`, `run_`; for *s* in *S* `torso_`*s*`_` `aim_`, `attack_`, `draw_`, `reload_`, `idle_`, `walk_`, `run_`, `strap_`, `unstrap_`; `torso_2_look_beack_ls_`, `_rs_` |
+| `zombie_wounded` | none |
+
+The further files also define names outside the lists (motions that scripts queue by name, 8.1): of the names each
+defines, those `stalker_animation` defines too replace its own for these models (of their motions, for example 131 of 131 for
+`bandits_animation`, 128 of 128 for `soldiers_animation`, 246 of 254 for `zombie_animation`) [D12]; which of them the
+scripts queue is not surveyed here.
+
 Where a rule below asks for an element beyond a list's end (for example element 1 of `cr_walk_fwd_`, or any element
 of an empty list), what the stalker plays is **unestablished** (**believed** an undefined motion number read past
 the list).
@@ -139,16 +178,15 @@ the list).
 
 ### 3.1 Set-up
 
-- At the stalker's spawning its motion state is reloaded with the stalker [B41]: the lists of its model are taken (or built,
-  2.2), its crouch type preference is copied from its specific character (section 10), and, when its health is
-  above 0 (and a further condition of the stalker holds, **unestablished**), the **partition mask** is made: every
-  partition except the partition of `head_idle_0`'s definition (for the shipped models every partition but `head`)
-  [B12]. The head, shoulder and spin bone callbacks set up at the same time are CH-10's.
-  **Disputed in review:** the further (unestablished) condition of the stalker gates taking the lists as well
-  as the mask; health above 0 is needed only for the mask and the bone callbacks.
-- The slots start empty: no motion, no playback, not current [B12]. **Disputed in review:** an empty slot
-  (at the start and after every emptying in this specification) is marked current while holding no motion;
-  it starts a motion as soon as one is chosen, because the chosen motion differs from none.
+- At the stalker's spawning its motion state is reloaded with the stalker [B41]: its crouch type preference is
+  copied from its specific character (section 10) in every case; then, only when a further condition of the stalker
+  holds (**unestablished** which), the lists of its model are taken (or built, 2.2) and, when in addition its health
+  is above 0, the **partition mask** is made: every partition except the partition of `head_idle_0`'s definition
+  (for the shipped models every partition but `head`) [B12, B42]. The head, shoulder and spin bone callbacks set up
+  with the mask (under the same two conditions) are CH-10's.
+- The slots start **empty**: no motion, no playback, no remembered list choice (section 4), and marked current
+  [B12, B43]. Every emptying in this specification leaves a slot in the same state [B43]. An empty slot starts a
+  motion as soon as one is chosen for it, because the chosen motion differs from none (3.4).
 
 ### 3.2 When it runs
 
@@ -354,14 +392,25 @@ After the legs slot is chosen and played [B34]:
    *v*′ = 0.
 4. If |*v*′| ≥ 1e−7 and the slot has a playback, the movement's speed becomes *v*′ (CH-10 uses it).
 
-So when the legs change motion, the stalker's speed moves from the speed it had to the new target as the new legs
-playback fades in (TC1 4.2: weight from 1e−7 up by accrue · Δ per update); still legs give *v*′ = 0 and leave the speed
-to CH-10. The hand-over runs only in the normal mode (3.3 step 4). **Disputed in review:** by steps 1 and 3 the
-ramp does not follow in general: step 1 weights the new target by the previous playback's weight, which is 1 once
-that playback has faded in (TC1 4.2), so *s*₀ becomes *s*₁ at once and from the update after the change the speed
-is the new target. In the update of the change the speed is not written (*v*′ = 0). A ramp from *s*₀ occurs only
-when there was no previous legs motion (the slot was emptied by script mode or a global motion, or at spawning) or
-the previous playback had not yet fully faded in.
+The weight *a* of step 1 is that of the previous legs playback, the one the slot held before step 2 started the new
+one; the weight of step 3 is that of the slot's current playback [B34, B44]. So:
+
+- In the update in which the legs motion changes, *v*′ = 0 and the movement's speed is not written (left to CH-10).
+- When the previous legs playback had reached full weight (*a* = 1, TC1 4.2), step 1 makes *s*₀ = *s*₁: from the next
+  update on the speed is the new target at once, whatever the new playback's weight; there is no ramp.
+- A ramp occurs only when the previous playback was still fading in (*a* < 1: *s*₀ moves only part of the way) or
+  when there was no previous legs motion (the slot was empty: at spawning, or emptied by script mode or a global
+  motion, 3.3), so that step 1 does not apply and *s*₀ keeps its earlier value. Then the speed moves from *s*₀ to
+  *s*₁ as the new playback's weight rises from 1e−7 (TC1 4.2: by accrue · Δ per update) [B34, B44].
+- While the legs motion stays the same, the speed is *s*₀ + (*s*₁ − *s*₀) · *a* of the current playback; a restart of
+  the same motion (after its end, 3.4) gives a new playback of weight 1e−7, so where *s*₀ ≠ *s*₁ the speed drops to
+  about *s*₀ and rises again.
+  **Disputed in review:** this holds only while |*s*₀| ≥ 1e−7; with *s*₀ = 0 (for example a ramp from a slot emptied
+  by script mode or a global motion after still legs, which left *s*₀ = 0) step 4 writes nothing in the update of the restart, so the speed is left to
+  CH-10 there rather than dropped to about 0.
+- Still legs set *s*₀ = *s*₁ = 0, so *v*′ = 0 and the speed is left to CH-10.
+
+The hand-over runs only in the normal mode (3.3 step 4).
 
 ## 8. Script animations (static)
 
@@ -389,12 +438,18 @@ motions afresh (fading the script motion out, TC1 3.3). `clear_animations()` its
 
 At the end notification of the script slot's playback: if the slot holds a motion, the queue is not empty and its front
 entry's motion is the slot's motion, the front entry is removed and the script slot emptied; in every case the end is
-marked, so callback 29 is called at the next update (3.3 step 1) [B37]. So a queue of motions plays them one after the
-other, each started at the update after the previous one ended; the same motion twice in a row plays twice.
-**Disputed in review:** when the end is found by the tracks update of 3.3 step 2 (which runs in every update while
-the queue is not empty and callback 29 is set, as with the scripts of section 11), the next entry starts in step 3
-of that same update; only callback 29 waits for the next update. Which tracks update finds the end first in a frame
-is **believed** to be this one.
+marked, so callback 29 is called at the next step 1 of the motion update (3.3) [B37]. So a queue of motions plays them one after the
+other; the same motion twice in a row plays twice (the emptied slot starts it again, 3.1).
+
+When the next entry starts: at step 3 of the first motion update after the tracks update that found the end (TC1
+5.2: the notification is called inside the tracks update) [B8, B11, B37]. While the queue is not empty and
+callback 29 is set (as with the scripts of section 11), every motion update runs the tracks update in step 2,
+before step 3 (3.3), so the next entry starts in the same motion update in which the end is reached; callback 29
+is called at step 1 of the following update [B8, B45]. If a tracks update of the same model already ran earlier in the frame at the same `time_global()` (TC1 4.1: the second
+one does nothing), that earlier one found the end; the next entry still starts in step 3 of this motion update, and
+callback 29 is then called in step 1 of this same update. Whether any tracks update of the stalker's model runs
+before its motion update in a frame is **unestablished** (TC1 4.1). Without callback 29 set and with no functions
+registered on the slots, step 2 does not run, and the end is found by whatever tracks update comes next (TC1 4.1).
 
 ## 9. Steps (static, measured)
 
@@ -442,13 +497,22 @@ state manager is locked [K7].
 
 ### 11.2 Poses (`state_mgr_animstate`)
 
-Poses: `stand`, `sit`, `sit_knee`, `sit_ass`, `sleep` [K3]. Changing to pose *q*: `clear_animations()`; the transfer
-motions from the current pose to *q* are queued (the `lazy` variant when it exists and the stalker has neither a best
-enemy nor a best danger, otherwise `nrm`), then *q*'s idle motion (`sit_0_idle_0`, `sit_1_idle_0`, `sit_2_idle_0`,
-`sleep_idle_0`; `stand` has none); the pose is `busy`. At each update a busy pose becomes *q* when `animation_count()`
-is at most 1 (when *q* has an idle motion) or 0 (otherwise) [K3]. The pose's idle can be queued again on request
-(`add_idle_animation`). From `stand` to `sit_knee` the motions are `idle_0_to_sit_1`, `sit_1_idle_0`; back,
+Poses: `stand`, `sit`, `sit_knee`, `sit_ass`, `sleep`, `wounded`, `wounded_heavy` [K3, K8]. Changing to pose *q*:
+`clear_animations()`; the transfer motions listed from the current pose to *q* are queued (the `lazy` variant when it
+exists and the stalker has neither a best enemy nor a best danger, otherwise `nrm`), then *q*'s idle motion
+(`sit_0_idle_0`, `sit_1_idle_0`, `sit_2_idle_0`, `sleep_idle_0`; `stand`, `wounded` and `wounded_heavy` have none);
+the pose is `busy`. At each update a busy pose becomes *q* when `animation_count()` is at most 1 (when *q* has an idle
+motion) or 0 (otherwise) [K3]. The pose's idle can be queued again on request (`add_idle_animation`; nothing while the
+pose is `busy` or has no idle). From `stand` to `sit_knee` the motions are `idle_0_to_sit_1`, `sit_1_idle_0`; back,
 `sit_1_to_idle_0` or the lazy `sit_1_lazy_idle_0`.
+
+Transfer motions are listed only between `stand`, `sit`, `sit_knee`, `sit_ass` and `sleep` (not from a pose to itself)
+[K8]. When none is listed from the current pose to *q*, only *q*'s idle is queued, if it has one. So a change to
+`wounded` or `wounded_heavy` queues nothing and settles at the first update after it (count 0), and a change from
+them queues only the new pose's idle; a change requested while the pose is `busy` finds no transfer motions either
+(only *q*'s idle). The state manager's planner requests pose changes only while it is not locked (11.1), so not while
+the pose is `busy`; the case arises only for another caller of the pose change (**believed** none in the shipped
+scripts: no other caller was found) [K7, K8].
 
 ### 11.3 State animations (`state_mgr_animation`, `state_mgr_animation_list`)
 
@@ -472,14 +536,29 @@ Setting state animation *x* (from current *y*) [K5]:
 At each update: pending attach and detach requests are applied; a `_new` or `_wait` state settles when
 `animation_count()` is at most 1 (when *x* or the pose has an idle motion) or 0; a settled state follows level changes
 (up: `clear_animations()`, the `into` motions of the new levels and their `into_music` sound, the new level's idle,
-`_wait`; down: `clear_animations()`, `out` motions, the idle of the new level, `_wait`; **Disputed in review:** the
-loop over the levels left counts upward from the current level to the new level + 1, so `out` motions are queued
-only for a drop of one level, none for a drop of two or more) and plays random motions: at
-the first update after settling, and afterwards when `time_global()` − start > idle, with
+`_wait`; down: `clear_animations()`, the `out` motions of the level left, the idle of the new level (the state's own
+idle for level 0), `_wait`) and plays random motions [K5, K9]. Going down from level *l* to level *n* < *l*, the `out`
+motions are those of level *l* only when *n* = *l* − 1; for a drop of two levels or more no `out` motions are queued
+(the loop over the levels left counts upward from *l* to *n* + 1, so it runs only when *l* = *n* + 1) [K9].
+
+Random motions play at the first update after settling, and afterwards when `time_global()` − start > idle, with
 idle = (random(`maxidle`) + `sumidle`) · 1000 ms drawn at the start; a random motion plays (always the first time,
-otherwise when random(100) < `rnd`) by `clear_animations()`, queueing one of `rnd` (not the one chosen last when there
-are several), then the idle, and `_wait` [K5]. Random motions wait while a synchronized sound plays and while the state
-manager's animation and weapon evaluators do not hold [K5].
+otherwise when random(100) < `rnd`) by `clear_animations()`, queueing one entry of `rnd`, then the idle, and `_wait`
+[K5]. The entry: with *n* = 1 entries, the first (the memory is not changed); with *n* > 1, when no entry was
+remembered, random(*n*); otherwise *r* = random(*n* − 1), plus 1 when *r* ≥ the remembered index; the index chosen is
+remembered [K5, K11]. So the remembered entry is not repeated when its index is at most *n*, and with a remembered
+index above *n* the last entry is the one left out. The memory belongs to the stalker's state animation manager and
+is kept across state animations: setting a state animation does not reset it [K11]. Random motions wait while a
+synchronized sound plays and while the state manager's animation and weapon evaluators do not hold [K5].
+
+**Reset.** A state animation set with reset (the state manager's reset action: a state of `state_lib` marked `reset`
+was requested and the state manager's current state is the requested one) [K10]: after step 4's `into` motions and before the idle, the callback's
+start time is cleared and the random-motion routine is called with the state animation's name in place of its entry
+and 100 in place of "must play". The routine first tests the animation and weapon evaluators. The reset action runs
+only while the animation evaluator is false (its precondition), and nothing between the planner's evaluation and the
+action's start changes what that evaluator reads (**believed**: W 6.3 starts the action in the same planner update),
+so the routine returns at that test and queues nothing [K10]. Were the test passed, the routine would fail on the name
+(a script error: the name has no `prop` field) [K10].
 
 The callback 29 function takes the first tied entry: a placeholder is dropped; a table is carried out (attach or
 detach marked for the next update, sound played, hit dealt, function called) and dropped [K5].
@@ -495,10 +574,9 @@ notifies 1/30 s earlier (TC1 4.2) [D7, D8, D10].
 
 1. **Walking in.** Free, walking, standing, its weapon strapped or no weapon: legs `norm_walk_fwd_1` (power 0.2 steps
    at 0.2 and 0.65 of its 1.334 s), torso `norm_torso_0_walk_1` kept in time with the legs (3.6), head `head_idle_0`
-   (or `head_talk_0` while it speaks). At the change from the in-place legs the speed rises from 0 to the free walk
-   speed as `norm_walk_fwd_1` fades in (accrue 1.5, about 0.44 s) (7.4). **Disputed in review:** coming from
-   in-place legs at full weight, *s*₀ becomes the free walk speed at the change, so the speed is the free walk speed
-   from the next update on, with no ramp (see the mark in 7.4).
+   (or `head_talk_0` while it speaks). Coming from in-place legs that have reached full weight, there is no ramp
+   (7.4): in the update of the change the legs leave the speed to CH-10, and from the next update on it is the free
+   walk speed.
 2. **Standing at the fire.** Still and free: legs `norm_idle_1`, torso `norm_torso_0_idle_1`; when its head is turned
    more than π/6 from its body, it turns with `norm_turn_left_1` or `norm_turn_right_1` (0.834 s each, restarted while
    turning) toward the head's target (7.3).
@@ -531,18 +609,24 @@ notifies 1/30 s earlier (TC1 4.2) [D7, D8, D10].
   [B29 – B34]; `crouch_type` [B35]; the queue [B36 – B38]; steps [B39, B40].
 - Data: configuration and step table [D1, D2]; models and lists [D3 – D6]; the example's motions [D7, D8, D10];
   constants [D9]. Scripts [K1 – K7]. Spawning [B41].
+- Set-up gates and empty slots [B42, B43]; the weights of the speed hand-over [B44]; the order of the tracks update
+  and the script slot [B45]; the other models' motion files and their lists [D11, D12] (`combos.py`); poses, level
+  drops, reset and the random-motion memory [K8 – K11].
 
 ## 14. Unestablished and believed
 
 - When the body state is 2 (1); the source of *v* and the yaw convention of ψ, left and right (1, 7.2); what plays
-  for an element beyond a list's end (2.3); further conditions of the set-up and of the update's call (3.1, 3.2;
-  believed once per frame).
+  for an element beyond a list's end (2.3); the further condition of the set-up and further conditions of the
+  update's call (3.1, 3.2; believed once per frame); whether another tracks update of the model runs before the
+  motion update in a frame (8.3).
 - Who registers functions on the slots (3.5); the meaning of the weapon, missile and object-handler state numbers and
   of the reload kind (6.3 – 6.5, CH-20); the critical-wound value and weights and the case without an active item
   (4, CH-21); the sight's turning flag (7.3).
 - Flag *a* believed unused, flag *b*'s motion controller not covered (8.2); the lists not read (2.2) believed unread.
 - The stalker's own and ground materials and airborne state for steps (9).
-- Whether the guitar music counts as a playing sound for the head (12; CH-25).
+- Whether the guitar music counts as a playing sound for the head (12; CH-25); the reset's call of the random-motion
+  routine believed always to return at its first test, and no caller of a pose change while `busy` believed (11.2,
+  11.3).
 - Everything is static or read from the data and scripts: nothing was observed in the running game.
 
 ## 15. Provenance
@@ -555,19 +639,7 @@ notifies 1/30 s earlier (TC1 4.2) [D7, D8, D10].
 - Analysis: static analysis of `bin\xrGame.dll` (the full headless Ghidra decompilation made for earlier approved
   specifications; read-only headless instruction listings and table reads of the stalker's motion code, its client
   update, the script routine of `add_animation`, the step manager's foot-bone reading); a model of section 2
-  (`lists.py`) run on the novice's model. No debugging or execution; the game was not run.
+  (`lists.py`) run on the novice's model and, with `combos.py`, on the motion-file sequences of all 182 stalker
+  models. No debugging or execution; the game was not run.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
-## Gaps found in review
-
-- The poses `wounded` and `wounded_heavy` of `state_mgr_animstate` (no transfer or idle motions, so they settle at
-  `animation_count()` 0), and a pose change requested while the pose is still `busy` (no transfer motions are found
-  from `busy`, so only the new pose's idle is queued), are not described in 11.2.
-- A state animation set with reset (the state manager's reset action) is not described in 11.3: between `into` and
-  the idle it calls the random-motion routine with the state animation's name instead of its entry (**believed** a
-  script error whenever the routine's evaluator and sound checks let it proceed). Also not in 11.3: the "not the
-  one chosen last" memory of the random motions is kept across state animations, not reset when they change.
-- The motion-file combinations of the stalker models (the files they list after `stalker_animation`: the
-  critical-hit groups, `soldiers_animation`, `bandits_animation`, `zombie_animation`, `exoskeleton_animation`,
-  `ucheniy`, `stalker_drunk`, `zombie_wounded`) and which list names those files add or override are not surveyed
-  (2.3 covers only the novices' models).
