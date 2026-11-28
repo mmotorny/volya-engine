@@ -27,6 +27,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::attached_items::{self, AttachedItems, Holder, Holdings, ItemSection, ShownItem};
 use crate::characters::{self, Characters};
 use crate::controls::Controls;
 use crate::core::artefacts::{
@@ -451,8 +452,11 @@ pub struct LevelScreen {
     motions: crate::level_motions::LevelMotions,
     /// The traders' motion channels (scripted-motion-channels.md).
     motion_channels: crate::level_motion_channels::LevelMotionChannels,
-    /// Instance of each object id with a loaded visual.
+    /// Instance of each object id with a loaded visual, but the items
+    /// shown on their holders.
     instances: HashMap<u16, usize>,
+    /// The stalkers' items shown on them (character-items.md 8).
+    attached_items: AttachedItems,
     /// The level's particle objects: the effects of `level.ps_static`
     /// (level-placed-effects.md), the zones' idle effects
     /// (zone-idle-effects.md) and the weather's ambient effect
@@ -1188,6 +1192,42 @@ fn come_online_at_start(
     Ok(())
 }
 
+/// The stalkers' items shown on them (character-items.md 8), once their
+/// models are loaded: each of `carried` spawned with a model, and each
+/// stalker of `level_objects` with a model and a list (8.1).
+fn shown_items(
+    system: &Config,
+    level_objects: &[objects::LevelObject],
+    carried: Vec<(objects::LevelObject, ItemSection)>,
+    spawned: &objects::Spawned,
+) -> AttachedItems {
+    let instance: HashMap<u16, usize> = (spawned.instances.iter().enumerate())
+        .map(|(k, i)| (i.id, k))
+        .collect();
+    let items = (carried.into_iter())
+        .filter_map(|(o, attachment)| {
+            let item = ShownItem {
+                instance: *instance.get(&o.id)?,
+                section: o.record.header.section.to_string(),
+                attachment,
+            };
+            Some((o.id, item))
+        })
+        .collect();
+    let holders = (level_objects.iter())
+        .filter(|o| o.record.kind() == record::Kind::Stalker)
+        .filter_map(|o| {
+            let list = attached_items::holder_list(system, o.record.header.section.as_str());
+            let holder = Holder {
+                instance: *instance.get(&o.id)?,
+                list,
+            };
+            (!holder.list.is_empty()).then_some((o.id, holder))
+        })
+        .collect();
+    AttachedItems::new(items, holders)
+}
+
 fn first_switch_pass(
     tree: &dyn Vfs,
     data: &GameData,
@@ -1620,6 +1660,11 @@ pub struct NewGameLoad {
     info_portions: Option<SharedInfoPortions>,
     /// The objects whose visuals the level loads.
     level_objects: Vec<objects::LevelObject>,
+    /// The items the stalkers of `level_objects` may show
+    /// ([`attached_items::carried_items`]), whose visuals it loads too.
+    carried_items: Vec<(objects::LevelObject, ItemSection)>,
+    /// Those of them with a model and their holders, once loaded.
+    attached_items: Option<AttachedItems>,
     spawned: Option<objects::Spawned>,
     /// Keeps each chunk of the objects' own geometry as it is made
     /// ([`NewGameLoad::keep_geometry_with`]); without it the chunks wait
@@ -1928,7 +1973,9 @@ impl NewGameLoad {
         let physics = shared.borrow();
         let collision = earlier(self.collision.as_ref(), "level.cform")?;
         let doors = earlier(self.doors.as_ref(), "objects")?;
+        let shown = earlier(self.attached_items.as_ref(), "objects")?;
         let models: HashMap<u16, usize> = (spawned.instances.iter())
+            .filter(|i| !shown.holds(i.id))
             .map(|i| (i.id, i.model))
             .collect();
         let no_id = crate::core::simulation::NO_ID;
@@ -2369,6 +2416,11 @@ impl NewGameLoad {
                         pending.push(c);
                     }
                 };
+                // character-items.md 8.5: the models of the items the
+                // stalkers may show, after the level's objects.
+                let carried = std::mem::take(&mut self.carried_items);
+                let own = level_objects.len();
+                level_objects.extend(carried.iter().map(|(o, _)| o.clone()));
                 let mut spawned = objects::spawn(
                     tree,
                     data,
@@ -2377,7 +2429,10 @@ impl NewGameLoad {
                     self.prefetched.as_ref(),
                     &mut keep,
                 )?;
+                level_objects.truncate(own);
                 spawned.chunks = pending;
+                self.attached_items =
+                    Some(shown_items(&data.system, &level_objects, carried, &spawned));
                 // The objects online at the start come online
                 // (object-visual-and-transform.md 4.1): with their models'
                 // spheres, before anything below places them.
@@ -2686,6 +2741,9 @@ impl NewGameLoad {
                 let clock = earlier(self.clock.as_ref(), "game clock")?;
                 first_switch_pass(tree, data, sim, character, &dir, clock)?;
                 self.level_objects = objects::level_objects(sim);
+                // character-items.md 8: the items the stalkers may show.
+                self.carried_items =
+                    attached_items::carried_items(sim, &data.system, &self.level_objects);
                 let collision = earlier(self.collision.as_mut(), "level.cform")?;
                 let collision = Arc::get_mut(collision)
                     .ok_or_else(|| invalid("the collision world is shared before its ladders"))?;
@@ -2778,10 +2836,12 @@ impl NewGameLoad {
             .iter()
             .map(|i| i.online.then_some(i.transform))
             .collect();
+        let attached_items = earlier(self.attached_items, "objects")?;
         let instances = objects
             .instances
             .iter()
             .enumerate()
+            .filter(|(_, i)| !attached_items.holds(i.id))
             .map(|(k, i)| (i.id, k))
             .collect();
         let motion_channels = crate::level_motion_channels::LevelMotionChannels::new(&objects);
@@ -2878,6 +2938,7 @@ impl NewGameLoad {
             motion_channels,
             placements: Arc::new(placements),
             instances,
+            attached_items,
             effects,
             view_size: std::cell::Cell::new((1024, 768)),
             supersample: 1,
@@ -3190,6 +3251,9 @@ impl LevelScreen {
         // Their notifications reach the traders' motion channels, whose
         // check follows (scripted-motion-channels.md 4.1).
         (self.motion_channels).tracks_updated(self.motions.take_notifications());
+        // character-items.md 8.5: the attached items placed as their
+        // holders' bones were computed.
+        self.place_attached_items();
         // The placed effects on the world clock, which is the global clock
         // (autosave-timing.md 1, sound-weather-ambient.md 3.1): it stands
         // still while the pause is on (the menu, a `pause_state on` intro
@@ -4138,6 +4202,7 @@ impl LevelScreen {
         }
         for &id in changes.offline.iter().chain(&changes.removed) {
             self.lights.object_offline(id);
+            self.attached_items.holder_gone(id);
             if let Some(&k) = self.instances.get(&id) {
                 self.motion_channels.destroyed(k);
             }
@@ -4419,6 +4484,50 @@ impl LevelScreen {
                     transform: i.transform,
                 };
                 self.motions.attach_head_callback(k, callback);
+            }
+        }
+    }
+
+    /// The stalkers' items shown on them (character-items.md 8).
+    pub fn attached_items(&self) -> &AttachedItems {
+        &self.attached_items
+    }
+
+    /// What script API S asked of the attached items and what the
+    /// inventories now hold (character-items.md 8.4): each
+    /// `enable_attachable_item` of `enabled` (item, holder, whether
+    /// enabled) in order, then the inventories followed; the items then
+    /// placed.
+    pub fn attach_items(&mut self, enabled: &[(u16, u16, bool)], holdings: &mut dyn Holdings) {
+        let objects = &self.world.objects;
+        let bone = |k: usize, name: &str| {
+            let model = &objects.models[objects.instances[k].model];
+            (0..model.bone_count()).find(|&b| objects.names.get(model.bone_name(b)) == name)
+        };
+        for &(item, holder, on) in enabled {
+            (self.attached_items).enable(item, holder, on, holdings, &bone);
+        }
+        self.attached_items.follow(holdings, &bone);
+        self.place_attached_items();
+    }
+
+    /// Places each attached item at *O* · *B* · *X* (character-items.md
+    /// 8.5): *B* its holder's bone as last posed (at rest while the holder
+    /// plays no motion), *X* where the holder is drawn; the others are not
+    /// drawn.
+    fn place_attached_items(&mut self) {
+        let objects = &self.world.objects;
+        let placements = &self.placements;
+        let placement = |k: usize| placements.get(k).copied().flatten();
+        let pose = |k: usize, b: usize| {
+            let posed = self.motions.bone_poses(k).and_then(|p| p.get(b).copied());
+            posed.unwrap_or_else(|| objects.models[objects.instances[k].model].bind(b))
+        };
+        let placed = self.attached_items.placements(&placement, &pose);
+        if placed.iter().any(|&(k, p)| self.placements[k] != p) {
+            let all = Arc::make_mut(&mut self.placements);
+            for (k, p) in placed {
+                all[k] = p;
             }
         }
     }
@@ -5589,6 +5698,7 @@ impl LevelScreen {
             motions: Default::default(),
             motion_channels: Default::default(),
             instances: HashMap::new(),
+            attached_items: AttachedItems::default(),
             effects: None,
             view_size: std::cell::Cell::new((1024, 768)),
             supersample: 1,

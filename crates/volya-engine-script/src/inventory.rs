@@ -159,6 +159,14 @@ impl Inventories {
         self.marks.get(&id).copied().unwrap_or_default()
     }
 
+    /// Clears item `id`'s enabled flag, as the engine does once it has left
+    /// its holder (docs/behavior/character-items.md 8.4).
+    pub fn disable_attachable(&mut self, id: u16) {
+        if let Some(m) = self.marks.get_mut(&id) {
+            m.enabled = false;
+        }
+    }
+
     /// The events not yet taken, oldest first.
     pub fn events(&self) -> &[Event] {
         &self.events

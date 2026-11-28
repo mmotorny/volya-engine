@@ -89,6 +89,13 @@ The library (`volya-engine-formats::particles`, docs/formats/particles-xr.md) an
 - The settings `r1_dlights`, `r1_dlights_clip`, `r2_sun_lumscale` and `r1_glows_per_frame` are read from the console each frame.
 - The glows' occlusion ray's static part tests every `level.cform` triangle, `materials\fake` too (glows.md 5.1). What the lamps and glows leave: #347.
 
+## Items shown on characters
+
+docs/behavior/character-items.md 8 (#1187).
+
+- `volya-engine::attached_items::AttachedItems`, owned by `LevelScreen`, keeps each stalker's `attachable_items` and the items attached to it, in order. The models of the items a stalker carries at the load whose sections it lists (`attached_items::carried_items`; torches left to #223) load with the level's objects as instances of their own, each its section's `visual`, kept out of the level's id → instance map (nothing else places, picks or spawns them) and drawn only while attached, at *O* · *B* · *X* from the holder's bone as `LevelMotions` last posed it (at rest without a motion) and the holder's placement, recomputed after the motions each update; an item made in play shows nothing (visuals load with the level).
+- Script API S's attachment events reach it from `scripts::inventory_frame` (`LevelScreen::attach_items`), with the scripts' inventories as its `Holdings`: an item that leaves its holder is detached and its flag cleared, one taken or put into a slot is tried, one moved to the backpack detached; a holder going offline drops its items. The trader and the player hold none here (the trader accepts nothing; the player's drawing is not CH-6's); the corpse-model flag is #1238.
+
 ## Torches
 
 docs/behavior/torch.md (#360).

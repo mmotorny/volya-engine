@@ -14,9 +14,10 @@ use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::attached_items::Holdings;
 use crate::characters::Characters;
 use crate::core::character::hits::{Hit, HitType};
-use crate::core::character::inventory::ItemState;
+use crate::core::character::inventory::{ItemState, Place};
 use crate::core::collision::CollisionWorld;
 use crate::core::collision::geometry::{self, Vec3};
 use crate::core::config::{self, Config, PathAliases};
@@ -40,7 +41,7 @@ use crate::script::game_object::physics::{LevelQueries, PhysicsEvent, PhysicsShe
 use crate::script::game_object::{
     EngineState, Event, GameObjects, Kinds, ObjectClass, Physics, Restrictor, SpawnData, Visual,
 };
-use crate::script::inventory::Event as InventoryEvent;
+use crate::script::inventory::{Event as InventoryEvent, Inventories};
 use crate::script::level::{Level, LevelEvent, LevelVertices};
 use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
@@ -533,13 +534,16 @@ fn apply_simulation_events(scripts: &GameScripts, level: &mut LevelScreen) {
 /// server (5.1, `use` 9.2) and the rest acted on, in order: event 8
 /// destroys the object (released at once, as K's `release`), event 32
 /// stores a stalker's or trader's money in its record (6), and the
-/// player's `use_object` callback is raised (5.5 step 3, spec O 4, id 15).
-/// A script error is fatal.
+/// player's `use_object` callback is raised (5.5 step 3, spec O 4, id 15);
+/// then the attachments asked for and the inventories as they stand reach
+/// the items shown on their holders (character-items.md 8.4). A script
+/// error is fatal.
 fn inventory_frame(scripts: &mut GameScripts, level: &mut LevelScreen) -> Result<(), Error> {
     scripts.scripts().update_inventories()?;
     // TODO(#1190): a served take or drop changes the item's record parent,
     // a dropped item lies in the world, and event 29 puts it at its
     // position (5.2).
+    let mut enabled = Vec::new();
     for event in scripts.scripts().serve_inventory_events()? {
         match event {
             InventoryEvent::Destroy { object } => level.release_object(object),
@@ -558,15 +562,42 @@ fn inventory_frame(scripts: &mut GameScripts, level: &mut LevelScreen) -> Result
             // conditions, the player's character state's or another
             // character's.
             InventoryEvent::Eat { .. } => {}
-            // TODO(#1187): the item shown on its holder.
-            InventoryEvent::Attachment { .. } => {}
+            InventoryEvent::Attachment {
+                item,
+                holder,
+                attached,
+            } => enabled.push((item, holder, attached)),
             InventoryEvent::Money { .. }
             | InventoryEvent::PutAt { .. }
             | InventoryEvent::Take { .. }
             | InventoryEvent::Drop { .. } => {}
         }
     }
+    // character-items.md 8.4: the attachments asked for, then the items
+    // shown as the inventories now hold them.
+    let inventories = scripts.objects().borrow().inventories();
+    level.attach_items(&enabled, &mut ScriptHoldings(&mut inventories.borrow_mut()));
     Ok(())
+}
+
+/// The inventories as the attached items read them (script API S 2.2,
+/// 5.4, 8.1).
+struct ScriptHoldings<'a>(&'a mut Inventories);
+
+impl Holdings for ScriptHoldings<'_> {
+    fn held(&self, item: u16) -> Option<(u16, Place)> {
+        let holder = self.0.holder(item)?;
+        Some((holder, self.0.item(item)?.place))
+    }
+    fn enabled(&self, item: u16) -> bool {
+        self.0.marks(item).enabled
+    }
+    fn dropped(&self, item: u16) -> bool {
+        self.0.marks(item).dropped
+    }
+    fn disable(&mut self, item: u16) {
+        self.0.disable_attachable(item);
+    }
 }
 
 /// Applies what script API N's functions asked of the engine: a phantom's

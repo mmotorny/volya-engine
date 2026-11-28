@@ -53,6 +53,9 @@ pub struct LevelObject {
     /// Online at the start.
     pub online: bool,
     pub record: ObjectRecord,
+    /// The visual it shows when not its record's: a carried item's section
+    /// `visual` (docs/behavior/character-items.md 8.5).
+    pub visual: Option<String>,
 }
 
 /// The objects of `simulation`'s current level whose visuals the level
@@ -73,6 +76,7 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
             index: o.spawn_index.unwrap_or(u32::from(o.id)),
             online: o.online,
             record: o.record.clone(),
+            visual: None,
         })
         .collect()
 }
@@ -87,8 +91,12 @@ pub fn level_objects(simulation: &Simulation) -> Vec<LevelObject> {
 /// block in every kind that has one, so it is not read. A dead body's
 /// `corpse_visual` (`OV` 2, item 4) is not handled: it applies only to
 /// a body with a non-zero death time, and every dead body of the shipped
-/// file has death time 0 (our omission).
+/// file has death time 0 (our omission). [`LevelObject::visual`], when
+/// set, is shown instead.
 pub fn visual_name(object: &LevelObject) -> Option<String> {
+    if let Some(v) = &object.visual {
+        return Some(v.clone());
+    }
     let record = &object.record;
     if record.kind() == Kind::Player {
         return None;

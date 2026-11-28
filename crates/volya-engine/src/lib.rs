@@ -15,6 +15,7 @@ pub use volya_engine_render as render;
 pub use volya_engine_script as script;
 
 pub mod app;
+pub mod attached_items;
 pub mod audio;
 pub mod characters;
 pub mod console_window;
