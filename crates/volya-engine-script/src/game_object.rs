@@ -964,7 +964,18 @@ impl Scripts {
     /// A spawning that fails after making the object destroys it and logs
     /// `! Failed to spawn entity '<section>'` (L 5.1).
     pub fn spawn(&mut self, client: EnginePart, data: SpawnData) -> Result<bool, OverrideFailure> {
-        self.spawn_with(client, data, None)
+        self.spawn_with(client, data, None, true)
+    }
+
+    /// As [`Scripts::spawn`], without the binder's part of spawning: no
+    /// binder is made or called. FAKE(#1121): only the app's stand-in for
+    /// an object whose binder can't run yet calls it.
+    pub fn spawn_unbound(
+        &mut self,
+        client: EnginePart,
+        data: SpawnData,
+    ) -> Result<bool, OverrideFailure> {
+        self.spawn_with(client, data, None, false)
     }
 
     /// [`Scripts::spawn`] from spawn data carrying a client-data block
@@ -977,7 +988,7 @@ impl Scripts {
         data: SpawnData,
         reader: Value,
     ) -> Result<bool, OverrideFailure> {
-        self.spawn_with(client, data, Some(reader))
+        self.spawn_with(client, data, Some(reader), true)
     }
 
     fn spawn_with(
@@ -985,6 +996,7 @@ impl Scripts {
         client: EnginePart,
         data: SpawnData,
         reader: Option<Value>,
+        bind: bool,
     ) -> Result<bool, OverrideFailure> {
         let objects = self.game_objects()?;
         let token = objects.borrow_mut().pend(data);
@@ -1006,7 +1018,7 @@ impl Scripts {
             return Ok(ok);
         };
         self.finish_spawn(id)?;
-        let bound = self.spawn_binder(id, data, reader, None)?;
+        let bound = !bind || self.spawn_binder(id, data, reader, None)?;
         let class = objects.borrow().get(id).map(|o| o.class);
         if class != Some(ObjectClass::Named("CPhysicObject")) {
             // TODO(#1019): gap 1, the simplest reading: the other client
@@ -1072,6 +1084,32 @@ impl Scripts {
         let handle = self.finish_spawn(id)?;
         self.spawn_binder(id, Value::Number(f64::from(token)), None, binding)?;
         Ok(handle)
+    }
+
+    /// As [`Scripts::spawn_engine_object`], without the binder's part of
+    /// spawning: no binder is made or called. FAKE(#1121): only the app's
+    /// stand-in for an object whose binder can't run yet calls it.
+    pub fn spawn_engine_object_unbound(
+        &mut self,
+        class: ObjectClass,
+        data: SpawnData,
+    ) -> Result<EnginePart, OverrideFailure> {
+        let objects = self.game_objects()?;
+        let id = {
+            let mut o = objects.borrow_mut();
+            let token = o.pend(data);
+            let id = o.spawn_pending(token, class, &self.factory, None);
+            o.pending.remove(&token);
+            id
+        };
+        let Some(id) = id else {
+            return Err(Error {
+                kind: ErrorKind::Api,
+                message: "an object of that id exists".into(),
+            }
+            .into());
+        };
+        Ok(self.finish_spawn(id)?)
     }
 
     /// The handle and `spawn_ini()` object of a new engine object. The

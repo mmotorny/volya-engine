@@ -127,11 +127,11 @@ fn layout_of(talk: &str) -> Layout {
     .unwrap()
 }
 
-fn window_of(talk: &str) -> TalkWindow {
+pub(crate) fn window_of(talk: &str) -> TalkWindow {
     TalkWindow::new(layout_of(talk), measure())
 }
 
-fn hero() -> Character {
+pub(crate) fn hero() -> Character {
     Character {
         id: 0,
         name: "Hero".into(),
@@ -145,7 +145,7 @@ fn hero() -> Character {
     }
 }
 
-fn wolf() -> Character {
+pub(crate) fn wolf() -> Character {
     Character {
         id: 7,
         name: "Wolf".into(),

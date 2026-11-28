@@ -389,7 +389,7 @@ pub fn wrap(a: f32) -> f32 {
 }
 
 /// A difference brought into [−π, π] by adding or subtracting 2π once.
-fn difference(d: f32) -> f32 {
+pub fn difference(d: f32) -> f32 {
     if d > PI {
         d - TAU
     } else if d < -PI {
@@ -402,10 +402,17 @@ fn difference(d: f32) -> f32 {
 /// One step of the smoothing of 7.4 step 2: `h` toward `target` over a
 /// frame of `dt` seconds, kept within R of it.
 pub fn smooth(h: f32, target: f32, dt: f32) -> f32 {
+    smooth_with(h, target, dt, [SPEED_MIN, SPEED_MAX, RANGE])
+}
+
+/// The smoothing law of 7.4 step 2 with its speeds v_min and v_max (per
+/// second) and its range R as `[v_min, v_max, R]` (docs/behavior/talk.md
+/// 4 uses it with its own).
+pub fn smooth_with(h: f32, target: f32, dt: f32, [v_min, v_max, range]: [f32; 3]) -> f32 {
     let mut h = wrap(h);
     let t = wrap(target);
     let d = difference(t - h);
-    let s = SPEED_MIN + ((SPEED_MAX - SPEED_MIN) / RANGE * d.abs()).abs();
+    let s = v_min + ((v_max - v_min) / range * d.abs()).abs();
     if d.abs() >= 1e-7 {
         h += d.signum() * d.abs().min(s * dt);
         if h < 0.0 {
@@ -416,10 +423,10 @@ pub fn smooth(h: f32, target: f32, dt: f32) -> f32 {
     }
     h = wrap(h);
     let e = difference(h - t);
-    if e < -RANGE {
-        h -= e + RANGE;
-    } else if e > RANGE {
-        h -= e - RANGE;
+    if e < -range {
+        h -= e + range;
+    } else if e > range {
+        h -= e - range;
     }
     h
 }

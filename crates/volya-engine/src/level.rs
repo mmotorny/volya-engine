@@ -44,6 +44,7 @@ use crate::core::collision::{CollisionWorld, geometry};
 use crate::core::config;
 use crate::core::config::Config;
 use crate::core::detector::DetectorSection;
+use crate::core::dialogs::conditions::DialogFunctions;
 use crate::core::file_cache::{self, CachedFile};
 use crate::core::info_portions::InfoPortions;
 use crate::core::input::Input;
@@ -65,6 +66,7 @@ use crate::core::sound::ambient::AmbientParticles;
 use crate::core::sound::player_body::{
     BodyEvent, BodySoundNames, BodyState, DEATHS, ShockEffector,
 };
+use crate::core::talk::TalkSides;
 use crate::core::vfs::{self, Vfs};
 use crate::core::visibility::{Frustum, Sectors};
 use crate::core::weather::{Environment, Weather, texture_name as weather_texture_name};
@@ -78,6 +80,7 @@ use crate::level_lights::{self, GlowShader, LevelLights, LightCamera, LightsData
 use crate::level_physics::{LevelPhysics, PhysicsReport, PhysicsSettings};
 use crate::level_sound::ZoneSoundNames;
 use crate::level_sound::{LevelSoundData, SoundInputs};
+use crate::level_talk::{self, Candidate, LevelTalk, TalkReport};
 use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade_into};
 use crate::loading_screen::Stage;
 use crate::objects::{self, LevelObjects, ObjectsReport};
@@ -522,6 +525,8 @@ pub struct LevelScreen {
     /// `st_client_spawning`, shared with script API Y's members
     /// ([`crate::level_physics::ScriptWorld`]).
     physics: Rc<RefCell<LevelPhysics>>,
+    /// The characters' talks (docs/behavior/talk.md).
+    talk: LevelTalk,
 }
 
 /// What the engine interface reports.
@@ -561,6 +566,11 @@ pub struct LevelState {
     pub doors: Vec<DoorReport>,
     /// The physics world (physics-world.md).
     pub physics: PhysicsReport,
+    /// The talks (docs/behavior/talk.md).
+    pub talk: TalkReport,
+    /// The information portions the player character holds, in list order
+    /// (info-portions.md 2).
+    pub portions: Vec<String>,
 }
 
 /// The level's placed effects as the engine interface reports them.
@@ -1611,6 +1621,9 @@ pub struct NewGameLoad {
     /// The doors under the door scheme ([`LevelDoors`]), found with the
     /// objects.
     doors: Option<LevelDoors>,
+    /// The characters' talks (docs/behavior/talk.md), made with the
+    /// objects.
+    talk: Option<LevelTalk>,
     /// The console's physics values as the load runs.
     physics_settings: PhysicsSettings,
     /// The physics world, made under `st_client_spawning`, shared with
@@ -2238,6 +2251,7 @@ impl NewGameLoad {
                 )?;
                 let doors = LevelDoors::load(tree, data, &self.level_objects, &physics.borrow())?;
                 self.doors = Some(doors);
+                self.talk = Some(LevelTalk::new(data)?);
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
@@ -2603,6 +2617,7 @@ impl NewGameLoad {
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
         let mut doors = earlier(self.doors, "objects")?;
+        let talk = earlier(self.talk, "objects")?;
         let physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
@@ -2749,6 +2764,7 @@ impl NewGameLoad {
             difficulty: None,
             doors,
             physics,
+            talk,
         };
         screen.torches_frame(0.0);
         screen.update_view();
@@ -2944,8 +2960,27 @@ impl LevelScreen {
         // M 6.3; the door scheme's use callback, use-action.md 4.1).
         let view = self.player.view();
         self.doors.pick(view.eye, view.direction, now);
-        if self.controls.use_pressed(input) {
-            self.used = self.doors.picked_object().or(self.used);
+        let candidates = self.talk_candidates();
+        self.talk.pick(view.eye, view.direction, &candidates);
+        // use-action.md 1.2: the press while the player character is alive
+        // (while it talks the talk screen takes the input); 3: the object
+        // under the crosshair is the nearer picked, a door (trader-door.md
+        // 2.5) or a character (6.2), used through the scripts (script API M
+        // 6.3), which offer it the talk (script API R 4.2).
+        let health = (self.character.as_ref()).map_or(0.0, |c| c.conditions.health);
+        if self.controls.use_pressed(input) && health > 0.0 {
+            let door = self.doors.picked_distance();
+            match self.talk.picked() {
+                Some((id, t)) if door.is_none_or(|d| t < d) => {
+                    if candidates
+                        .iter()
+                        .any(|c| c.id == id && LevelTalk::usable(c))
+                    {
+                        self.used = Some(id);
+                    }
+                }
+                _ => self.used = self.doors.picked_object().or(self.used),
+            }
         }
         self.fall_hit();
         if let Some(c) = &mut self.character {
@@ -3526,6 +3561,201 @@ impl LevelScreen {
             removed,
             ..Changes::default()
         });
+    }
+
+    /// The player character's object id (0 without one).
+    fn player_id(&self) -> u16 {
+        self.character.as_ref().map_or(0, |c| c.owner.id)
+    }
+
+    /// The stalkers and traders online with a model (talk.md conventions):
+    /// the characters the crosshair can pick. Health is the record's; a
+    /// trader's record has none (CH-5, alive and wounded, is not specified:
+    /// our choice, alive).
+    fn talk_candidates(&self) -> Vec<Candidate> {
+        let shared = self.simulation.borrow();
+        let (Some(sim), objects) = (shared.simulation.as_ref(), &self.world.objects) else {
+            return Vec::new();
+        };
+        (objects.instances.iter().enumerate())
+            .filter(|(k, i)| {
+                matches!(i.kind, record::Kind::Stalker | record::Kind::Trader)
+                    && self.placements.get(*k).is_some_and(Option::is_some)
+            })
+            .filter_map(|(_, i)| {
+                let o = sim.object(i.id).filter(|o| o.online)?;
+                Some(Candidate {
+                    id: i.id,
+                    sphere: i.sphere,
+                    position: o.record.header.position,
+                    health: o.record.object.creature().map_or(1.0, |c| c.health),
+                })
+            })
+            .collect()
+    }
+
+    /// Character `id`'s health while it is online with a model.
+    pub fn talk_health(&self, id: u16) -> Option<f32> {
+        (self.talk_candidates().into_iter())
+            .find(|c| c.id == id)
+            .map(|c| c.health)
+    }
+
+    /// The characters' talks (talk.md): the scripts' talk calls reach them.
+    pub fn talk(&self) -> &LevelTalk {
+        &self.talk
+    }
+
+    pub fn talk_mut(&mut self) -> &mut LevelTalk {
+        &mut self.talk
+    }
+
+    /// The talk's set-up with `partner` (talk.md 3 steps 1–2); `None` when
+    /// the player character is not talking or `partner` is no stalker or
+    /// trader.
+    pub fn talk_set_up(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        partner: u16,
+        sides: &dyn TalkSides,
+        functions: &mut dyn DialogFunctions,
+    ) -> io::Result<Option<crate::talk_window::screen::TalkStart>> {
+        let (Some(c), Some(shared)) = (&self.character, &self.info_portions) else {
+            return Ok(None);
+        };
+        // The partner's record, copied: the scripts' functions the set-up
+        // calls reach the simulation too (`alife()`).
+        let (trader, section) = {
+            let sim = self.simulation.borrow();
+            let Some(o) = sim.simulation.as_ref().and_then(|s| s.object(partner)) else {
+                return Ok(None);
+            };
+            let trader = match &o.record.object {
+                record::Object::Stalker(s) => s.trader.clone(),
+                record::Object::Trader(t) => t.trader.clone(),
+                _ => return Ok(None),
+            };
+            (trader, o.record.header.section.to_string())
+        };
+        let trader = &trader;
+        let portions = shared;
+        let player = level_talk::Player {
+            id: c.owner.id,
+            name: &c.profile.character_name,
+            specific_character: &c.profile.specific_character,
+        };
+        let partner = level_talk::Partner {
+            id: partner,
+            trader,
+            section: &section,
+        };
+        let mut story = level_talk::Story {
+            portions,
+            now: self.clock.time(),
+            functions,
+            random: &self.random,
+        };
+        (self.talk).set_up(tree, data, &player, &partner, sides, &mut story)
+    }
+
+    /// The talk window's update of its dialog flow (talk.md 3.3,
+    /// dialog-flow.md 5.1): when marked, the questions' text keys refilled,
+    /// and the lines said on the way.
+    #[allow(clippy::type_complexity)]
+    pub fn talk_refill(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        functions: &mut dyn DialogFunctions,
+    ) -> io::Result<(Option<Vec<String>>, Vec<crate::talk_window::screen::Said>)> {
+        let Some(shared) = &self.info_portions else {
+            return Ok((None, Vec::new()));
+        };
+        let portions = shared;
+        let mut story = level_talk::Story {
+            portions,
+            now: self.clock.time(),
+            functions,
+            random: &self.random,
+        };
+        self.talk.refill(tree, data, &mut story)
+    }
+
+    /// A click on question `index` (talk.md 3.5, dialog-flow.md 5.3); the
+    /// lines said.
+    pub fn talk_click(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        index: usize,
+        functions: &mut dyn DialogFunctions,
+    ) -> io::Result<Vec<crate::talk_window::screen::Said>> {
+        let Some(shared) = &self.info_portions else {
+            return Ok(Vec::new());
+        };
+        let portions = shared;
+        let mut story = level_talk::Story {
+            portions,
+            now: self.clock.time(),
+            functions,
+            random: &self.random,
+        };
+        self.talk.click(tree, data, index, &mut story)
+    }
+
+    /// Marks the talk window's questions for a refill (dialog-flow.md 5.1).
+    pub fn talk_mark_refill(&mut self) {
+        self.talk.mark_refill();
+    }
+
+    /// The talk window hidden (talk.md 5.2).
+    pub fn talk_hidden(&mut self, sides: &mut dyn TalkSides) {
+        let player = self.player_id();
+        self.talk.hidden(sides, player);
+    }
+
+    /// The talk sides synced for the report (talk.md 5.4).
+    pub fn talk_sync(&mut self, sides: &dyn TalkSides) {
+        let player = self.player_id();
+        let mut ids: Vec<u16> = self.talk_candidates().iter().map(|c| c.id).collect();
+        ids.insert(0, player);
+        self.talk.sync(sides, &ids, player);
+    }
+
+    /// Whether the talk window's update closes it (talk.md 5.2) for the
+    /// talk with `partner`, with or without the special mode.
+    pub fn talk_window_closes(
+        &self,
+        sides: &dyn TalkSides,
+        partner: u16,
+        special_mode: bool,
+    ) -> bool {
+        let at = |id: u16| {
+            let sim = self.simulation.borrow();
+            let o = sim.simulation.as_ref()?.object(id).filter(|o| o.online)?;
+            Some(o.record.header.position)
+        };
+        let player = self
+            .character
+            .as_ref()
+            .map(|_| self.player.state().position);
+        let talking = sides.is_talking(self.player_id());
+        LevelTalk::speakers(talking, [player, at(partner)], special_mode).window_closes()
+    }
+
+    /// The player's view turned toward `partner` over `dt` seconds
+    /// (talk.md 4): toward its model's bounding sphere.
+    pub fn talk_turn_camera(&mut self, partner: u16, dt: f32) {
+        let objects = &self.world.objects;
+        let Some(&k) = self.instances.get(&partner) else {
+            return;
+        };
+        let sphere = objects.instances[k].sphere;
+        let a = self.player.angles();
+        let eye = self.player.view().eye;
+        let (yaw, pitch) = crate::core::talk::turn_view(eye, sphere, a.yaw, a.pitch, dt);
+        self.player.turn_camera(yaw, pitch);
     }
 
     /// Gives the player character each of `ids` by a transfer
@@ -4708,6 +4938,11 @@ impl LevelScreen {
             detectors: self.detectors.report(&self.zones),
             doors: self.doors.report(&self.physics.borrow()),
             physics: self.physics.borrow().report(),
+            talk: self.talk.report(),
+            portions: self.info_portions.as_ref().map_or_else(Vec::new, |p| {
+                let p = p.borrow();
+                (p.list(p.player()).iter()).map(|k| k.id.clone()).collect()
+            }),
         }
     }
 
@@ -4951,6 +5186,7 @@ impl LevelScreen {
                 PhysicsSettings::default(),
                 0.0,
             ))),
+            talk: LevelTalk::default(),
         }
     }
 }

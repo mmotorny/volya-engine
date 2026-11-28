@@ -74,6 +74,8 @@ pub struct LevelDoors {
     /// The door the crosshair picks within `take_dist` and the engine
     /// clock when it came under it.
     picked: Option<(usize, u64)>,
+    /// The picked door's distance along the ray.
+    picked_distance: Option<f32>,
     /// The usable parts' hint texts the scripts set (script API P 8), by
     /// object id.
     tip_texts: BTreeMap<u16, String>,
@@ -183,13 +185,20 @@ impl LevelDoors {
         let picked = (self.doors.iter().enumerate())
             .filter_map(|(i, d)| Some((d.pick(eye, dir)?, i)))
             .filter(|&(t, _)| t < self.take_dist)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, i)| i);
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        self.picked_distance = picked.map(|(t, _)| t);
+        let picked = picked.map(|(_, i)| i);
         self.picked = match (self.picked, picked) {
             (Some((was, at)), Some(i)) if was == i => Some((i, at)),
             (_, Some(i)) => Some((i, now)),
             (_, None) => None,
         };
+    }
+
+    /// The picked door's distance along the crosshair's ray: the object
+    /// under the crosshair is the nearest picked (use-action.md 2.1).
+    pub fn picked_distance(&self) -> Option<f32> {
+        self.picked_distance
     }
 
     /// The player's hint id and the engine clock its object came under the

@@ -12,6 +12,7 @@
 //! first [`App::update`]. When the player quits, [`App::quit_requested`]
 //! turns true and the platform returns to its own interface.
 
+use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use crate::console_window::ConsoleWindow;
 use crate::core::audio::Category;
 use crate::core::console::{Console, FatalReport};
 use crate::core::diagnostics;
+use crate::core::dialogs::conditions::DialogFunctions;
 use crate::core::display::DisplayColour;
 use crate::core::file_cache;
 use crate::core::input::{Action, Control, Input, Key};
@@ -50,10 +52,13 @@ use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
 use crate::saved_games::SavedGames;
 use crate::scene::{Scene, Sprite, TextureId};
+use crate::script::dialogs::Event as DialogEvent;
 use crate::script::entry_points::{EngineCall, GameScripts};
 use crate::script::loader::Trees;
 use crate::startup::{MoviePlayer, MovieSequenceState, Startup};
 use crate::statistics_overlay::{FrameTimes, StatisticsOverlay};
+use crate::talk_window::TalkWindow;
+use crate::talk_window::screen::{self as talk_screen, TalkScreen, TalkScreenState};
 use crate::title_menu::{Opening, TitleMenu};
 use volya_engine_formats::pe::{self, Rgba};
 use volya_engine_formats::ui::Resolution;
@@ -120,6 +125,10 @@ enum Phase {
         /// The level's PDA window (docs/behavior/pda-window.md; `None`
         /// only in unit tests of other screens).
         pda: Option<Box<PdaWindow>>,
+        /// The level's talk screen
+        /// (docs/behavior/talk-window-input.md; `None` only in unit tests
+        /// of other screens).
+        talk: Option<Box<TalkScreen>>,
         /// Items the player dropped, released from the inventory: kept
         /// until the world can place them (inventory-screen.md 5.7).
         /// TODO(#111): placed into the level near the character.
@@ -454,6 +463,258 @@ fn pda_keys(data: &GameData, controls: &crate::controls::Controls) -> pda_window
         .map(|a| controls.keys(a)),
         quit: data.quit_keys.clone(),
     }
+}
+
+/// The scripts' dialog functions (docs/behavior/dialog-conditions.md 3,
+/// 4.2), `None` without scripts (unit tests), where calling one fails.
+struct ScriptFunctions<'a>(Option<&'a mut crate::script::loader::Scripts>);
+
+impl DialogFunctions for ScriptFunctions<'_> {
+    fn call_precondition(
+        &mut self,
+        function: &str,
+        first: u16,
+        second: u16,
+        texts: [&str; 3],
+    ) -> io::Result<bool> {
+        let Some(s) = &mut self.0 else {
+            return Err(io::Error::other(format!("no scripts for {function}")));
+        };
+        (s.call_precondition(function, first, second, texts))
+            .map_err(|e| io::Error::other(e.message))
+    }
+
+    fn call_action(
+        &mut self,
+        function: &str,
+        speaker: u16,
+        listener: u16,
+        dialog: &str,
+        phrase: &str,
+    ) -> io::Result<()> {
+        let Some(s) = &mut self.0 else {
+            return Err(io::Error::other(format!("no scripts for {function}")));
+        };
+        (s.call_action(function, speaker, listener, dialog, phrase))
+            .map_err(|e| io::Error::other(e.message))
+    }
+
+    /// TODO(#1063): the script part of receiving a portion; the level drops
+    /// its other portions' events too.
+    fn portion_events(&mut self, _: Vec<crate::core::info_portions::Event>) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The characters' talk sides as script API R keeps them (CH-7), borrowed
+/// only for each question: the scripts' functions borrow them too. Without
+/// scripts (unit tests) nobody talks.
+struct ScriptSides(Option<Rc<RefCell<crate::script::game_object::GameObjects>>>);
+
+impl ScriptSides {
+    fn of(scripts: Option<&GameScripts>) -> Self {
+        Self(scripts.map(|s| Rc::clone(s.objects())))
+    }
+
+    fn talk<R>(
+        &self,
+        id: u16,
+        f: impl FnOnce(&crate::script::dialogs::talk::Talk) -> R,
+    ) -> Option<R> {
+        let objects = self.0.as_ref()?.borrow();
+        objects.get(id)?.owner.as_ref().map(|o| f(&o.talk))
+    }
+
+    /// The scheduled updates of the characters talking (talk.md 5.1), with
+    /// their health; each frame (our choice: how often is not
+    /// established).
+    fn scheduled_updates(&mut self) {
+        let Some(objects) = &self.0 else { return };
+        let talking: Vec<(u16, f32)> = (objects.borrow().iter())
+            .filter(|o| o.owner.as_ref().is_some_and(|w| w.talk.talking))
+            .map(|o| (o.id, o.entity.as_ref().map_or(1.0, |e| e.health)))
+            .collect();
+        for (id, health) in talking {
+            crate::core::talk::scheduled_update(self, id, health);
+        }
+    }
+}
+
+impl crate::core::talk::TalkSides for ScriptSides {
+    fn is_talking(&self, id: u16) -> bool {
+        self.talk(id, |t| t.talking).unwrap_or(false)
+    }
+
+    fn partner(&self, id: u16) -> Option<u16> {
+        self.talk(id, |t| t.partner.filter(|_| t.talking)).flatten()
+    }
+
+    fn stop_talk(&mut self, id: u16) {
+        let Some(objects) = &self.0 else { return };
+        if let Some(owner) = objects
+            .borrow_mut()
+            .get_mut(id)
+            .and_then(|o| o.owner.as_mut())
+        {
+            owner.talk.stop();
+        }
+    }
+
+    fn start_dialog(&self, id: u16) -> String {
+        self.talk(id, |t| {
+            volya_engine_formats::cp1251::decode(&t.start_dialog)
+        })
+        .unwrap_or_default()
+    }
+}
+
+/// The keys the talk screen reads, from the effective bindings
+/// (talk-window-input.md 3.1, 3.2).
+fn talk_keys(data: &GameData, controls: &crate::controls::Controls) -> talk_screen::Keys {
+    talk_screen::Keys {
+        use_keys: controls.keys(crate::controls::MoveAction::Use),
+        quit: data.quit_keys.clone(),
+    }
+}
+
+/// The level's in-game windows.
+struct Windows<'a> {
+    inventory: &'a mut Option<Box<InventoryScreen>>,
+    pda: &'a mut Option<Box<PdaWindow>>,
+    talk: &'a mut Option<Box<TalkScreen>>,
+}
+
+/// A talk the level started (talk-window-input.md 1.1, 7.2, 7.3; talk.md
+/// 2.2): the topmost in-game window, if one is open, toggled off with its
+/// own closing, then the talk screen toggled on, shown with the talk's
+/// set-up (1.3), and its update run at once. Returns whether one started.
+#[allow(clippy::too_many_arguments)]
+fn start_talk(
+    tree: &dyn Vfs,
+    data: &GameData,
+    level: &mut LevelScreen,
+    w: Windows,
+    sides: &mut ScriptSides,
+    functions: &mut dyn DialogFunctions,
+    partner: u16,
+    input: &Input,
+    now: u64,
+    audio: &mut dyn AudioOut,
+) -> io::Result<bool> {
+    let Some(screen) = w.talk.as_deref_mut() else {
+        return Ok(false);
+    };
+    if let Some(i) = w.inventory.as_deref_mut().filter(|i| i.is_open()) {
+        i.close(data, audio);
+        level.controls_mut().keys_only = None;
+    } else if let Some(p) = w.pda.as_deref_mut().filter(|p| p.is_open()) {
+        p.close();
+        level.give_player(&p.take_portions());
+        level.controls_mut().keys_only = None;
+    } else if screen.is_open() {
+        close_talk(level, screen, sides);
+        level.give_player(&screen.take_portions());
+    }
+    let start = level.talk_set_up(tree, data, partner, sides, functions)?;
+    screen.show(data, start, partner, input.cursor_ui())?;
+    level.give_player(&screen.take_portions());
+    talk_update(tree, data, level, screen, sides, functions, now, 0)?;
+    level.give_player(&screen.take_portions());
+    Ok(true)
+}
+
+/// Closing the talk screen (talk-window-input.md 5): the screen, then the
+/// dialog forgotten and the player character's side stopped (talk.md 5.2).
+fn close_talk(level: &mut LevelScreen, screen: &mut TalkScreen, sides: &mut ScriptSides) {
+    screen.close();
+    level.talk_hidden(sides);
+}
+
+/// One frame of the open talk screen after its input `asked`
+/// (talk-window-input.md 3.4, 4): the choice taken, the death rule
+/// (inventory-screen.md 1.2 item 4), the information portions' mark, then
+/// the screen's update.
+#[allow(clippy::too_many_arguments)]
+fn talk_frame(
+    tree: &dyn Vfs,
+    data: &GameData,
+    level: &mut LevelScreen,
+    screen: &mut TalkScreen,
+    sides: &mut ScriptSides,
+    functions: &mut dyn DialogFunctions,
+    asked: talk_screen::Asked,
+    now: u64,
+    frame: u64,
+) -> io::Result<()> {
+    if asked.closed {
+        level.talk_hidden(sides);
+        return Ok(());
+    }
+    if let Some(i) = asked.choice {
+        let said = level.talk_click(tree, data, i, functions)?;
+        screen.say(data, &said)?;
+    }
+    // TODO(#908): message 45 (`asked.trade`), the switch to trade when both
+    // speakers have trade enabled, is DG-10's.
+    if !level.character().is_some_and(|c| c.conditions.alive()) {
+        close_talk(level, screen, sides);
+        return Ok(());
+    }
+    // TODO(#1063): the information portions' rebuild mark (info-portions.md
+    // 3.4 step 4, 4.2) is the scripts' story's event; the talk takes it there.
+    talk_update(tree, data, level, screen, sides, functions, now, frame)
+}
+
+/// The talk screen's update (talk-window-input.md 4): closing itself
+/// (4.1), the refill (4.2), the panels' refresh (talk-window.md 5) on frame
+/// number `frame`, the camera's turn toward the partner (talk.md 4).
+#[allow(clippy::too_many_arguments)]
+fn talk_update(
+    tree: &dyn Vfs,
+    data: &GameData,
+    level: &mut LevelScreen,
+    screen: &mut TalkScreen,
+    sides: &mut ScriptSides,
+    functions: &mut dyn DialogFunctions,
+    now: u64,
+    frame: u64,
+) -> io::Result<()> {
+    let Some(partner) = screen.partner() else {
+        close_talk(level, screen, sides);
+        return Ok(());
+    };
+    if level.talk_window_closes(sides, partner, screen.special_mode()) {
+        close_talk(level, screen, sides);
+        return Ok(());
+    }
+    if screen.take_refill() {
+        level.talk_mark_refill();
+    }
+    let (texts, said) = level.talk_refill(tree, data, functions)?;
+    screen.say(data, &said)?;
+    if let Some(texts) = texts {
+        let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+        screen.window.set_choices(data, &texts)?;
+    }
+    let player = level.character().map(|c| (c.owner.id, c.conditions.health));
+    let partner_health = level.talk_health(partner);
+    // TODO(#279): the relation's kind and name.
+    let lookup = |id: u16| {
+        let health = match player {
+            Some((p, h)) if p == id => Some(h),
+            _ if id == partner => partner_health,
+            _ => None,
+        }?;
+        Some(crate::talk_window::Standing {
+            relation: 1,
+            relation_name: String::new(),
+            health,
+        })
+    };
+    screen.window.update(data, frame, &lookup);
+    let dt = screen.frame_time(now);
+    level.talk_turn_camera(partner, dt);
+    Ok(())
 }
 
 /// The inventory screen's menu font at the size drawn at (its width,
@@ -843,6 +1104,9 @@ pub enum AppState {
         /// The PDA window while it is open.
         #[serde(skip_serializing_if = "Option::is_none")]
         pda: Option<Box<PdaState>>,
+        /// The talk screen while it is open.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        talk: Option<Box<TalkScreenState>>,
     },
 }
 
@@ -1223,6 +1487,9 @@ impl App {
             }) if i.is_open() => crate::dialog::cursor_targets(&i.cursor_targets()),
             Some(Phase::Level { pda: Some(p), .. }) if p.is_open() => {
                 crate::dialog::cursor_targets(&p.cursor_targets())
+            }
+            Some(Phase::Level { talk: Some(t), .. }) if t.is_open() => {
+                crate::dialog::cursor_targets(&t.cursor_targets())
             }
             _ => Vec::new(),
         }
@@ -1808,12 +2075,15 @@ impl App {
                         // window, its tab bar laid out in the fonts of now
                         // (pda-window.md 1, 3.2).
                         let video = self.video;
+                        // The talk window with them (talk-window.md 1).
                         let interface = InventoryScreen::load(tree, data, video).and_then(|i| {
                             let fonts = self.assets.fonts(tree, data, video.height)?;
-                            Ok((i, PdaWindow::load(tree, data, video, fonts)?))
+                            let pda = PdaWindow::load(tree, data, video, fonts)?;
+                            let talk = TalkWindow::load(tree, data, video, fonts)?;
+                            Ok((i, pda, talk))
                         });
                         match interface {
-                            Ok((inventory, pda)) => {
+                            Ok((inventory, pda, talk)) => {
                                 self.error = None;
                                 self.loaded_since = self.load_started.take();
                                 self.menu_asked = false;
@@ -1824,6 +2094,7 @@ impl App {
                                     menu: None,
                                     inventory: Some(Box::new(inventory)),
                                     pda: Some(Box::new(pda)),
+                                    talk: Some(Box::new(TalkScreen::new(talk))),
                                     dropped: Vec::new(),
                                 };
                             }
@@ -1933,6 +2204,7 @@ impl App {
                 menu,
                 inventory,
                 pda,
+                talk,
                 dropped,
             } => {
                 if let Some(o) = overlay.take() {
@@ -2013,6 +2285,66 @@ impl App {
                     Some(below) => below,
                     None => input,
                 };
+                // talk.md 5.1: the characters' scheduled updates; the talk
+                // sides as the report shows them.
+                let mut sides = ScriptSides::of(self.scripts.as_ref());
+                sides.scheduled_updates();
+                level.talk_sync(&sides);
+                // talk-window-input.md 1.1: a talk the use action or
+                // `run_talk_dialog` started (script API R 4.2), from the
+                // previous frame's scripts.
+                // TODO(#908): the switch to trade (DG-10); the other events
+                // are the motion channels' and sound's.
+                for event in level.take_dialog_events() {
+                    if let DialogEvent::TalkWindowShown { partner } = event {
+                        let scripts = self.scripts.as_mut().map(GameScripts::scripts);
+                        let functions = &mut ScriptFunctions(scripts);
+                        let windows = Windows {
+                            inventory: &mut *inventory,
+                            pda: &mut *pda,
+                            talk: &mut *talk,
+                        };
+                        let started = start_talk(
+                            tree, data, level, windows, &mut sides, functions, partner, input, now,
+                            audio,
+                        );
+                        if let Err(e) = started {
+                            self.failed.get_or_insert(e.to_string());
+                        }
+                    }
+                }
+                if let Some(screen) = talk.as_deref_mut().filter(|s| s.is_open()) {
+                    // talk-window-input.md 2: the game runs on; nothing
+                    // reaches the character's controls (1.2 item 4, 3.1
+                    // item 5, 3.3, 3.5).
+                    let keys = talk_keys(data, level.controls());
+                    let pad_use = (input.pad_changes())
+                        .contains(&(crate::core::input::GamepadButton::DpadRight, true));
+                    let use_pressed = pad_use
+                        || (input.device_changes().iter()).any(|&(c, pressed)| {
+                            pressed && matches!(c, Control::Key(k) if keys.use_keys.contains(&k))
+                        });
+                    let paused = self.pause.is_on();
+                    let asked = screen.input(data, input, &keys, use_pressed, paused, now);
+                    let scripts = self.scripts.as_mut().map(GameScripts::scripts);
+                    let functions = &mut ScriptFunctions(scripts);
+                    let frame = self.frames;
+                    let run = talk_frame(
+                        tree, data, level, screen, &mut sides, functions, asked, now, frame,
+                    );
+                    if let Err(e) = run {
+                        // An error is fatal, as in the original.
+                        self.failed.get_or_insert(e.to_string());
+                    }
+                    level.give_player(&screen.take_portions());
+                    level.update(now, &Input::new());
+                    // The screen has the quit key (3.2), and the page holds
+                    // no pointer lock while it shows: a back request or an
+                    // unlock opens no menu.
+                    level.take_back_requested();
+                    self.after_update(audio);
+                    return;
+                }
                 if let Some(screen) = inventory.as_deref_mut().filter(|s| s.is_open()) {
                     // inventory-screen.md 1.3: the game runs on; keys the
                     // screen does not use reach the character.
@@ -2065,11 +2397,11 @@ impl App {
                     self.after_update(audio);
                     return;
                 }
-                if let Some(pda) = pda.as_deref_mut().filter(|p| p.is_open()) {
+                if let Some(window) = pda.as_deref_mut().filter(|p| p.is_open()) {
                     // pda-window.md 6: the game runs on; keys the window
                     // does not use reach the character.
                     let keys = pda_keys(data, level.controls());
-                    level.controls_mut().keys_only = Some(pda.kept(&keys));
+                    level.controls_mut().keys_only = Some(window.kept(&keys));
                     let p = level.player();
                     let [x, _, z] = p.state().position;
                     let player = pda_window::map::MapPlayer {
@@ -2077,7 +2409,7 @@ impl App {
                         position: [x, z],
                         yaw: p.angles().yaw,
                     };
-                    pda.update(pda_window::Frame {
+                    window.update(pda_window::Frame {
                         data,
                         keys: &keys,
                         game_time: level.clock().time(),
@@ -2088,17 +2420,17 @@ impl App {
                         alive: level.character().is_some_and(|c| c.conditions.alive()),
                         player: Some(player),
                     });
-                    for line in pda.take_log() {
+                    for line in window.take_log() {
                         self.console.log_mut().message(&line);
                     }
-                    level.controls_mut().keys_only = Some(pda.kept(&keys));
-                    level.give_player(&pda.take_portions());
+                    level.controls_mut().keys_only = Some(window.kept(&keys));
+                    level.give_player(&window.take_portions());
                     level.update(now, input);
                     // The window has the quit key (5), and the page holds
                     // no pointer lock while it shows: a back request or an
                     // unlock opens no menu.
                     level.take_back_requested();
-                    if !pda.is_open() {
+                    if !window.is_open() {
                         level.controls_mut().keys_only = None;
                     }
                     self.after_update(audio);
@@ -2523,6 +2855,7 @@ impl App {
                 menu: None,
                 inventory,
                 pda,
+                talk,
                 ..
             }) => {
                 let mut scene = level.scene(resolution);
@@ -2530,8 +2863,11 @@ impl App {
                 // has one, under the intro and the loading image. Not
                 // while the inventory or the PDA shows (our choice: whether
                 // the HUD hides it then is unestablished; #740).
+                // talk-window-input.md 1.2 item 1: hidden with the talk
+                // screen.
                 let windows = inventory.as_ref().is_some_and(|i| i.is_open())
-                    || pda.as_ref().is_some_and(|p| p.is_open());
+                    || pda.as_ref().is_some_and(|p| p.is_open())
+                    || talk.as_ref().is_some_and(|t| t.is_open());
                 if let Some((id, start)) = level.doors().hint().filter(|_| !windows) {
                     if !self.quick_info.as_ref().is_some_and(|q| q.fits(resolution)) {
                         let animations = level.level_lights().animations();
@@ -2550,6 +2886,10 @@ impl App {
                 // pda-window.md 2.2: over the rendered level.
                 if let Some(pda) = pda {
                     pda.draw(&mut ctx, &mut scene)?;
+                }
+                // talk-window.md 2: over the rendered level.
+                if let Some(talk) = talk {
+                    talk.draw(&mut ctx, &mut scene)?;
                 }
                 Ok(scene)
             }
@@ -2582,6 +2922,7 @@ impl App {
             }) if intro.player.is_none()
                 && !inventory.as_ref().is_some_and(|i| i.is_open())
                 && !self.pda_open()
+                && !self.talk_open()
                 && !self.window.is_open() =>
             {
                 let p = level.player().state();
@@ -2593,7 +2934,9 @@ impl App {
                     sprint_lock: level.controls().sprint_lock.locked(),
                     torch,
                     night_vision,
-                    usable: level.doors().hint().is_some(),
+                    // The touch Use button shows for a character under
+                    // the crosshair too (our design, #874).
+                    usable: level.doors().hint().is_some() || level.talk().picked().is_some(),
                 })
             }
             _ => None,
@@ -2625,6 +2968,7 @@ impl App {
                 | Some(Phase::Level { menu: Some(_), .. })
         ) || self.inventory_open()
             || self.pda_open()
+            || self.talk_open()
     }
 
     /// The save screen's name field (UI units) and whether it has focus,
@@ -2682,6 +3026,11 @@ impl App {
     pub fn pda_over_level(&self) -> bool {
         !self.window.is_open()
             && matches!(&self.phase, Some(Phase::Level { pda: Some(p), menu: None, .. }) if p.is_open())
+    }
+
+    /// Whether the talk screen is open (talk-window-input.md).
+    pub fn talk_open(&self) -> bool {
+        matches!(&self.phase, Some(Phase::Level { talk: Some(t), .. }) if t.is_open())
     }
 
     /// Whether the inventory screen is open.
@@ -2896,6 +3245,7 @@ impl App {
                 menu,
                 inventory,
                 pda,
+                talk,
                 ..
             }) => AppState::Level {
                 clock,
@@ -2915,6 +3265,9 @@ impl App {
                 pda: (pda.as_ref())
                     .filter(|p| p.is_open())
                     .map(|p| Box::new(p.state())),
+                talk: (talk.as_ref())
+                    .filter(|t| t.is_open())
+                    .map(|t| Box::new(t.state())),
             },
         }
     }
@@ -3392,6 +3745,7 @@ mod tests {
             menu: None,
             inventory: None,
             pda: None,
+            talk: None,
             dropped: Vec::new(),
         });
         app.update(&tree, 16.0, &mut input, &mut audio);
@@ -3517,13 +3871,14 @@ mod tests {
         let mut controls = app.data.controls.clone();
         controls.bindings = crate::controls::Bindings::read(&[
             b"bind inventory kI\nbind forward kW\nbind wpn_fire mouse1\nbind drop kG\n\
-              bind active_jobs kP\nbind map kM\nbind contacts kH\n",
+              bind active_jobs kP\nbind map kM\nbind contacts kH\nbind use kF\n",
         ]);
         let character = crate::inventory_screen::tests::character(&[("bread", 5, 3)]);
         let xga = Resolution::new(1024, 768);
         let inventory = InventoryScreen::load(&tree, &app.data, xga).unwrap();
         let fonts = app.assets.fonts(&tree, &app.data, xga.height).unwrap();
         let pda = PdaWindow::load(&tree, &app.data, xga, fonts).unwrap();
+        let talk = TalkWindow::load(&tree, &app.data, xga, fonts).unwrap();
         app.phase = Some(Phase::Level {
             level: Box::new(LevelScreen::empty(controls, 0).with_character(character)),
             overlay: None,
@@ -3531,6 +3886,7 @@ mod tests {
             menu: None,
             inventory: Some(Box::new(inventory)),
             pda: Some(Box::new(pda)),
+            talk: Some(Box::new(TalkScreen::new(talk))),
             dropped: Vec::new(),
         });
         app.update(&tree, 16.0, &mut input, &mut audio);

@@ -48,7 +48,7 @@ use crate::script::{Error, ErrorKind};
 use volya_engine_formats::cp1251;
 use volya_engine_formats::dialog_files::Dialog;
 use volya_engine_formats::model;
-use volya_engine_formats::object::{Object, ObjectRecord, Shape};
+use volya_engine_formats::object::{Kind, Object, ObjectRecord, Shape};
 use volya_engine_formats::patrol_path::PatrolPaths;
 
 /// The server options of a New Game from the menu, `start
@@ -626,7 +626,10 @@ pub fn spawn_client_object(
     characters: &mut Characters,
     object: ClientObject,
 ) -> Result<(), Error> {
-    if !binding_runs(system, &object) {
+    // FAKE(#1121): the trader spawns without his binder, his logic not
+    // run (#1077): his talk stays enabled from the New Game.
+    let unbound = object.record.kind() == Kind::Trader;
+    if !unbound && !binding_runs(system, &object) {
         return Ok(());
     }
     let data = SpawnData::from_record(object.id, &object.record, system).map_err(io_fatal)?;
@@ -650,6 +653,9 @@ pub fn spawn_client_object(
     }
     let created = scripts.scripts().create_client_object(data.class_id)?;
     let spawned = match created.object {
+        CreatedObject::Script(client) if unbound => {
+            scripts.scripts().spawn_unbound(client, data).map(|_| ())
+        }
         CreatedObject::Script(client) => scripts.scripts().spawn(client, data).map(|_| ()),
         CreatedObject::Engine { entry_id, sides } => {
             let game_type = scripts.services().borrow().game_type as u32;
@@ -661,8 +667,11 @@ pub fn spawn_client_object(
             };
             // TODO(#1120): the player bound by the fake of its binding.
             let binding = (class == ObjectClass::Player).then_some(FAKE_PLAYER_BINDING);
-            let spawned =
-                (scripts.scripts()).spawn_engine_object_with_binding(class, data, binding);
+            let spawned = if unbound {
+                scripts.scripts().spawn_engine_object_unbound(class, data)
+            } else {
+                (scripts.scripts()).spawn_engine_object_with_binding(class, data, binding)
+            };
             spawned.map(|_| ())
         }
     };

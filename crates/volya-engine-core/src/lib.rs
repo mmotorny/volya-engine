@@ -44,6 +44,7 @@ pub mod scripted_motion_channels;
 pub mod simulation;
 pub mod sound;
 pub mod switching;
+pub mod talk;
 pub mod text;
 pub mod texture_quality;
 pub mod torch;

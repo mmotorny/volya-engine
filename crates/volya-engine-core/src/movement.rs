@@ -593,6 +593,13 @@ impl Player {
         self.view = self.compute_view(0.0);
     }
 
+    /// Sets the camera's yaw and pitch (docs/behavior/talk.md 4: the turn
+    /// toward a talk's partner); the view follows at the next frame.
+    pub fn turn_camera(&mut self, yaw: f32, pitch: f32) {
+        self.angles.yaw = yaw;
+        self.angles.pitch = pitch;
+    }
+
     pub fn view(&self) -> View {
         self.view
     }

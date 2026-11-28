@@ -1690,7 +1690,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap and the d-pad right use it, playing the servomotor and leaving it locked": async () => {
+  "touch and gamepad: Use shows while the trader or his door is under the crosshair; a tap and the d-pad right start a talk with him, Menu and east end it; on the door they play the servomotor and leave it locked": async () => {
     needsGame();
     if ((await state()).phase === "menu") await enterLevel();
     let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
@@ -1702,9 +1702,60 @@ export const tests = {
     pointer("pointerup", client(512, 100), { ...t, buttons: 0 });
     for (let i = 0; i < 50 && controls.hidden; i++) await sleep(20);
     assert(!controls.hidden, "the touch controls show");
-    // Facing the start view, nothing to use; the door is behind (a half
-    // turn with the right arrow).
-    assert(!s.level.player.hint && use.hidden, `Use hidden: hint ${s.level.player.hint}`);
+    const tap = (el) => {
+      const r = el.getBoundingClientRect();
+      for (const type of ["pointerdown", "pointerup"]) {
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            clientX: (r.left + r.right) / 2,
+            clientY: (r.top + r.bottom) / 2,
+            pointerId: nextTouch(),
+            pointerType: "touch",
+            isPrimary: true,
+            button: 0,
+            buttons: type === "pointerdown" ? 1 : 0,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+    };
+    // Facing the start view, the trader is under the crosshair: Use shows
+    // (docs/behavior/talk.md 2.1); a tap starts a talk, the controls turn to
+    // the cursor's, and their Menu (the key bound to `quit`) ends it
+    // (talk-window-input.md 3.2).
+    assert(!s.level.player.hint && s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)}`);
+    for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
+    assert(!use.hidden, "Use shown for the trader");
+    tap(use);
+    await until((s) => s.talk, "the touch Use to start a talk");
+    for (let i = 0; i < 50 && controls.dataset.view !== "cursor"; i++) await sleep(20);
+    assertEqual(controls.dataset.view, "cursor", "the cursor's controls over the talk screen");
+    tap(controls.querySelector(".touch-button.menu"));
+    s = await until((s) => !s.talk, "Menu to end the talk");
+    assert(!s.menu, "Menu opened no menu");
+    // The gamepad: the d-pad right (button 15) starts it, east (1) ends it.
+    {
+      const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+      const getGamepads = navigator.getGamepads;
+      navigator.getGamepads = () => [pad];
+      const press = async (i) => {
+        pad.buttons[i] = { pressed: true, value: 1 };
+        await sleep(100);
+        pad.buttons[i] = { pressed: false, value: 0 };
+      };
+      try {
+        await until((s) => s.level.talk.talking.length === 0, "the trader's side to end");
+        await press(15);
+        await until((s) => s.talk, "the d-pad right to start a talk");
+        await press(1);
+        s = await until((s) => !s.talk, "east to end the talk");
+      } finally {
+        navigator.getGamepads = getGamepads;
+      }
+      assert(!s.menu, "east opened no menu");
+    }
+    // The door is behind (a half turn with the right arrow).
     const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
     const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
     const yaw = s.level.yaw;
@@ -1750,14 +1801,21 @@ export const tests = {
       navigator.getGamepads = getGamepads;
     }
     assertEqual([s.level.doors.find((d) => d.name === "trader_door").tip, s.level.player.hint], ["tip_door_locked", "tip_door_locked"], "the door after the d-pad right");
-    // Turned back to the start view, nothing has a hint.
+    // A quarter turn back, nothing has a hint and no character is under
+    // the crosshair: Use hides.
     const back = s.level.yaw;
     down("ArrowLeft");
-    await until((s) => s.level.yaw < back - Math.PI + 0.08, "the left arrow to turn back", 3000);
+    await until((s) => s.level.yaw < back - Math.PI / 2 + 0.08, "the left arrow to turn a quarter back", 3000);
     up("ArrowLeft");
-    await until((s) => !s.level.player.hint, "no hint turned away");
+    await until((s) => !s.level.player.hint && s.level.talk.picked === null, "nothing to use turned away");
     for (let i = 0; i < 50 && !use.hidden; i++) await sleep(20);
-    assert(use.hidden, "Use hidden once nothing has a hint");
+    assert(use.hidden, "Use hidden once nothing is under the crosshair");
+    // Turned back to the start view, the trader again.
+    const quarter = (await state()).level.yaw;
+    down("ArrowLeft");
+    await until((s) => s.level.yaw < quarter - Math.PI / 2 + 0.08, "the left arrow to turn back", 3000);
+    up("ArrowLeft");
+    await until((s) => s.level.talk.picked !== null, "the trader under the crosshair again");
     return "";
   },
 

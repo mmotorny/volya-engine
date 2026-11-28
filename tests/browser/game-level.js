@@ -6,13 +6,15 @@
 // collision world's rays, the zones' idle effects, frame and GPU times at a
 // few video modes (`level_stats`), transcoding costs where textures are
 // transcoded; on touch devices the ergonomic mode's upright
-// game at the screen's own size (#806), its frames kept; the trader's
+// game at the screen's own size (#806), its frames kept; a talk with the
+// trader started and ended; the trader's
 // locked door stopping the player, its hint shown.
 
 import { assert, assertEqual, dump, skip } from "./harness.js";
 import {
   ORIGINAL,
   byCaption,
+  client,
   captionMs,
   coarse,
   doorSound,
@@ -42,6 +44,7 @@ import {
   hNow,
   rNow,
   pointAt,
+  pointer,
   sleep,
   state,
   until,
@@ -332,6 +335,85 @@ export const tests = {
       assert(render[0] > render[1], `Standard: drawn landscape: ${render}`);
     }
     return frames.join(", ");
+  },
+
+  "the trader: facing him from the start, Use starts a talk; the talk screen shows his name, takes the cursor and keeps the player still; Use and Escape end it, no menu opening": async () => {
+    needsGame();
+    let s = await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls");
+    // docs/behavior/talk.md 2.2, use-action.md 6.2: the trader is under the
+    // crosshair within 2 m at the start view.
+    const trader = s.level.talk.picked;
+    assert(trader !== null && trader !== undefined, `the trader under the crosshair: ${JSON.stringify(s.level.talk)}`);
+    const at = s.level.player.position;
+    key("KeyF");
+    s = await until((s) => s.talk, "the talk screen");
+    // 3: both sides talking; his start dialog in progress; the window
+    // titled with his name; talk-window-input.md 1.2: the cursor shown.
+    assertEqual(s.level.talk.partner, trader, "the partner");
+    assert(s.level.talk.talking.includes(trader), `both talking: ${s.level.talk.talking}`);
+    assertEqual(s.level.talk.dialog, "escape_trader_start_dialog", "the opening dialog");
+    assert(s.talk.window.shown && s.talk.window.button_shown, "the talk window and its trade button");
+    const name = s.talk.window.titles[0];
+    assert(name.length > 0, "frame line 0 titled with the trader's name");
+    const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
+    assert(frame.sprites.some((g) => g.layer.startsWith("talk ")), "the talk window drawn");
+    // 2: nothing reaches the character: W does not move it.
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", bubbles: true, cancelable: true }));
+    try {
+      await sleep(500);
+      s = await state();
+    } finally {
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true, cancelable: true }));
+    }
+    const moved = Math.hypot(s.level.player.position[0] - at[0], s.level.player.position[2] - at[2]);
+    assert(s.talk && moved < 0.05, `still talking, moved ${moved.toFixed(3)} m`);
+    // dialog-flow.md: the first question clicked each time the list shows,
+    // until the dialog gives `esc_trader_can_leave` (trader-and-crows-scope
+    // 1.1: along answer 32) or ends; the clicks are the cursor's.
+    const click = async ([x, y]) => {
+      const at = client(x, y);
+      pointer("pointermove", at);
+      pointer("pointerdown", at, { button: 0, buttons: 1 });
+      await sleep(50);
+      pointer("pointerup", at, { button: 0, buttons: 0 });
+    };
+    const said = [];
+    for (let i = 0; i < 20 && s.talk && !s.level.portions.includes("esc_trader_can_leave"); i++) {
+      const qs = s.talk.window.questions;
+      if (qs.length === 0) break;
+      // talk.md 8: along answer 32, phrases 32111 then 321111; the
+      // questions stand for the phrase ids the report lists.
+      const ids = s.level.talk.choices;
+      const k = ids.findIndex((id) => "321111".startsWith(id));
+      const q = qs[k >= 0 ? k : 0];
+      said.push(q.text);
+      const before = s.talk.window.answers.length;
+      await click([q.at[0] + 20, q.at[1] + q.height / 2]);
+      s = await until((s) => !s.talk || s.talk.window.answers.length > before || s.level.portions.includes("esc_trader_can_leave"), `the answer to "${q.text}"`);
+    }
+    assert(s.level.portions.includes("esc_trader_can_leave"), `esc_trader_can_leave given after ${said.length} choices: ${said.join(" / ")}`);
+    if (s.talk) {
+      // 3.1: Use closes it.
+      key("KeyF");
+      await until((s) => !s.talk, "Use to end the talk");
+    }
+    s = await until((s) => s.level.talk.talking.length === 0, "both sides to end");
+    // A new talk to check Use and Escape.
+    key("KeyF");
+    await until((s) => s.talk, "the talk screen again");
+    // 3.1: Use closes it; 5.2: the player character's side stops, then his.
+    key("KeyF");
+    s = await until((s) => !s.talk && s.level.talk.talking.length === 0, "Use to end the talk");
+    assert(!s.menu, "no menu");
+    // 3.2: Escape closes it, and the menu does not open on that press.
+    key("KeyF");
+    await until((s) => s.talk, "the talk screen again");
+    key("Escape");
+    s = await until((s) => !s.talk, "Escape to end the talk");
+    await sleep(200);
+    s = await state();
+    assert(!s.menu, "Escape opened no menu");
+    return `talked with ${name} (object ${trader})`;
   },
 
   "the trader's door: turned to it from the start, running forward stops at it and the HUD shows the door-locked hint; Use plays the servomotor at it and leaves it locked": async () => {

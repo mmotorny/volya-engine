@@ -8,17 +8,20 @@
 //! and iconed lines and its scrolling to the end (6), the question list (7),
 //! the trade button (8) and the partners with the special mode (9).
 //!
-//! **What waits for other systems**: building the window with the level's
-//! in-game interface (1) and opening, closing and every input of it,
-//! the question list's and the trade button's looks under the cursor and
-//! the lists' wheel and dragging included, are DG-6's (#904): until then
-//! the window is reachable only from tests, its captions drawn in their
-//! normal look `e`. Which phrases and choices a talk offers are DG-3's and
-//! DG-4's; the lines scripts add DG-7's; the panels' values (names, icons,
-//! ranks, communities, relations, health) the characters scope's (#279)
-//! and their texts PD-14's; what shows the news records `pda-scope`'s.
+//! The talk screen that holds it, its opening, closing and input
+//! (docs/behavior/talk-window-input.md, DG-6), is [`screen`]: the question
+//! captions' and the trade button's looks under the cursor are its.
+//!
+//! **What waits for other systems**: which phrases and choices a dialog in
+//! progress offers are DG-4's (#1069); the lines scripts add DG-7's; the
+//! panels' values (ranks, communities, relations) the characters scope's
+//! (#279) and their texts PD-14's; what shows the news records
+//! `pda-scope`'s.
 
 pub mod layout;
+pub mod screen;
+#[cfg(test)]
+mod screen_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -232,6 +235,10 @@ pub struct TalkWindow {
     special_mode: bool,
     button_shown: bool,
     news: Vec<NewsRecord>,
+    /// The question captions' and the button's looks (pda-controls.md 4):
+    /// the question under the cursor and its look, the button's look.
+    question_look: Option<(usize, &'static str)>,
+    button_look: &'static str,
 }
 
 impl TalkWindow {
@@ -280,6 +287,64 @@ impl TalkWindow {
             special_mode: false,
             button_shown: true,
             news: Vec::new(),
+            question_look: None,
+            button_look: "e",
+        }
+    }
+
+    /// The looks under the cursor (7, 8; pda-controls.md 4): question `i`'s
+    /// caption `h` or `t`, the others `e`; the button's.
+    pub fn set_looks(&mut self, question: Option<(usize, &'static str)>, button: &'static str) {
+        self.question_look = question;
+        self.button_look = button;
+    }
+
+    /// The choices listed (7).
+    pub fn question_count(&self) -> usize {
+        self.questions.len()
+    }
+
+    /// Question `i`'s caption, absolute, where it is drawn now (scrolled),
+    /// clipped to the list's view; `None` when scrolled out of it.
+    pub fn question_rect(&self, i: usize) -> Option<Rect> {
+        let list = &self.layout.questions;
+        let (at, _) = list.desc.layout(&self.question_heights());
+        let (x, y) = *at.get(i)?;
+        let q = &self.questions[i];
+        let ct = &q.template.content_text;
+        let (left, top) = (
+            list.rect.x + x,
+            list.rect.y + y - self.questions_bar.pos as f32,
+        );
+        let mut r = ct.window.absolute(left, top);
+        r.height = r.height.max(q.caption_height);
+        clip_rect(r, view(list))
+    }
+
+    /// The trade button's rectangle while it is shown (8, 9).
+    pub fn button_rect(&self) -> Option<Rect> {
+        self.button_shown.then_some(self.layout.button.rect)
+    }
+
+    /// List `i` (0 the answer log, 1 the question list) with its scroll
+    /// state and content height, while shown (9: the log is hidden with
+    /// the special mode).
+    pub fn list(&self, i: usize) -> Option<(&List, &ScrollBar, f32)> {
+        if i == 0 {
+            let (_, content) = self.layout.answers.desc.layout(&self.answer_heights());
+            (!self.special_mode).then_some((&self.layout.answers, &self.answers_bar, content))
+        } else {
+            let (_, content) = (self.layout.questions.desc).layout(&self.question_heights());
+            Some((&self.layout.questions, &self.questions_bar, content))
+        }
+    }
+
+    /// List `i`'s scroll state, to change.
+    pub fn bar_mut(&mut self, i: usize) -> &mut ScrollBar {
+        if i == 0 {
+            &mut self.answers_bar
+        } else {
+            &mut self.questions_bar
         }
     }
 
@@ -480,10 +545,18 @@ impl TalkWindow {
             draw_answers(ctx, s, &l.answers, &self.answers, &self.answers_bar)?;
         }
         self.draw_frame_line(ctx, s, 1)?;
-        draw_questions(ctx, s, &l.questions, &self.questions, &self.questions_bar)?;
+        draw_questions(
+            ctx,
+            s,
+            &l.questions,
+            &self.questions,
+            &self.questions_bar,
+            self.question_look,
+        )?;
         if self.button_shown {
             let b = &l.button;
-            crate::dialog::draw_button(ctx, s, "talk button", &b.desc, b.rect, "e")?;
+            let look = self.button_look;
+            crate::dialog::draw_button(ctx, s, "talk button", &b.desc, b.rect, look)?;
         }
         Ok(())
     }
@@ -647,6 +720,14 @@ fn view(list: &List) -> Rect {
     Rect::new(list.rect.x + c.x, list.rect.y + c.y, c.width, c.height)
 }
 
+/// `r` cut to `clip`; `None` when they do not meet.
+fn clip_rect(r: Rect, clip: Rect) -> Option<Rect> {
+    let (x0, y0) = (r.x.max(clip.x), r.y.max(clip.y));
+    let x1 = (r.x + r.width).min(clip.x + clip.width);
+    let y1 = (r.y + r.height).min(clip.y + clip.height);
+    (x1 > x0 && y1 > y0).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+}
+
 fn intersects(a: Rect, b: Rect) -> bool {
     a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
 }
@@ -738,13 +819,15 @@ fn draw_answers(
 
 /// The question list (7): each entry's caption as a button's
 /// (pda-controls.md 4: aligned by its `text` child horizontally, centred
-/// vertically in its own height), clipped to the view, then its scroll bar.
+/// vertically in its own height) in its look, clipped to the view, then its
+/// scroll bar.
 fn draw_questions(
     ctx: &mut Ctx,
     s: &mut Scene,
     list: &List,
     entries: &[Question],
     bar: &ScrollBar,
+    look: Option<(usize, &'static str)>,
 ) -> io::Result<()> {
     let heights: Vec<f32> = entries.iter().map(|q| q.height).collect();
     let (at, content) = list.desc.layout(&heights);
@@ -764,7 +847,8 @@ fn draw_questions(
             .and_then(|t| t.align)
             .unwrap_or(HAlign::Centre);
         b.vert_align = VAlign::Centre;
-        b.color = crate::dialog::look_color(ct, "e", b.color);
+        let look = look.filter(|&(k, _)| k == i).map_or("e", |(_, l)| l);
+        b.color = crate::dialog::look_color(ct, look, b.color);
         if !q.text.is_empty() {
             let layer = format!("talk question {i}");
             ctx.text(s, &layer, &encode(&q.text), &b, font)?;
