@@ -161,22 +161,6 @@ export const tests = {
     return `${withEffect.length - off.length} idle effects playing, ${off.length} galantines off; frame CPU ${stats.frame_cpu_ms.toFixed(2)} ms average, ${stats.frame_cpu_max_ms.toFixed(2)} ms worst; wasm heap ${mib(stats.wasm_heap_bytes)}`;
   },
 
-  "the physics world: made with the level, stepped 100 times a second of play": async () => {
-    needsGame();
-    // docs/behavior/physics-world.md 1.1, 2.2: made under
-    // st_client_spawning, whole steps of h = 0.01 s from the display frame
-    // time (at most 0.1 s a frame).
-    const first = (await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level")).level.physics;
-    assertEqual(first.step, 0.01, "the step");
-    const at = performance.now();
-    await sleep(1000);
-    const p = (await state()).level.physics;
-    const seconds = (performance.now() - at) / 1000;
-    const steps = p.steps - first.steps;
-    assert(steps > 0 && steps <= 100 * seconds + 10, `${steps} steps in ${seconds.toFixed(2)} s`);
-    return `${steps} steps in ${seconds.toFixed(2)} s; ${p.iterations} iterations; the floor at y ${p.floor.toFixed(2)} m`;
-  },
-
   "the level's frame and GPU times at a few video modes": async () => {
     needsGame();
     await until((s) => s.phase === "level" && !s.intro, "the level");
@@ -407,6 +391,23 @@ export const tests = {
     const on = flat(s.level.player.position, start);
     assert(on < 1.5, `ran ${on.toFixed(2)} m on after Use: not through the door`);
     return `stopped ${ran.toFixed(2)} m on, the hint drawn in ${glyphs.length} glyphs; still locked after Use`;
+  },
+
+  "the physics world: made with the level, stepped 100 times a second of play": async () => {
+    needsGame();
+    // docs/behavior/physics-world.md 1.1, 2.2: made under
+    // st_client_spawning, whole steps of h = 0.01 s from the display frame
+    // time (smoothed, at most 0.1 s a frame), on the engine clock.
+    const first = await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level");
+    assertEqual(Math.fround(first.level.physics.step), Math.fround(0.01), "the step");
+    await sleep(1000);
+    const s = await state();
+    const ms = s.clock - first.clock;
+    const steps = s.level.physics.steps - first.level.physics.steps;
+    // Within a frame's smoothing of the clock's 100 a second.
+    assert(steps > 0 && Math.abs(steps - ms / 10) <= 10, `${steps} steps in ${ms} ms of the engine clock`);
+    const p = s.level.physics;
+    return `${steps} steps in ${ms} ms of the engine clock; ${p.iterations} iterations; the floor at y ${p.floor.toFixed(2)} m`;
   },
 
   ...keptTeardown(),
