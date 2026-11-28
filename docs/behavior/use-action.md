@@ -14,6 +14,8 @@ Builds on (not repeated):
   `S` and damping `D`, gravity 19.62), `docs/behavior/physics-shells.md` (`shells`: elements, their speed limits
   2.4), `docs/behavior/physics-scope.md` (`scope`: `[ph_capture_visuals]`, 1.4).
 - `docs/behavior/script-api-game-object-basics.md` (`M`): the script handle, `set_nonscript_usable` (6.3).
+- `docs/behavior/script-api-object-event-callbacks.md` (`O`), `docs/behavior/script-api-engine-services.md` (`B`),
+  `docs/behavior/script-api-scope.md` (`SA`): the script API members a use callback calls (4.1).
 - `docs/behavior/inventory-screen.md` (`IS`): in-game windows, the body-search window's files (5.9).
 - `docs/behavior/console-misc-settings.md` (`MS`): `cl_cod_pickup_mode` and the pick-up target (5).
 - `docs/behavior/view-projection.md` (`VP`): the environment's far value `Z` (2.1).
@@ -32,7 +34,7 @@ Conventions:
 - An **in-game window** is one of `IS` 1.1 (inventory, PDA, talk, trade, body search, …).
 - Statements are static (read from the shipped binaries and data; the game was not run). Inferred statements are
   marked **believed**, with why; what could not be established is marked **unestablished**.
-- Bracketed ids are checks: `U*` in `checks/use-action/checks.py`, `SR-*` (folded in with the usable flag, see
+- Bracketed ids are checks: `U*` in `checks/use-action/checks.py` (`U17*` in `checks/use-action/door_callback.py`), `SR-*` (folded in with the usable flag, see
   Provenance) in `checks/use-action-usable-flag/shapeless_root.py`; `python3 checks/use-action/run_all.py` runs both.
 
 ## 1. Input
@@ -141,6 +143,38 @@ The use callback is script callback 15 (`callback.use_object` in `scripts\lua_he
 object and the player [U7] (its registration: script API, `M`). It runs at step 4 for every object under the
 crosshair, whatever the usable flag, and is the only thing the use action does to an object whose usable flag is
 cleared: steps 5 to 8 do nothing for it (a drag under way is still released at step 3).
+
+What a use callback does is the shipped scripts' own behaviour, not the program's: the engine calls the function
+a script stored for id 15 with its bound value (`O` 3.2, 4) and nothing more; the scripts run as shipped, so an
+implementation needs only the script API members they call.
+
+### 4.1 The physics-object binder and the door scheme
+
+- The physics-object binder (`bind_physic_object.script`) stores, on its updates (when: `O` 10), its own
+  use handler for `callback.use_object` with the binder as the bound value (`O` 10). The
+  handler, while a section is active, passes the use to the active scheme as its event `use_callback` with the
+  object and the user; the event calls that method of each active action of the scheme (`xr_logic.issue_event`),
+  nothing when the scheme has none [U17, U17b].
+- The door scheme (`ph_door.script`), on that event: if its section is `locked` and names a `snd_open_start`
+  sound set, it plays that set at the door; then, only if the section has an `on_use` condition list, it switches
+  to the section that list picks for the player and the door (none, empty or the active section: no switch); it
+  does nothing else [U17c, U17c2, U17f]. A switch ends the active scheme (its event `deactivate`) and starts the
+  picked section's scheme (`xr_logic`); the list's conditions, effects and info portions given or disabled on the
+  player are the scripts' too [U17f, U17f2].
+- Playing a set: the scheme stops the sound it played last, takes a sound object for the set from
+  `xr_sound.get_sound_object` (an entry of the set from `sound_theme.script`, at random among two or more, else the
+  only one; one sound object per file path, made once) and plays it at the door object's position [U17d, U17d2].
+  **Disputed in review:** the pick is incomplete: for a set of two or more entries, once an entry of that set has
+  been picked, each later pick is at random among the entries other than the one picked last for that set (only
+  the first pick is among all of them) (`xr_sound.get_sound_object`).
+- Script API members of this path: `set_callback` with `callback.use_object` (`O` 3, 4); `name()` (evaluated as
+  an argument of the scheme's own `printf`, which does nothing) and `position()` (`M` 3, 4); `log` (`B` 4.3,
+  through the global `printf` of `xr_sound`) [U17c2, U17d3]; the sound class `sound_object(path)` and its
+  `stop()` and `play_at_pos(object, position)`, which belong to the sound part of the script API (`SA` row T,
+  with no approved specification); on a switch, the members of the condition list's functions and of the
+  picked section's scheme start (`ph_door`'s: `M`, `O`, the physics members of
+  `docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md` and `set_tip_text`, which `M` 12 assigns to `SA` row P).
+  What playing a sound object does is the sound part's to specify, not this specification's.
 
 ## 5. Inventory boxes
 
@@ -349,7 +383,9 @@ false); `xr_logic` sets it to true when an item's scheme is reset; `explode_zone
 
 A physics object is no character, no holder and no item; the pick accepts it [SR-B16]; `[ph_capture_visuals]`
 lists no door and no model under `physics\` [SR-D6]. The `ph_door` scheme clears the door's flag (10.3). Using the
-door within 2 m: step 4 runs the use callback the `ph_door` scheme set (that scheme's specification); step 6 stops. With the flag set, steps 7 and 8
+door within 2 m: step 4 runs the use callback (4.1): the door starts in its section `ph_door@locked`, which is
+locked, has `snd_open_start = trader_door_unlock` (one entry, `device\door_servomotor`) and no `on_use`, so that
+sound plays at the door and nothing switches [U17e]; step 6 stops. With the flag set, steps 7 and 8
 would do nothing for it. So `set_nonscript_usable(false)` changes nothing the player can see.
 
 ### 11.2 The trader
@@ -386,7 +422,8 @@ the key (1.3).
   `config\creatures\actor.ltx`, `config\misc\outfit.ltx`, `config\weapons\weapons.ltx`,
   `config\gameplay\character_desc_escape.xml`, the player models' user data (`meshes\actors\hero\*.ogf`,
   `meshes\actors\dolg\stalker_do_nauchniy.ogf`, with `config\models\capture\stalker_hero_captures.ltx`), the
-  shipped scripts (`lua_help`, `ph_door`, `ph_gate`, `ph_code`, `ph_car`, `ph_idle`, `xr_logic`, `explode_zone`);
+  shipped scripts (`lua_help`, `ph_door`, `ph_gate`, `ph_code`, `ph_car`, `ph_idle`, `xr_logic`, `explode_zone`,
+  `bind_physic_object`, `xr_sound`, `sound_theme`, `_g`), `config\scripts\esc_trader_door.ltx`;
   the public ODE 0.5.0 headers for the joint parameter and motor mode numbers.
 - Analysis: static analysis of `bin\xrGame.dll` (headless decompilation and instruction listings with Ghidra;
   vtables and class layouts from its run-time type information): the player's key press and release handling and
@@ -405,6 +442,10 @@ the key (1.3).
 
 ## Gaps found in review
 
-- What a door scheme's use callback does (for the trader's door while locked: the sound it plays at the door and
-  its switch only by an `on_use` condition) is left to "that scheme's specification" (11.1), and no system
-  specification of the door scheme holds it.
+- Which objects get the physics-object binder at all (`bind_physic_object.init` decides it from the object's
+  custom data and class) is not stated, nor that the trader's door's
+  custom data in `levels\l01_escape\level.spawn` names `scripts\esc_trader_door.ltx` as its logic (11.1).
+- What happens when a door's sound set is not among the sound themes, or no sound object can be made for it (the
+  scheme then calls the script function `abort`), is not stated.
+- A sound theme entry may itself be a pair of paths (sound objects for the path with `_r` and with `_l` appended);
+  which of the two a door plays then is not stated.
