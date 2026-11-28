@@ -458,6 +458,9 @@ pub struct LevelScreen {
     /// Where each of the objects' instances is drawn; `None` while it is
     /// not online. Shared with the scenes, replaced when it changes.
     placements: Arc<Vec<Option<Mat4>>>,
+    /// Where the scripts' engine objects of the online stalkers and
+    /// monsters are, as last given ([`Self::place_characters`]).
+    character_placements: HashMap<u16, Mat4>,
     /// The motions the instances play (motion-playback.md).
     motions: crate::level_motions::LevelMotions,
     /// The traders' motion channels (scripted-motion-channels.md).
@@ -2955,6 +2958,7 @@ impl NewGameLoad {
             motion_channels,
             stalker_motions,
             placements: Arc::new(placements),
+            character_placements: HashMap::new(),
             instances,
             attached_items,
             effects,
@@ -4226,6 +4230,7 @@ impl LevelScreen {
         for &id in changes.offline.iter().chain(&changes.removed) {
             self.lights.object_offline(id);
             self.attached_items.holder_gone(id);
+            self.character_placements.remove(&id);
             if let Some(&k) = self.instances.get(&id) {
                 self.motion_channels.destroyed(k);
                 self.stalker_motions.destroyed(k);
@@ -5278,12 +5283,40 @@ impl LevelScreen {
             return;
         };
         let h = &o.record.header;
-        // Where its shell holds it, if it has one (physics-shells.md 8.2).
+        // Where its shell holds it, if it has one (physics-shells.md 8.2),
+        // else a character where its engine object is.
         let at = (self.physics.borrow().drawn_of(id)).map(|d| d.transform);
+        let at = at.or_else(|| self.character_placements.get(&id).copied());
         let placement = (!hidden && o.online)
             .then(|| at.unwrap_or_else(|| model_math::transform(h.position, h.angles)));
         if self.placements[k] != placement {
             Arc::make_mut(&mut self.placements)[k] = placement;
+        }
+    }
+
+    /// The online stalkers' and monsters' instances drawn where their
+    /// engine objects are, `placed` (object id, the engine object's
+    /// placement): it starts at the record's transform as the object comes
+    /// online (object-visual-and-transform.md 4.1), and what moves it
+    /// afterwards (their movement) is the engine object's, which the
+    /// online object's update state carries (sav.md 7.4.1, Creature
+    /// update: position and yaw). A hidden or undrawn instance stays so,
+    /// and one its shell holds is drawn where the shell holds it
+    /// (physics-shells.md 8.2). The items shown on them follow at their
+    /// next placing.
+    pub fn place_characters(&mut self, placed: impl IntoIterator<Item = (u16, Mat4)>) {
+        let physics = self.physics.borrow();
+        for (id, placement) in placed {
+            let Some(&k) = self.instances.get(&id) else {
+                continue;
+            };
+            if physics.drawn_of(id).is_some() {
+                continue;
+            }
+            self.character_placements.insert(id, placement);
+            if self.placements[k].is_some_and(|p| p != placement) {
+                Arc::make_mut(&mut self.placements)[k] = Some(placement);
+            }
         }
     }
 
@@ -5760,6 +5793,7 @@ impl LevelScreen {
             simulation: SharedSimulation::default(),
             info_portions: None,
             placements: Arc::new(Vec::new()),
+            character_placements: HashMap::new(),
             motions: Default::default(),
             motion_channels: Default::default(),
             stalker_motions: Default::default(),

@@ -394,7 +394,9 @@ pub fn client_spawning(
 /// updates (O 6.1: the door scheme's fast call); the story's frame
 /// ([`story_frame`]); then what the members asked of the engine
 /// ([`apply_events`]; `level.set_time_factor`'s factors set on the game
-/// clock, H 4.2; the inventories' update and events, [`inventory_frame`]);
+/// clock, H 4.2; the online stalkers and monsters drawn where their engine
+/// objects are, [`place_characters`]; the inventories' update and events,
+/// [`inventory_frame`]);
 /// last, the effects and weather's part ([`effects_frame`]). No system of
 /// the app perceives sounds yet, so none
 /// is queued (O 4, id 17).
@@ -483,12 +485,25 @@ pub fn level_frame(
     apply_events(scripts, level);
     apply_physics_events(scripts, level)?;
     apply_simulation_events(scripts, level);
+    place_characters(scripts, level);
     inventory_frame(scripts, level)?;
     for factor in scripts.times().borrow_mut().take_time_factors() {
         level.set_time_factor(factor);
     }
     apply_level_events(scripts);
     effects_frame(scripts, level)
+}
+
+/// The online stalkers' and monsters' instances drawn where their engine
+/// objects are (script API M 4: their position and direction), before the
+/// items shown on them are placed ([`LevelScreen::place_characters`]).
+fn place_characters(scripts: &GameScripts, level: &mut LevelScreen) {
+    let objects = scripts.objects().borrow();
+    let characters = (objects.iter())
+        .filter(|o| o.parent.is_none() && !o.destroying)
+        .filter(|o| o.kinds.has(Kinds::STALKER) || o.kinds.has(Kinds::MONSTER))
+        .map(|o| (o.id, o.placement));
+    level.place_characters(characters);
 }
 
 /// Script API U's part of a level frame: the environment's values as the
