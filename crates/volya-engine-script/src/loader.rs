@@ -253,6 +253,8 @@ pub struct Scripts {
     pub(crate) inventory_state: Option<crate::inventory::Registered>,
     /// The level, once registered ([`crate::level`]).
     pub(crate) level_state: Option<crate::level::Registered>,
+    /// Effects and weather, once registered ([`crate::effects_and_weather`]).
+    pub(crate) effects_and_weather_state: Option<crate::effects_and_weather::Registered>,
 }
 
 impl Scripts {
@@ -330,6 +332,7 @@ impl Scripts {
             scripted_actions_state: None,
             inventory_state: None,
             level_state: None,
+            effects_and_weather_state: None,
         })
     }
 

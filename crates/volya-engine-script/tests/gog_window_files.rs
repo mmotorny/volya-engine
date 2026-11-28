@@ -81,6 +81,7 @@ fn started() -> Option<(GameScripts, Rc<RefCell<EngineServices>>)> {
         simulation: Rc::default(),
         window_files: Rc::new(RefCell::new(window_files)),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     Some((scripts, services))

@@ -293,6 +293,7 @@ fn the_traders_scheme_calls() {
         simulation: Rc::default(),
         window_files: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

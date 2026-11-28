@@ -176,6 +176,7 @@ fn started() -> Option<(GameScripts, Rc<RefCell<EngineServices>>)> {
         simulation: Rc::default(),
         window_files: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

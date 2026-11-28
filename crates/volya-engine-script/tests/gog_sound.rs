@@ -201,6 +201,7 @@ fn sound_objects_of_the_games_files() {
         simulation: Rc::default(),
         window_files: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     let s = scripts.scripts();

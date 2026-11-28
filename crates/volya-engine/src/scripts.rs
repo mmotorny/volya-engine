@@ -111,6 +111,7 @@ pub fn start(
         simulation: Rc::default(),
         window_files: Rc::new(RefCell::new(window_files(data, resolution))),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .map_err(fatal)
 }
@@ -211,8 +212,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// emptied, none of it called (spec O 6.5), the server objects the
 /// objects spawned from released (script API J), the default trade
 /// parameters dropped (script API R 5.2), the game clock gone (script
-/// API H) and the creatures' sound state forgotten (script API T). A
-/// script error is fatal.
+/// API H), the creatures' sound state forgotten (script API T) and the
+/// player's screen effects (script API U). A script error is fatal.
 pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     let ids: Vec<u16> = scripts.objects().borrow().iter().map(|o| o.id).collect();
     for id in ids {
@@ -236,6 +237,9 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     scripts.times().borrow_mut().level_ended();
     // The creatures' sound state goes with them (script API T 6, 7).
     scripts.sounds().borrow_mut().creatures = Default::default();
+    // The player's manager and its screen effects go with the player
+    // (script API U 2.4).
+    scripts.effects_and_weather().borrow_mut().level_ended();
     scripts.scripts().clear_level_calls()?;
     // Script API K: `alife()` is nil until the next level's simulation.
     scripts.simulation().borrow_mut().end();
@@ -334,6 +338,12 @@ pub fn client_spawning(
     // (our placement: the specs have them from the level's creation and
     // the simulation's spawn data, before any object's binder reads them).
     scripts.level().borrow_mut().patrol_paths = Some(paths);
+    // Script API U 7.4: the current name is the start weather's, the
+    // cycle the level shows (TODO(#1195): the set weather and its changes).
+    if let Some(name) = &spawning.level_name {
+        let weather = crate::level::start_weather(tree, data, name).map_err(io_fatal)?;
+        scripts.effects_and_weather().borrow_mut().environment.name = Some(weather.into_bytes());
+    }
     let name = spawning.level_name.map(|n| n.into_bytes());
     let bounding_volume = (spawning.collision.bbox_min, spawning.collision.bbox_max);
     scripts.scripts().start_level(Level {
@@ -363,7 +373,9 @@ pub fn client_spawning(
 /// updates (O 6.1: the door scheme's fast call); the story's frame
 /// ([`story_frame`]); then what the members asked of the engine
 /// ([`apply_events`]; `level.set_time_factor`'s factors set on the game
-/// clock, H 4.2; the inventories' update and events, [`inventory_frame`]). No system of the app perceives sounds yet, so none
+/// clock, H 4.2; the inventories' update and events, [`inventory_frame`]);
+/// last, the effects and weather's part ([`effects_frame`]). No system of
+/// the app perceives sounds yet, so none
 /// is queued (O 4, id 17).
 pub fn level_frame(
     scripts: &mut GameScripts,
@@ -450,7 +462,28 @@ pub fn level_frame(
         level.set_time_factor(factor);
     }
     apply_level_events(scripts);
-    Ok(())
+    effects_frame(scripts, level)
+}
+
+/// Script API U's part of a level frame: the environment's values as the
+/// level blended them this frame (7.5, 7.6), `$level$` at the level's
+/// folder (4.1, 6.1), then the player's manager's camera update of its
+/// screen effects (2.4). Their set is not drawn yet (TODO(#1197)). A
+/// failing override is fatal.
+fn effects_frame(scripts: &mut GameScripts, level: &LevelScreen) -> Result<(), Error> {
+    {
+        let mut state = scripts.effects_and_weather().borrow_mut();
+        let (rain, far_plane, fog_density) = level.script_environment();
+        state.environment.rain_density = rain;
+        state.environment.far_plane = far_plane;
+        state.environment.fog_density = fog_density;
+        let dir = &level.world().dir;
+        if state.level_dir.as_ref() != Some(dir) {
+            state.level_dir = Some(dir.clone());
+        }
+    }
+    let processed = scripts.scripts().process_screen_effects();
+    processed.map_err(|f| override_fatal(scripts, f))
 }
 
 /// What script API K's members asked of the engine: `release` of an

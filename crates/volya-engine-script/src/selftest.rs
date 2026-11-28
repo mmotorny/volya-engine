@@ -7,7 +7,7 @@
 //! story state, the engine's entry points, the dialog files' functions, the
 //! dialogs and trade, time, the sound, the simulation registry, the
 //! scripted actions, the window description files, movement, sight
-//! and memory, and the level,
+//! and memory, the level, and effects and weather,
 //! checked on every target: natively by `cargo test`, in the browser by
 //! the `script_selftest` op
 //! (docs/testing.md, Shared conformance checks).
@@ -18,6 +18,7 @@ pub mod character_talk_state;
 pub mod classes;
 pub mod dialogs;
 pub mod dialogs_and_trade;
+pub mod effects_and_weather;
 pub mod entry_points;
 pub mod files;
 pub mod game_object;
@@ -119,6 +120,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = level::check() {
+        fail(e);
+    }
+    if let Err(e) = effects_and_weather::check() {
         fail(e);
     }
     if failures.is_empty() {

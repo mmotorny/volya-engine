@@ -329,6 +329,7 @@ fn start() -> Option<(GameScripts, Rc<RefCell<LevelState>>)> {
         simulation: Rc::default(),
         window_files: Rc::default(),
         level: Rc::clone(&state),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     scripts

@@ -1609,3 +1609,18 @@ mod level {
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }
+
+/// docs/behavior/script-api-effects-and-weather.md's checks (all of them
+/// run in [`selftest`] too, on every target).
+mod effects_and_weather {
+    use crate::selftest::effects_and_weather::SECTIONS;
+
+    #[test]
+    fn every_section() {
+        let failures: Vec<String> = SECTIONS
+            .iter()
+            .filter_map(|(what, f)| f().err().map(|e| format!("{what}: {e}")))
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+}

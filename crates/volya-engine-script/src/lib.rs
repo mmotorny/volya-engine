@@ -9,7 +9,8 @@
 //! [`classes`] gives scripts classes deriving from engine classes,
 //! [`object_factory`] keeps the class ids and creates objects by them,
 //! [`services`], [`values`], [`files`], [`game_object`], [`story`],
-//! [`dialogs`], [`sound`], [`simulation`] and [`window_files`]
+//! [`dialogs`], [`sound`], [`simulation`], [`window_files`] and
+//! [`effects_and_weather`]
 //! register the engine's names of the script API, and [`entry_points`]
 //! calls into scripts as the engine does, in its order. See
 //! docs/architecture/scripts.md.
@@ -25,6 +26,7 @@
 
 pub mod classes;
 pub mod dialogs;
+pub mod effects_and_weather;
 pub mod entry_points;
 mod ffi;
 pub mod files;

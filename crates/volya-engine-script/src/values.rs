@@ -1180,7 +1180,7 @@ fn rpoint_class() -> EngineClass {
 
 /// `fcolor:set(n)`: v's bytes from the top, times K, each rounded once (the
 /// product is exact before).
-fn fcolor_of(n: f64) -> Fcolor {
+pub(crate) fn fcolor_of(n: f64) -> Fcolor {
     let v = to_flags32(n);
     let k = f64::from(f32::from_bits(BYTE_SCALE));
     let byte = |shift: u32| (f64::from((v >> shift) & 0xFF) * k) as f32;

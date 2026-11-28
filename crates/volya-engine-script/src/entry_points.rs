@@ -23,6 +23,7 @@ use volya_engine_formats::ltx::value;
 
 use crate::classes::EngineClass;
 use crate::dialogs::DialogsAndTrade;
+use crate::effects_and_weather::EffectsAndWeather;
 use crate::files::FileSystem;
 use crate::game_object::GameObjects;
 use crate::level::LevelState;
@@ -136,6 +137,8 @@ pub struct Startup {
     /// The window description files' state (script API G3).
     pub window_files: Rc<RefCell<WindowFiles>>,
     pub level: Rc<RefCell<LevelState>>,
+    /// The player's screen effects and the environment (script API U).
+    pub effects_and_weather: Rc<RefCell<EffectsAndWeather>>,
 }
 
 impl Startup {
@@ -169,7 +172,7 @@ impl Startup {
     }
 
     /// The engine interface of the specs implemented (B, F, H, M, N, P, R,
-    /// T, Y, K, J, V, G3, S; A, C and E [`Scripts::new`] registers).
+    /// T, Y, K, J, V, G3, S, U; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -194,7 +197,8 @@ impl Startup {
             self.aliases.clone(),
         )?;
         scripts.register_inventory()?;
-        scripts.register_level(Rc::clone(&self.level))
+        scripts.register_level(Rc::clone(&self.level))?;
+        scripts.register_effects_and_weather(Rc::clone(&self.effects_and_weather))
     }
 }
 
@@ -390,6 +394,11 @@ impl GameScripts {
     /// The level and patrol paths script API N's names read.
     pub fn level(&self) -> &Rc<RefCell<LevelState>> {
         &self.startup.level
+    }
+
+    /// The player's screen effects and the environment (script API U).
+    pub fn effects_and_weather(&self) -> &Rc<RefCell<EffectsAndWeather>> {
+        &self.startup.effects_and_weather
     }
 
     /// The engine's calls into scripts so far, oldest first.

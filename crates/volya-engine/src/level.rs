@@ -956,7 +956,7 @@ fn read_new_game(tree: &dyn Vfs, data: &GameData) -> io::Result<NewGame> {
 /// The weather name of `level` (`[<level>] weathers` of `game.ltx`'s
 /// includes), level-loading.md section 2.6. The weather script is replaced
 /// by its result.
-fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<String> {
+pub(crate) fn start_weather(tree: &dyn Vfs, data: &GameData, level: &str) -> io::Result<String> {
     let game = config::load(tree, &data.aliases.path("$game_config$", "game.ltx")?)?;
     Ok(game
         .get(level, "weathers")
@@ -3656,6 +3656,20 @@ impl LevelScreen {
     /// The collision world, shared.
     pub fn shared_collision(&self) -> Arc<CollisionWorld> {
         self.collision.clone()
+    }
+
+    /// What script API U's environment reads of this frame's blend
+    /// (script-api-effects-and-weather.md 7.5, 7.6): the rain density ρ =
+    /// lerp(A, B, t) (sound-rain-thunder.md 2.3), the blended far plane and
+    /// fog density.
+    pub fn script_environment(&self) -> (f32, f32, f32) {
+        let (a, b, t) = self.weather.bracket(self.clock.time_of_day());
+        let rain = a.rain_density * (1.0 - t) + b.rain_density * t;
+        (
+            rain,
+            self.environment.far_plane,
+            self.environment.fog_density,
+        )
     }
 
     /// What this frame's sound rules read.

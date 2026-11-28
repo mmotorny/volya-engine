@@ -82,6 +82,7 @@ fn start() -> Option<(GameScripts, Rc<RefCell<AlifeSimulator>>)> {
         simulation: Rc::clone(&alife),
         window_files: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     {

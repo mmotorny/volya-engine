@@ -297,6 +297,7 @@ fn the_names_on_a_started_game_state() {
         simulation: Rc::default(),
         window_files: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
     })
     .unwrap();
     times

@@ -178,6 +178,7 @@ fn started(trees: Rc<GameTrees>, aliases: &PathAliases) -> (GameScripts, Config)
         sounds: Rc::default(),
         simulation: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
         files,
         window_files: Rc::default(),
     })

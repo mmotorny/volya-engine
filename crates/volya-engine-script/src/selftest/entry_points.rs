@@ -197,6 +197,7 @@ fn started(
         sounds: Rc::default(),
         simulation: Rc::default(),
         level: Rc::default(),
+        effects_and_weather: Rc::default(),
         files: Rc::clone(&fs),
         window_files: Rc::default(),
     })
