@@ -14,7 +14,8 @@ itself.
 It builds on the approved specifications `ui-layout`, `text-and-fonts`, `ltx-config`, `sav`, `db-archive`,
 `sound-ogg-params` (`docs/formats/`), `inventory-screen`, `pda-window`, `pda-controls`, `save-load-screens`, `options-screens`,
 `console-key-bindings`, `sound-positional`, `hud-scope`, `script-loading`, `script-environment`, `script-api-scope`,
-`pda-scope`, `narrowed-specs-scope`, `trader-and-crows-scope`, `trader-door` (`docs/behavior/`), all cited by
+`pda-scope`, `narrowed-specs-scope`, `trader-and-crows-scope`, `characters-scope`,
+`script-api-configuration-and-files` (`docs/behavior/`), all cited by
 name.
 
 Conventions:
@@ -322,12 +323,12 @@ issue #284's.
 
 ## 3. The trader's start dialog
 
-The trader of the first level is `escape_trader` (`trader-door` 4.2 [F12j]): `npc_profile.xml`'s
+The trader of the first level is `escape_trader` (`characters-scope` 4 [F12j]): `npc_profile.xml`'s
 character `escape_trader` names the specific character `escape_trader` (class `trader`), whose start dialog
 is `escape_trader_start_dialog` and whose actor dialogs are `escape_trader_talk_info`, `escape_trader_jobs`,
 `tm_trader_dialog`, `tm_trader_reward`, `escape_trader_done_blockpost_box` [F4i, F4j]; the listing's story
-id constant `Escape_Trader` is 3 [F4k]. `trader-door` 4 establishes that the door opens on
-`esc_trader_can_leave`, which only phrase 32111 of this dialog gives among the listed dialogs; the portion
+id constant `Escape_Trader` is 3 [F4k]. The trader's door's locked logic switches on
+`esc_trader_can_leave` (its `on_info`, `script-api-configuration-and-files` 9), which only phrase 32111 of this dialog gives among the listed dialogs; the portion
 is declared in `info_l01escape.xml` [F5i, F5j, F12].
 
 The dialog (`dialogs_escape.xml`, 51 phrases, no dialog-level conditions) [F5]:
@@ -376,7 +377,7 @@ holding and giving the portions named above), the script runtime and API (`scrip
 `script-environment`; `script-api-scope` R for `stop_talk`, P and K for `has_alife_info`'s query of the
 simulation [F8d], S for `object`), the characters scope (#279) for the trader's profile and talk state, and the trader's logic
 (`trader-and-crows-scope` TC3, TC4: `can_talk`, the waiting sections in which talking is off at a New
-Game, `trader-door` 4.2). The answer 31 needs, in addition, the tutorials (`hud-scope` 18 [F12k]) and the PDA
+Game). The answer 31 needs, in addition, the tutorials (`hud-scope` 18 [F12k]) and the PDA
 (`pda-window`). DG-8 (voices), DG-7, DG-9 and DG-10 are not needed for it; the generated `tm_trader_*`
 dialogs are, believed, not offered before `esc_serious_talk` is held.
 

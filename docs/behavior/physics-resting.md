@@ -14,8 +14,9 @@ as `world`; *object*, *group*, *active* objects, the rest pass, 4.4), `docs/beha
 `library`; *public 0.5.0*, the disabled flag, 3.3, the steppers, 4.1), `docs/behavior/physics-shells.md` (cited
 as `shells`; elements, fixing, the physics types), `docs/behavior/physics-contacts.md` (cited as `contacts`;
 the collision passes and waking by a contact), PH-7, joints (`physics-joints.md`, cited as `joints`),
-`docs/formats/sav.md` (record layouts, the skeleton flags, 7.4.1), `docs/behavior/trader-door.md` (cited as
-`door`; the worked example).
+`docs/formats/sav.md` (record layouts, the skeleton flags, 7.4.1),
+`docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md` (cited as `Y`; the door scheme's calls of the
+joint motor setter, 11).
 
 Conventions:
 
@@ -56,7 +57,7 @@ torque is not seen by the rest test.
 ## 4. Worked example: the trader's door
 
 - The door's record has skeleton flags 0 [SR-D2], so its shell rests from the moment it exists (section 1).
-- The first `set_max_force_and_velocity` of its scheme (`door` 2.2, 2.3) wakes it (section 2); until then the
+- The first `set_max_force_and_velocity` of its scheme (`Y` 11, step 4) wakes it (section 2); until then the
   door does not move.
 - Its model has no user data, so no `[disable]` [SR-D2b]: its rest parameters are the defaults of `scope` 1.1
   (section 3). Its fixed frame body (`shells` 3.5) runs the rest test as the door's body does, and the closing

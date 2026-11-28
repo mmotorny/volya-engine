@@ -14,8 +14,9 @@ respect. It specifies no behaviour in full: the specs of section 3 do. What coul
 Builds on (not repeated): `docs/formats/level-cform.md` (the static collision mesh, game materials, the
 contact model, the player's collision body), `docs/behavior/player-movement.md` (the character physics of the
 player on foot), `docs/behavior/climbing.md`, `docs/behavior/environment-hits.md`,
-`docs/behavior/player-hits.md`, `docs/formats/sav.md` (record and save layouts), `docs/behavior/level-objects.md`
-(models, bones, the layout of the bone physics data), `docs/formats/material-pairs.md`,
+`docs/behavior/player-hits.md`, `docs/formats/sav.md` (record and save layouts), `docs/formats/skeleton-ogf.md`
+(models, bones, the layout of the bone physics data), `docs/behavior/object-visual-and-transform.md` (the objects'
+transforms), `docs/formats/material-pairs.md`,
 `docs/behavior/hanging-lamps.md`, `docs/behavior/artefact-idle-effects.md`, `docs/formats/ltx-config.md`,
 `docs/behavior/script-api-scope.md`, `docs/behavior/level-sound-scope.md`,
 `docs/behavior/narrowed-specs-scope.md`, `docs/behavior/trader-and-crows-scope.md`.
@@ -93,7 +94,7 @@ logic [D9].
 
 ### 1.3 Physics data
 
-**Bone physics data** (chunk 16 of skeleton models; layout in `level-objects` 4.4, which reads only the bind
+**Bone physics data** (chunk 16 of skeleton models; layout in `skeleton-ogf` 4, which reads only the bind
 pose): 1,579 model files have it [D4]. Per bone: shape type 0 … 3 (7,343 / 8,976 / 2,490 / 1,876 bones; with
 the box, sphere and cylinder stored beside it) and shape flags 0, 1, 2, 4, 5, 6 [D4b, D4f]; joint type 0 … 5
 (12,982 / 48 / 2,854 / 70 / 4,710 / 21 bones) [D4c] with 12 limit values, spring, damping and joint flags;
@@ -180,11 +181,11 @@ Skeleton block's bone state, the physics flag of the client data, the player upd
 | The player's body and movement | `level-cform` 5–6, `player-movement` 6 (fixed step, accumulator, gravity 19.62, forces, caps, jump) [A1, A1b] | see 2.1 |
 | Ladders | `climbing` (its physics step) [A1g] | when the physics world tells a ladder about a character (believed only, #392) |
 | Hits, falls, zones | `environment-hits` (impact speed, fall damage, zone hits), `player-hits` (`physic_strike`) [A1e, A1i] | their direction, point and impulse acting through the physics (#701, #702); the mincer pull (#700) |
-| Model bone data | `level-objects` 4.4: the layout; only the bind pose read [A1c] | every physics field's meaning |
+| Model bone data | `skeleton-ogf` 4: the layout; only the bind pose read [A1c] | every physics field's meaning |
 | Saved physics state | `sav.md` 7.4, 8: layouts [A1d] | the meanings of the physics state, the player update's physics fields |
 | Collide and break sound strings | `material-pairs` (S9) [A1i] | which contacts play them (S13, S14) |
 | Hanging lamps, artefacts | `hanging-lamps` 3.4 (shell built with fixed bones), `artefact-idle-effects` 6.4 (jumping impulse) [A1f] | the shells' motion |
-| Physics objects at the first frame | `level-objects` (drawn at their records' transforms; settling deferred) [A1c] | settling |
+| Physics objects at the first frame | `object-visual-and-transform` 4 (drawn at their records' transforms; settling deferred) [A1c] | settling |
 
 No approved specification covers the physics simulation [A1h, A1j].
 
@@ -216,9 +217,9 @@ spec's behaviour needs character AI or the shipped scripts to be observed in pla
 
 | # | Title (file) | Covers (data and observable behaviour) | Depends on | AI/scripts | Size |
 |---|---|---|---|---|---|
-| PH-1 | Bone physics data (`formats/bone-physics.md`) | every field of chunk 16 (1.3): shape types and flags, joint types, the 12 limits and their axes, spring, damping, joint flags, break force and torque, friction, mass, centre of mass, the material name; verified on all 1,579 models | `level-objects` 4.4 | no | M |
+| PH-1 | Bone physics data (`formats/bone-physics.md`) | every field of chunk 16 (1.3): shape types and flags, joint types, the 12 limits and their axes, spring, damping, joint flags, break force and torque, friction, mass, centre of mass, the material name; verified on all 1,579 models | `skeleton-ogf` 4 | no | M |
 | PH-2 | The physics world and its step (`physics-world.md`) | the world's creation per level, gravity for every body, the step loop, `ph_frequency`, `ph_iterations`, which step (iterative or exact) runs when, the world's error reduction and constraint-force mixing for all joints, freezing and unfreezing, where the physics runs in a frame relative to object updates, the diagnostic messages | `player-movement` 6.1, `level-cform` 4.2, 6.1 | no | M |
-| PH-3 | Shells from models and records (`physics-shells.md`) | building a shell: bones merged into bodies by joint type, mass and centre of mass per body, geometries per shape (box, sphere, cylinder), fixed bones, physics types 0 – 3 of physics objects, the simple shells, the shells of hanging lamps and breakables, the bones' transforms from the bodies (what is drawn), the fatal cases; shells built at spawn and the startup animation's part (`$editor`, `idle`) | PH-1, PH-2; `level-objects`, `hanging-lamps` 3.4 | no | L; splits, if one review round cannot check it, into building (bodies, geometries, mass) and the objects' use of it (types, fixed bones, spawn, drawing) |
+| PH-3 | Shells from models and records (`physics-shells.md`) | building a shell: bones merged into bodies by joint type, mass and centre of mass per body, geometries per shape (box, sphere, cylinder), fixed bones, physics types 0 – 3 of physics objects, the simple shells, the shells of hanging lamps and breakables, the bones' transforms from the bodies (what is drawn), the fatal cases; shells built at spawn and the startup animation's part (`$editor`, `idle`) | PH-1, PH-2; `skeleton-ogf`, `object-visual-and-transform`, `hanging-lamps` 3.4 | no | L; splits, if one review round cannot check it, into building (bodies, geometries, mass) and the objects' use of it (types, fixed bones, spawn, drawing) |
 | PH-4 | Contacts of movable bodies (`physics-contacts.md`) | collision of box, sphere and cylinder geometries with the level mesh (front side, pass-through, the game's own triangle test) and with each other; contact count, point, normal, depth; contact properties for two dynamic materials or a dynamic and a level material; liquid damping; the bounce; the collision filters (`[collide]`, `[collide_parts]`, small objects, ragdolls, parts of one object) | PH-2, PH-3; `level-cform` 2–4 | no | L; splits into geometry (contact generation) and properties with filters |
 | PH-5 | Resting and waking (`physics-resting.md`) | when a shell rests (the thresholds and count of 1.1, `[disable]`), what resting stops (simulation, per-frame processing), what wakes it (contacts, hits, joints, scripts), the first-frame settling of objects placed by the level (LO-2) | PH-2, PH-3, PH-4 | no | M |
 | PH-6 | Items in the world (`item-physics.md`) | when an item gets a shell (spawned lying in the level, dropped, thrown, taken out of a container) and loses it (taken), the box and box-and-sphere shells and which items get which, the mass, the dropped item's starting position and velocity, items of the Item update (`sav.md` 7.4.2: position, rotation, velocities at spawn) | PH-3, PH-4, PH-5; `inventory-screen` 5.7 | no | M |

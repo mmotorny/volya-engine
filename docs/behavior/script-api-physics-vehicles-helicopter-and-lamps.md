@@ -22,12 +22,13 @@ Builds on (not repeated here):
 - The physics specifications: `docs/behavior/physics-scope.md` (cited as `scope`; terms *body*, *shell*,
   *joint*, *step*), `docs/behavior/physics-world.md` (cited as `world`; the step length *h*, the world spring and
   damping, the per-step actions of its 4.3), `docs/behavior/physics-shells.md` (cited as `shells`; *element*, its
-  frame and mass centre, *activating*, *switched off*), `docs/behavior/physics-shell-shapeless-root.md` (cited as
-  `root`; fixing an element), `docs/behavior/physics-contacts.md`, `docs/formats/bone-physics.md` (cited as `bone`;
-  joint stiffness from spring and damping, 3.3), `docs/behavior/physics-library.md` (cited as `library`; the shipped
-  library, *public 0.5.0*).
-- `docs/behavior/hanging-lamps.md` (cited as `lamps`), `docs/behavior/trader-door.md` (cited as `door`; the
-  worked example of section 11).
+  frame and mass centre, *activating*, *switched off*, fixing an element, 5.1; the trader's door, 10),
+  `docs/behavior/physics-contacts.md`, `docs/formats/bone-physics.md` (cited as `bone`;
+  joint axes and limits, 3.2; joint stiffness from spring and damping, 3.3), `docs/behavior/physics-library.md`
+  (cited as `library`; the shipped library, *public 0.5.0*), PH-7, joints (`docs/behavior/physics-joints.md`, cited
+  as `joints`; a joint's motor state when built, a hinge whose first element is fixed, the trader's door's hinge, 3),
+  PH-5, resting and waking (`docs/behavior/physics-resting.md`, cited as `resting`).
+- `docs/behavior/hanging-lamps.md` (cited as `lamps`).
 
 Joints, PH-7 of `scope` (not yet specified), own how joints are built from the bone data and what their stored
 values do in the simulation. This spec states what a script call stores, what it hands to the library when the
@@ -46,7 +47,8 @@ Conventions:
   return "none" returns nil. Angles are radians, times milliseconds where stated, and the library's units are
   those of `library` (believed: metres, kilograms, seconds).
 - A shell, element or joint is **active** when it is in the physics world (`shells` 2.1: activating makes its
-  bodies and joints). A body is **awake** when the library's enabled flag of the body is set (`world` 5).
+  bodies and joints). A body is **switched off** when the library's disabled flag is set on it (`shells`
+  conventions, `library` 3.3), **switched on** otherwise.
 - Class names are the names the game library registers for scripts (`CCar`, `CHelicopter`); engine classes scripts
   cannot name are described ("a stationary machine gun").
 - Each fact is **static** (from static analysis of the game library, not observed at run time), **measured**
@@ -56,7 +58,8 @@ Conventions:
 **Checks.** Every claim carries a tag [Y-*n*]. The checks are one script in the dirty workspace,
 `checks/script-api-physics/run_all.py` (`python3 -I run_all.py`): it reads the game library's bytes and run-time
 type information, the evidence of read-only headless static analysis (produced by `gh.py` beside it), the
-listing, the scoping spec's scan and the shipped scripts and data. All checks pass (`ALL PASS 15`).
+listing, the scoping spec's scan and the shipped scripts and data. All checks pass (`ALL PASS 15`). Tags
+[TD-*n*] are run by `checks/trader-door-retire/run_all.py` in the same workspace (`python3 run_all.py`).
 
 ## 1. What this spec owns
 
@@ -203,7 +206,7 @@ What the breaking check does is PH-13's.
 
 ### 4.1 Force
 
-`apply_force(x, y, z)`: only while the element is active and not fixed (4.3): an asleep body is woken, the
+`apply_force(x, y, z)`: only while the element is active and not fixed (4.3): a switched-off body is switched on, the
 element's shell is told of it (**believed**: its resting is reset), the force (x, y, z) is added to the body (the
 library's body force in world axes, which acts during the next step, public 0.5.0), and then the body's
 accumulated force and torque are limited (how: **unestablished**, the hit and force rules of PH-9) [Y-8].
@@ -213,7 +216,7 @@ Otherwise nothing [Y-8].
 
 | Member | Result |
 |---|---|
-| `get_linear_vel(v)`, `get_angular_vel(v)` | writes into the vector `v` the body's linear (angular) velocity when the element is active and its body awake; otherwise (0, 0, 0) [Y-8]. The result is in `v`; the call returns nothing (**believed**: `v` is passed as a reference to the script's vector) |
+| `get_linear_vel(v)`, `get_angular_vel(v)` | writes into the vector `v` the body's linear (angular) velocity when the element is active and its body switched on; otherwise (0, 0, 0) [Y-8]. The result is in `v`; the call returns nothing (**believed**: `v` is passed as a reference to the script's vector) |
 | `get_mass()` | the element's mass, as its mass was set (`shells` 2.3) [Y-8] |
 | `get_volume()` | the sum of the volumes of the element's geometries (`bone` 2.3), which the element also keeps as its volume [Y-8] |
 | `get_density()` | the mass divided by the volume the element keeps (as last computed, **believed** first by the mass setup of `shells` 2.3) [Y-8] |
@@ -224,7 +227,7 @@ argument, so scripts call it as `element:global_transform()` [Y-4].
 
 ### 4.3 Fixing
 
-- `fix()`: marks the element fixed and fixes its body as `root` 1.3 states (a large sphere mass, gravity off, zero
+- `fix()`: marks the element fixed and fixes its body as `shells` 5.1 states (a large sphere mass, gravity off, zero
   velocities, force and torque) [Y-8]. A fixed element ignores `apply_force` (4.1).
 - `release_fixed()`: when the element is fixed: clears the mark and, if the element is active, gives the body
   back the element's own mass [Y-8]. Gravity, switched off by fixing, is **not** switched back on by this call
@@ -242,7 +245,9 @@ element, **believed**) and belongs to a bone of the model [Y-9]:
 - `get_bone_id()`: the joint's bone id (16 bits); `get_first_element()`, `get_stcond_element()`: the first and
   second elements, nil when there is none [Y-9];
 - `is_breakable()`: `true` when the joint has breaking data (PH-13) [Y-9];
-- `get_axes_number()`: the number of axis records the joint holds (how many each kind has is PH-7's) [Y-9].
+- `get_axes_number()`: the number of axis records the joint holds [Y-9]: those it was made with, by its kind
+  (below): none for a ball, 1 for a hinge, 2 for a two-axis hinge and for a slider, 5 for a ball with angular motor;
+  nothing else adds records [TD-J2].
 
 Every joint is of one **kind**, which decides the library joint it is made as, read from the library calls each
 kind makes [Y-9]: **ball** (no axis), **hinge** (one axis), **two-axis hinge**, **ball with angular motor** (three
@@ -260,6 +265,13 @@ A joint's values are **stored** in the joint; when the joint is active (made in 
 hand them to the library at once, as stated for each. How the stored values are used when the joint is made is
 PH-7's.
 
+**Before any script setter.** Each axis record starts with the limits −∞ … +∞ and maximum force and velocity 0
+[TD-J2]. A joint built from the bone data (`shells` 3.3) is given, through the same function as `set_limits`, the
+bone's limits for each axis that gets limits (`bone` 3.2: high − low below 2π) [TD-J3], and maximum force and
+velocity 0 on every axis (`joints` 1). So before any script setter `get_limits` (5.2) returns the bone's limits of
+the axis, or (−∞, +∞) for an axis without limits, each negated and swapped when the joint's first element is fixed
+or has no body; the stored force and velocity are 0 and 0, and the joint has no motor (`joints` 1).
+
 ### 5.2 Limits
 
 - `set_limits(low, high, n)`: only when the joint has both elements; *n* adjusted; *n* = −1: nothing [Y-9].
@@ -271,7 +283,9 @@ PH-7's.
   joint's first element is not fixed and has a body, axis *n*'s stored (`low`, `high`); otherwise (−`high`,
   −`low`) [Y-9]. The first two arguments must be numbers (they are read) but their values are not used [Y-10].
   Scripts write `lo, hi = joint:get_limits(lo, hi, 0)`. With *n* adjusted to −1 (a ball) the record before the
-  first is read: **unestablished** (believed an invalid read).
+  first is read: **unestablished** (believed an invalid read). For a hinge whose first element is fixed, the
+  negated and swapped limits match the library's reversed angle, so they bound the hinge angle scripts read
+  (`joints` 2.3).
 
 ### 5.3 Motor
 
@@ -281,7 +295,9 @@ PH-7's.
   and makes the shell active. Then stores `force` and `velocity` for axis *n* (*n*
   adjusted; *n* = −1: for every axis of the kind; a ball: nothing) [Y-9]. An active hinge gets them at once as its
   motor: the library's parameter 3 (maximum motor force) is `force` and parameter 2 (motor target velocity) is
-  `velocity` (`door` 2.3); the other kinds set the motors of their axes likewise [Y-9].
+  `velocity` (public 0.5.0's parameter numbering, `library` 5.1: 0 low stop, 1 high stop, 2 motor velocity, 3
+  motor maximum force [TD-B1d]); the other kinds set the motors of their axes likewise [Y-9]. For a hinge whose
+  first element is fixed, a motor velocity *v* drives the scripts' hinge angle at −*v* (`joints` 2.3).
 - `get_max_force_and_velocity(force, velocity, n)`: returns the stored force and velocity of axis *n* (*n* not
   adjusted) through its first two arguments, which the binding takes as references to engine values, not as
   numbers; it returns no result [Y-10]. What a script call with numbers does is **unestablished** (**believed**:
@@ -299,7 +315,9 @@ PH-7's.
 | slider | *n* = 0: the slider's position (a distance); *n* = 1: the angular motor's angle of axis 0; otherwise +∞ |
 | ball | +∞ |
 
-  For a hinge, angle 0 is the bodies' relative rotation when the hinge's axis was set (`door` 2.3). The joint is
+  For a hinge, angle 0 is the pose of the bodies when the hinge was made (public 0.5.0 records it when the axis is
+  set [TD-B2b], which the hinge's creation does, `joints` 2.1); for a hinge whose first element is
+  fixed, the angle is the second element's rotation about the hinge axis, φ of `joints` 2.3. The joint is
   read through the library; on a joint not made in the world, **unestablished**.
 - `get_axis_dir(n, v)`: writes into `v` the library's current axis in world axes [Y-9]: a hinge's axis; for a
   two-axis hinge its first axis when *n* = 0, its second otherwise; for a ball with angular motor the motor's axis
@@ -516,19 +534,22 @@ Further weapon members [Y-12]:
 
 ## 11. Worked example: the door scheme
 
-The trader's door (`door`) is a physics object whose handle has the kind physical (spec M 12). The door scheme
+The trader's door (`shells` 10) is a physics object whose handle has the kind physical (spec M 12). The door scheme
 `scripts\ph_door.script` calls [Y-15]:
 
 1. `self.object:get_physics_shell()`, and stops if it is nil: the door object's shell (section 2).
 2. `ph_shell:get_joint_by_bone_name("door")`: the bone id of `door` in the door's model, then the first joint of
-   the shell whose bone is that id (3.2): the hinge of the door bone (`door` 2.3).
+   the shell whose bone is that id (3.2): the hinge of the door bone, whose first element is the fixed frame
+   element (`shells` 10, `joints` 3).
 3. `self.joint:get_limits(self.low_limits, self.hi_limits, 0)` after setting both to 0: axis 0 of the hinge (5.2);
    the two zeros are read and ignored, and the call returns (low, high) or (−high, −low) by the state of the
-   hinge's first element (5.2; for the door, `door` 2.3).
+   hinge's first element (5.2); for the door, whose first element is fixed and whose limits are −1.9199 … 0, it
+   returns (−0, 1.9199) (`joints` 3).
 4. `self.joint:set_max_force_and_velocity(force, velocity, 0)` with (0, 0), (200, 3), (10000, 1) and (2100, −3)
    in its sections: the hinge's motor on axis 0 (5.3), handed to the library at once while the hinge is active.
 5. `self.joint:get_axis_angle(90)`: the hinge angle; the 90 is ignored for a hinge (5.4). The scheme counts the
-   door as closed when this angle is at most the low value of step 3.
+   door as closed when this angle is at most the low value of step 3, −0: only at the pose the hinge was made in,
+   or pressed past it within the stop's softness (`joints` 3).
 
 The gate scheme `ph_gate.script` uses the same members on two joints with axis 1 (`set_limits(min, max, 1)`,
 `get_axis_angle(1)`) and blocks and unblocks the shell's breaking (3.3) [Y-15]; for a hinge, axis 1 is adjusted to
@@ -585,12 +606,3 @@ All reproduced by `run_all.py` (15 PASS lines, no failure):
   file bytes; the scoping spec's script scan reused; the scripts and configuration read as text. No binary was
   executed.
 - No leaked source code, derived engines, third-party engine documentation or recollection was used.
-
-## Gaps found in review
-
-1. "Builds on" omits `docs/behavior/physics-joints.md` and `docs/behavior/physics-resting.md`; the joint results scripts see that they state (no motor until a setter sets one, `joints` 1; for a hinge whose first element is fixed, `get_axis_angle` reads the second element's rotation and `get_limits` returns (−high, −low), `joints` 2.3) should cite them.
-2. Fixing is cited as `root` 1.3, a specification whose facts were re-split; fixing now lives in `docs/behavior/physics-shells.md` 5.1.
-3. Sections 5.3 and 5.4 back general hinge facts (the motor's library parameters, the hinge angle's zero) with `door` 2.3, a single object's specification that `joints` 4 corrects; they belong to `joints` 2 and `library`, the door only as the worked example.
-4. The worked example (section 11, steps 3 and 5) does not take in `joints` 3: the door's limits come back as (−0, 1.9199), so "closed" holds only at the pose the hinge was made in.
-5. What the joint getters (`get_limits`, `get_max_force_and_velocity`, `get_axes_number`) return before any script setter, from the values a joint is built with, is neither stated nor listed as unestablished.
-6. "Awake" is defined by the library's enabled flag with `world` 5, which does not define it; the physics specifications' term is *switched off* (`shells` conventions, `resting`).

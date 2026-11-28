@@ -7,8 +7,8 @@ such contacts, standing on, pushing and being pushed by them, the step rules the
 player's body keeps for other creatures, what a contact records for later use (point, direction, cause, the
 handler that may change the contact speed, the fall hit's bone), the outer sphere's use and how a ladder learns of
 a character. It is PH-8 of `docs/behavior/physics-scope.md` (section 3; the first three items of its 2.1), and the
-system home of the player's rules for movable bodies that `physics-contacts` 5 attributes to
-`docs/behavior/trader-door.md` 3.3; that door appears here only as a worked example (section 9).
+system home of the player's rules for movable bodies that `physics-contacts` 5 refers to as PH-8's; the trader's
+door appears here only as a worked example (section 9).
 
 Builds on (not repeated):
 
@@ -23,7 +23,8 @@ Builds on (not repeated):
 - `docs/behavior/step-assistance-movable-bodies.md` (cited as `step`): the touch flag and the step-assistance
   decision while touching a movable body;
 - `docs/behavior/physics-world.md` (cited as `world`), `docs/behavior/physics-library.md` (cited as `library`),
-  `docs/behavior/physics-shell-shapeless-root.md` (cited as `root`), `docs/behavior/climbing.md` (cited as
+  `docs/behavior/physics-joints.md` (cited as `joints`; the trader's door's hinge, motor and stops, 3),
+  `docs/behavior/climbing.md` (cited as
   `climbing`), `docs/behavior/environment-hits.md` (cited as `env`), `docs/behavior/physics-scope.md` (cited as
   `scope`; terms *body*, *shell*, *step*).
 
@@ -170,7 +171,7 @@ Which pass meets a pair is `contacts` 1.1's: the player's when its body comes fi
 ### 3.2 Pushing
 
 A made contact becomes a contact joint attached to both bodies (`contacts` 2.3, item 7): the other body receives
-the reaction, and a resting shell is woken by the first kept contact (`root` 4.2). Nothing else in the player's
+the reaction, and a resting shell is woken by the first kept contact (`contacts` 1.2, 1.5). Nothing else in the player's
 code pushes another body [P1]. How far a body yields under the player's movement forces (`movement` 6.2, with `T`
 = 1 for these contacts) is the solver's result (**unestablished** statically).
 
@@ -335,15 +336,13 @@ spatial index's test (`contacts` 1.1, **unestablished** in detail), whatever con
 
 A ladder object woken by a kept contact (`contacts` 1.2) is listed for that step only and takes itself off in its
 post-step work [X4b]; that its mark is set again then, so that the player's pass meets it in the next step, is
-**believed** (`root` 4.1's rule for objects active in a step).
+**believed** (`contacts` 1.5's rule for objects active in a step).
 
 ## 8. Corrections and settlements
 
 - `contacts` 5: the player's object box includes the three cylinders in single play (1.2).
 - `step` 2.1: the three further shapes are the cylinders of 1.1; their contacts and the review note on them: 3.5,
   4. Other creatures' shapes are on bodies (3.4). No dynamic material has the actor-obstacle flag (1.3).
-- `trader-door` 3.3: the player's material is `creatures\actor` (`contacts` 5), not index 0, so the door's example
-  values are section 9's.
 - `cform` 4.4: the movement update's contact speed is the kept impact of 5.3; the ground material refinement of 5.6.
 - `env` 3.1, 3.2: the handler (5.5), the fields and the bone ray's length (5.4).
 - `climbing` 2.4: section 7.
@@ -359,8 +358,8 @@ What the rules give for the leaf of the trader's door on `l01_escape` (`contacts
 - materials `creatures\actor` and `objects\large_metal_trash`: μ = 0.8, ERP 0.324324 and CFM 1.689 × 10⁻⁶ before the
   rules (`contacts` 7); on the leaf's vertical face, after rule 9, ERP 0.10667 and CFM 1.111 × 10⁻⁷ [N1];
 - traction 1; friction 0 while walking: the walking player slides along the leaf as along a frictionless wall,
-  whose push the door's motor and stop resist (`trader-door` 2.4); while standing still, friction 0.8 × (1 or 4);
-- made contacts join the player's body and the leaf's body, waking the door's shell (`root` 4.2);
+  whose push the door's motor and stop resist (`joints` 3); while standing still, friction 0.8 × (1 or 4);
+- made contacts join the player's body and the leaf's body, waking the door's shell (`contacts` 1.2, 1.5, 7);
 - an energy impact uses the leaf body's mass and velocity; the door is a physics object, so the fall hit's cause
   for a record from it is the player (5.4).
 
@@ -397,4 +396,3 @@ What the rules give for the leaf of the trader's door on `l01_escape` (`contacts
 
 - Whether a ladder's "to be collided" mark is set before any contact with it (when it enters the spatial index), so that the player's pass meets a ladder that was never woken; section 7 covers only the mark after a woken step.
 - The player's rules for a contact with a static-geometry object (no body: ladders, unbroken breakables): the normal's sign in rule 9's softening, the drop and step replacement, and the ground material it offers.
-- Sections 8 and 9 cite `trader-door` (3.3 and 2.4, the door's motor and stop); once that document is gone they need the system specification that holds the door's joint, motor and stop.

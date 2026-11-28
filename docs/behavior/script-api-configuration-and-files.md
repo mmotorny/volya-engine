@@ -9,7 +9,7 @@ unlisted `ModifDigitOnly`), the file-entry class `fs_file`, and the global funct
 `user_name`. This is spec F of the approved scoping specification `docs/behavior/script-api-scope.md` (section 6,
 order 6), which assigns these names to it; its scope rule applies: this spec owns every name of these classes
 and functions as the binary registers them, listed or not. Section 9 works through the reads of one logic file,
-that of the trader's door (`docs/behavior/trader-door.md`), as an example.
+that of the trader's door (`docs/behavior/physics-shells.md` 10), as an example.
 
 Builds on (not repeated here):
 
@@ -475,7 +475,7 @@ The logic of a physics object is read by its binder and the logic scripts
 the constructor `ini_file(name)` (2.2), `section_exist` (3.1), `line_exist` (3.1), `r_string` (3.2) and `r_bool`
 (3.4). An object's custom-data configuration itself comes from the game object member `spawn_ini()` (spec M,
 not this spec); everything read from it goes through the same readers. For the door object of
-`trader-door.md` section 1:
+`physics-shells.md` section 10:
 
 1. The binder asks the custom data for the sections `animation`, `logic` and `drop_box` with `section_exist`.
 2. The logic reads `[logic] cfg` from the custom data, guarded by `section_exist` and `line_exist`, with
@@ -531,7 +531,7 @@ and `r_bool`'s four true words; the same members serve every object's logic.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG build); the binaries identified above; the
   winning copies of `gamedata.db0` … `gamedata.dbd` as extracted with the project's archive tool
   (`scripts\lua_help.script`, the shipped scripts, `config\scripts\esc_trader_door.ltx`); the door's custom data
-  from `spawns\all.spawn` as decoded for the approved trader-door spec.
+  from `spawns\all.spawn` as decoded with the record layouts of `sav.md` 7.4.
 - Analysis: static analysis (Ghidra, headless, read-only) of the registration code of these classes and
   functions in `xrGame.dll`, of the functions it binds there, and of the configuration reader, the file index,
   the path aliases and start-up of `xrCore.dll`; reading of the shipped scripts; the scoping spec's scan of the

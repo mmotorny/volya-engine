@@ -29,8 +29,8 @@ Builds on (not repeated here):
   its section 2.2 (entity, living, inventory owner, fighter, stalker, player, item, physical, anomalous zone,
   restrictor), the routine that swallows diagnostics (its 2.3), `CGameObject` and its `use` (10.1), the player's
   use action (6.3).
-- `docs/behavior/physics-shell-shapeless-root.md` section 5 and `docs/behavior/trader-door.md` (the worked
-  example of section 10).
+- `docs/behavior/use-action.md` (the use action, 3, its use callback and the door scheme's, 4, the usable flag,
+  10) and `docs/behavior/physics-shells.md` (the trader's door, 10: the worked example of section 10).
 
 Conventions:
 
@@ -323,9 +323,9 @@ The door is a `CPhysicObject` (M 12): of M's kinds it has only physical. Its bin
   data (`spawn_ini()`) has a section `drop_box` (measured, `bind_physic_object.script`).
 - Of these three ids the engine calls only `use_object` for a `CPhysicObject`: its class has the scripted use
   that raises id 15 (M 10.1), and none of the classes whose hit or death handling raises ids 16 and 8 (section 4)
-  [OC-18]. So the player's use action (M 6.3, `physics-shell-shapeless-root.md` 5) calls
+  [OC-18]. So the player's use action (M 6.3, `use-action.md` 3, 4) calls
   `generic_physics_binder.use_callback(binder, door, player)`: the door's handle and the user's [OC-9, OC-18]. The
-  binder passes the use on to the active scheme (`trader-door.md` 2.5). The hit and death callbacks the binder sets
+  binder passes the use on to the active scheme (`use-action.md` 4.1). The hit and death callbacks the binder sets
   are never called for the door (static, from the call sites of section 4).
 - `ph_door.script` (`action_door:close_door`): `self.object:set_fastcall(self.fastcall, self)` three times in a
   row. Each call replaces the door's fast call (section 5), so one remains: `action_door.fastcall(action)` is

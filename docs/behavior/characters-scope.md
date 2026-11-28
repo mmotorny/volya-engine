@@ -13,8 +13,8 @@ no behaviour itself.
 
 It builds on the approved specifications `sav`, `ltx-config`, `ui-layout`, `text-and-fonts`, `db-archive`,
 `skeletal-motions`, `level-cform`, `chunks`, `sound-ogg-params` (`docs/formats/`), `offline-simulation`,
-`level-objects`, `script-loading`, `script-environment`, `script-api-scope`, `dialogue-scope`,
-`trader-and-crows-scope`, `trader-door`, `physics-scope`, `hud-scope`, `pda-scope`, `level-sound-scope`,
+`script-loading`, `script-environment`, `script-api-scope`, `dialogue-scope`,
+`trader-and-crows-scope`, `physics-scope`, `hud-scope`, `pda-scope`, `level-sound-scope`,
 `narrowed-specs-scope`, `sound-occlusion`, `sound-positional`, `object-visibility`, `player-hits`,
 `environment-hits` (`docs/behavior/`), all cited by name.
 
@@ -427,7 +427,7 @@ Scripts: none. Order 1. First path.
 
 **CH-2 Identity and profile choice** (`character-identity`, behaviour). 2.1. Data: 1.1's Trader-like
 fields, 1.3, the monster sections' `community`, `rank`, `spec_rank`. Builds on: CH-1, `sav` 7.4,
-`offline-simulation` 8 (creation order), `level-objects`. Waits on: nothing for the explicit case; the
+`offline-simulation` 8 (creation order), 6.5 (which objects are present). Waits on: nothing for the explicit case; the
 random generator for the choice. Scripts: none known. Order 2. First path.
 
 **CH-3 Communities, ranks, reputation and relations** (`character-relations`, behaviour). 2.1. Data: 1.4.
@@ -450,7 +450,7 @@ Builds on: `offline-simulation` 2–4, `chunks`. Waits on: nothing. Scripts: non
 files, the `ef_*` keys. Builds on: `db-archive`. Waits on: nothing for the format. Scripts: none. Order 7.
 
 **CH-26 Online life** (`creature-online`, behaviour). 2.6. Data: the CH-26 keys, `respawn.ltx`. Builds
-on: CH-2, `level-objects`, `offline-simulation` 6, `script-api-scope` L. Waits on: PH-22 for the body.
+on: CH-2, `offline-simulation` 6, `script-api-scope` L. Waits on: PH-22 for the body.
 Scripts: `bind_stalker`, `bind_monster`, `se_respawn`. Order 8.
 
 **CH-9 Paths and restrictions** (`character-paths`, behaviour). 2.2. Data: CH-8's, the terrain sections,
@@ -616,7 +616,7 @@ here:
   `gamedata.db0` … `gamedata.dbd`; binary `bin\xrGame.dll`.
 - Data examined: winning copies of `config\`, `scripts\` and `spawns\all.spawn` and the archive listing,
   as extracted for the approved `pda-scope` (`checks/pda-scope/extract.py`); `game.graph` as extracted for
-  `level-objects`; the shipped API listing `scripts\lua_help.script`; the approved specifications listed
+  an earlier specification of the level's objects (its layout: `offline-simulation` 1); the shipped API listing `scripts\lua_help.script`; the approved specifications listed
   above.
 - Analysis: reading of the spawn records with a reader written from `sav` 7.2–7.4 and
   `offline-simulation` 1; reading of the configuration with key case kept (`ltx-config` 6); searches of

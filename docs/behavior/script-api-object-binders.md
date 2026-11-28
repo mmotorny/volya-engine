@@ -22,7 +22,9 @@ Builds on (not repeated here):
 - Spec M, `docs/behavior/script-api-game-object-basics.md` (cited as **M**): engine objects and their handles
   (its 2.1), kinds, identity (its 3), `CGameObject` and the client classes, `CPhysicObject` (its 10).
 - `docs/formats/ltx-config.md` (section inheritance, its 5), `docs/formats/sav.md` (client data, its 7.2 and 8),
-  `docs/behavior/level-objects.md`, `docs/behavior/trader-door.md` (the worked example of section 8).
+  `docs/behavior/offline-simulation.md` (which objects are present, 6.5), `docs/behavior/physics-shells.md` (the
+  trader's door's record and shell, 7, 10: the worked example of section 8),
+  `docs/behavior/script-api-configuration-and-files.md` (the door's logic file, 9).
 
 Conventions:
 
@@ -273,7 +275,7 @@ calling the binder, the binder is deleted and detached and the object continues 
 non-empty client-data block (see the mark at 5.1 step 5), not only when a saved game is loaded.
 
 The order between objects (which object spawns or updates first) belongs to the specs of those steps (D 3 for the
-New Game; level-objects.md for which objects spawn).
+New Game; offline-simulation.md 6.5 for which objects spawn).
 
 ## 6. Physics objects (`CPhysicObject`, static)
 
@@ -315,14 +317,14 @@ not dispatch as binder methods (2.3); handing them to the engine as callbacks is
 
 ## 8. Worked example: the trader's door
 
-The door is a spawn record of section `physic_object` (trader-door.md 1), class id `O_PHYS_S`, client class
+The door is a spawn record of section `physic_object` (physics-shells.md 10), class id `O_PHYS_S`, client class
 `CPhysicObject` (section 6); its section has `script_binding = bind_physic_object.init` [OB-2]. At a New Game the
 door spawns in the spawning stage of D 3.3. Within its spawning (5.1, section 6):
 
 1. The binding calls `bind_physic_object.init(handle)`. The function reads the custom data (`spawn_ini()`, M 3):
    a section `[animation]` would make it call the script's `abort`; it returns without binding only when the
    custom data exists, has neither `[logic]` nor `[drop_box]`, and the class id is not `projector`. The door's
-   custom data has `[logic]` (trader-door.md 1), so it sets the script table `db.storage[id]` and attaches a new
+   custom data has `[logic]` (physics-shells.md 10), so it sets the script table `db.storage[id]` and attaches a new
    `generic_physics_binder`, whose `__init` calls `super(obj)` and sets `initialized` and `loaded` to false
    [OB-7].
 2. `reload("physic_object")` (the base call, nothing more), then `reinit()` (the base call, then a fresh
@@ -330,13 +332,13 @@ door spawns in the spawning stage of D 3.3. Within its spawning (5.1, section 6)
 3. No `load`: the New Game's spawn data has no client data (sav.md 8). In a saved game `load(reader)` sets
    `loaded`, then reads the logic's saved state with `xr_logic.load_obj` [OB-7].
 4. The physics object's engine spawning, then `net_spawn(data)`: the base call returns true, so the override goes on
-   (the door is no `projector` and has no `[drop_box]`, trader-door.md 1) and returns true [OB-7]; `CPhysicObject`
+   (the door is no `projector` and has no `[drop_box]`, physics-shells.md 10) and returns true [OB-7]; `CPhysicObject`
    succeeds in any case (section 6). Then the door's collision form and
-   physics shell are made (section 6, trader-door.md 1).
+   physics shell are made (section 6, physics-shells.md 7, 10).
 
 Having a binder, the door stays scheduled (section 6). At each scheduled update, after the engine's update, its
 binder's `update(delta)` runs; the first one in which the player's script object exists (`db.actor`) starts the
-logic with `xr_logic.initialize_obj` (the `ph_door` scheme of trader-door.md 2.1), and every update with an active
+logic with `xr_logic.initialize_obj` (the `ph_door` scheme of its logic file, script-api-configuration-and-files.md 9), and every update with an active
 section (or with `[drop_box]`) passes `"update"` to the scheme and sets the hit, death and use callbacks (spec O)
 [OB-7]. When the game is
 saved the door is always save-relevant; its block holds the physics flag, then `xr_logic.save_obj`'s data written

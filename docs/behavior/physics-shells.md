@@ -26,9 +26,10 @@ Builds on (not repeated):
   angle, stops and motor; PH-5, resting and waking (`physics-resting.md`, cited as `resting`): a shell activated
   switched off and its waking; PH-4, `docs/behavior/physics-contacts.md` (cited as `contacts`): resting shells
   in the collision passes;
-- `docs/behavior/level-objects.md` (cited as `objects`): the object's transform *X* (3.4), model files, bones,
-  the bind pose and the model-space bind matrix *B* (4.4);
-- `docs/behavior/hanging-lamps.md` (cited as `lamps`) 3.4; `docs/behavior/trader-door.md` (cited as `door`);
+- `docs/behavior/object-visual-and-transform.md` (cited as `OV`): the object's transform *X* (4);
+  `docs/formats/skeleton-ogf.md` (cited as `SK`): model files, the visual's box (2), bones, the bind pose, the
+  local bind matrix *L* and the model-space bind matrix *B* (4);
+- `docs/behavior/hanging-lamps.md` (cited as `lamps`) 3.4;
   `docs/formats/sav.md` (record layouts: the Visual, Skeleton and physics-object blocks, 7.4).
 
 Conventions:
@@ -42,13 +43,14 @@ Conventions:
   its body's disabled flag set (`library` 3.3).
 - The **plain build** and the **checking build** are the two ways into the build from the bone data: the same
   build, the second followed by a fatal test of the root (section 1) [SR-B1, SR-B1b].
-- Transforms compose in the row-vector convention of `objects` 4.4: "A then B" is A · B.
+- Transforms compose in the row-vector convention of `SK` (conventions, 4): "A then B" is A · B.
 - "Fatal" is a failed check with a message (`world` 5); the game stops.
 - Statements are static (read from the shipped binaries and data; the game was not run). Inferred statements
   are marked **believed**; what could not be established is marked **unestablished**.
 - Bracketed ids are the checks reproducing a statement: functions of `checks.py` in the dirty workspace's
   `checks/physics-shells/` (`python3 checks.py` runs them all); ids `SR-…` are run by `shapeless_root.py` in
-  the same folder (`python3 shapeless_root.py`).
+  the same folder (`python3 shapeless_root.py`); ids `TD-…` by `checks/trader-door-retire/run_all.py`
+  (`python3 run_all.py`).
 
 ## 1. Who builds a shell, and when
 
@@ -142,7 +144,7 @@ physics-object model is bone 0 [D1c], so the build starts at the model's own roo
 ### 3.2 The walk
 
 The bones are walked from the root, children in bone order (`bone` 3.4). Each bone's **transform** is its bind
-transform (`objects` 4.4, *L*) followed by the transform passed down from above, so at the root it is *L* and
+transform (`SK` 4, *L*) followed by the transform passed down from above, so at the root it is *L* and
 below it is the bone's model-space bind matrix *B* [B1]. For each bone:
 
 1. A bone that is not visible adds nothing; its children are walked with its transform and the same element
@@ -224,7 +226,7 @@ off), 377 set.
 
 ### 4.2 Type 0: the simple box shell
 
-One element with one box: unrotated, centred at the centre of the model's bounding box (`objects`: the visual's
+One element with one box: unrotated, centred at the centre of the model's bounding box (`SK` 2: the visual's
 box), with half sizes 0.5 × its extent (then at least 0.005, 2.2) [T1b]. The record's mass is spread over the
 shell by volume (one element: all of it), about the box centre (2.3). Unless the object already has a parent object
 (**believed**: the condition tests a field holding another object [T1c]), the shell is activated at once at *X*,
@@ -235,7 +237,7 @@ box (section 8.2).
 ### 4.3 Types 1 and 2
 
 Unused in the data (`scope` 1.2) [D4]. From the root, for every bone [T2]: an element whose frame is the bone's
-current model-space pose, with the bone's chunk-13 box (`objects` 4.4; when the length of its half-size vector is
+current model-space pose, with the bone's chunk-13 box (`SK` 4; when the length of its half-size vector is
 below 0.05, 0.05 is added to each half size), mass 10; the bone is given the shell's callback; it is joined to the
 element above by a three-axis joint (`bone` 3.2) with its anchor at (0, 0, 0), first axis x, third axis y, and
 limits −π/2 … π/2 on all three axes (the limits only when both elements exist). Type 2 makes no joint for the
@@ -267,7 +269,8 @@ the bone data's masses (2.3), a fixed element's body 10⁸ (5.1).
 ### 5.1 Fixing
 
 A fixed element is held in place: its fixed flag is set and its body gets a sphere mass adjusted to a total of
-10⁸, gravity off, zero linear and angular velocity, force and torque [SR-B3c]. An element without geometry is
+10⁸, gravity off, zero linear and angular velocity, force and torque [SR-B3c]; while it is fixed, a force applied
+to the element at a point (given in its body's frame or in the world) is ignored [TD-B4b]. An element without geometry is
 fixed this way when activated, instead of being given a mass (2.1) [SR-B3]; the elements of a physics object
 record's fixed bones are fixed after activation (4.4) [SR-B4].
 
@@ -409,7 +412,7 @@ What building it takes, in order:
    group, with one joint plus its contacts, the door's shell is solved by the exact stepper (3.5).
 5. Drags 0.001 / 0.02; rest parameters the defaults (no `[disable]`) (4.1).
 6. Custom data: `[collide]` `ignore_static` with fixed bones named → the door's shell never collides with the
-   level's mesh, only with other objects (the player's body included, `door` 3) (5.2).
+   level's mesh, only with other objects (the player's body included, `contacts` 7) (5.2).
 7. Model user data: none. Startup animation: none (rigid model); the bones are computed once, and the bodies are
    re-placed at the bind pose, which is where they already are (7, 8.1).
 8. Drawing: the `door` bone follows the door's body (8.1); `link`'s callback keeps it at the fixed body;
@@ -423,9 +426,6 @@ What building it takes, in order:
   The fatal test belongs to the checking build.
 - `world` 4.2 ("no code sets the exact-solver mark"): naming fixed bones in a physics object's record sets it
   (3.5); a merge carries it into the colliding object's requests (`contacts`).
-- `door` 2.3: the hinge's first element is the frame's own element, fixed at activation (3.3, 3.5).
-- `door` 2.4: the frame (`link`) is its own shapeless element (3.5); the hinge joins the door's body to the
-  static environment, not to the frame's body (3.3).
 
 ## 12. Unestablished and believed
 

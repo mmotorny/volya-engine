@@ -11,8 +11,9 @@ Builds on (not repeated): `docs/behavior/physics-scope.md` (cited as `scope`; te
 *step*, *scripts*), `docs/formats/bone-physics.md` (cited as `bone`; joint types, axes and limits, 3.2),
 `docs/behavior/physics-library.md` (cited as `library`; *public 0.5.0*),
 `docs/behavior/physics-shells.md` (cited as `shells`; elements, fixing, the shapeless root and which bodies a
-joint joins, 3.3, 3.5, 5.1), PH-5, resting and waking (`physics-resting.md`, cited as `resting`),
-`docs/behavior/trader-door.md` (cited as `door`; the worked example).
+joint joins, 3.3, 3.5, 5.1; the trader's door, 10), PH-5, resting and waking (`physics-resting.md`, cited as
+`resting`), `docs/behavior/script-api-physics-vehicles-helicopter-and-lamps.md` (cited as `Y`; the scripts' joint
+members, 5, and the door scheme's calls, 11).
 
 Conventions:
 
@@ -21,7 +22,8 @@ Conventions:
 - Statements are static (read from the shipped binaries and data; the game was not run). Inferred statements
   are marked **believed**; what could not be established is marked **unestablished**.
 - Bracketed ids are the checks reproducing a statement, run by `shapeless_root.py` in the dirty workspace's
-  `checks/physics-joints/` (`python3 shapeless_root.py`).
+  `checks/physics-joints/` (`python3 shapeless_root.py`); ids `TD-…` by `checks/trader-door-retire/run_all.py`
+  (`python3 run_all.py`).
 
 ## 1. No motor at creation
 
@@ -55,7 +57,7 @@ limits *lo* … *hi*:
 - the stops act on −φ: the body turns only within φ = −*hi* … −*lo* (as it would if the fixed body were body 1:
   the negated axis cancels the swap);
 - a motor velocity *v* drives φ at −*v*;
-- the scripts' hinge angle (`get_axis_angle`, `door` 2.3) is φ; the scripts' limits for such a hinge come back
+- the scripts' hinge angle (`get_axis_angle`, `Y` 5.4) is φ; the scripts' limits for such a hinge come back
   negated and swapped, (−*hi*, −*lo*), because its first element is fixed [SR-B7c], matching the reversed getter.
 
 ## 3. Worked example: the trader's door
@@ -63,28 +65,29 @@ limits *lo* … *hi*:
 The door's model `door_trader.ogf` [SR-D2b]: root `link` (no shape, rigid), `door` (box, joint type 2, a hinge),
 `lock` (no physics). The door's joint is a hinge made with the root's element (fixed, `shells` 3.5) as its first
 element and the door's as its second [SR-B6]; so it joins the door's body to the static environment
-(`shells` 3.3). Its limits are −1.9199 … 0 [SR-B7d]. By 2.3:
+(`shells` 3.3). Its limits are −1.9199 … 0 [SR-B7d]. Its spring and damping are 1 and 1 and the limit spring and
+damping factors of its axis (the bone's y axis) 1 and 1 [TD-J1], so the hinge and its stops are exactly as stiff
+as the world (`bone` 3.3). By 2.3:
 
 - the door turns only within φ = 0 … 1.9199;
-- `door`'s closing motor (velocity +1) drives the door toward φ = 0, its opening motor (velocity −3) toward
-  1.9199;
-- the scripts' hinge angle runs from 0 to 1.9199, and the scripts' limits come back as (−0, 1.9199), as `door`
-  2.3 states;
-- the hinge has no motor until the scheme sets one (section 1; `door` 2.3, 2.4, settling their belief).
+- the door scheme's closing motor (velocity +1, `Y` 11) drives the door toward φ = 0, its opening motor
+  (velocity −3) toward 1.9199;
+- the scripts' hinge angle runs from 0 to 1.9199, and the scripts' limits come back as (−0, 1.9199) (`Y` 11,
+  step 3);
+- the hinge has no motor until the scheme sets one (section 1).
 
-So `door`'s "closed" test (angle ≤ the low value received, −0) holds only when φ ≤ 0: at the pose the hinge was
-made in, or pressed past it by the motor within the stop's softness; not "at any angle between the stops".
-That φ = 0 is the placed pose is `door` 2.3's belief.
+So the door scheme's "closed" test (angle ≤ the low value received, −0, `Y` 11, step 5) holds only when φ ≤ 0: at
+the pose the hinge was made in, or pressed past it by the motor within the stop's softness; not "at any angle
+between the stops". That φ = 0 is the placed pose is **believed** (section 5).
 
 ## 4. Corrections to approved specifications
 
-- `door` 2.3: the script's hinge angle runs 0 … 1.9199, so "closed" holds only at the pose the hinge was made in
-  (section 3); there is no motor before the scheme sets one (section 1).
+None.
 
 ## 5. Unestablished and believed
 
 - The rest of PH-7's scope (introduction).
-- **Believed**: that φ = 0 is the door's placed pose (section 3, `door` 2.3).
+- **Believed**: that φ = 0 is the door's placed pose (section 3).
 
 ## 6. Provenance
 

@@ -5,19 +5,20 @@ assistance of the player's body (`level-cform` 6.3) and its drive (`level-cform`
 touches a movable body: whether the step probe tests movable bodies' shapes, how the step-assistance decision
 changes, and what of the drive, the step replacement and the contact friction changes. It fills the part
 `level-cform` 6.3 leaves out ("when the body touches a movable object, different rules apply"). Its trigger is
-the trader's door at the start of `l01_escape` (`trader-door`).
+the trader's door at the start of `l01_escape` (`docs/behavior/player-body-contacts.md` 9).
 
 Builds on (not repeated): `docs/formats/level-cform.md` (cited as `cform`; the body, its shapes, its contact
-rules 5.4, the forces 6.2, the probe and the step replacement 6.3), `docs/behavior/trader-door.md` (cited as
-`door`; the player's contacts with a movable body, 3.1 – 3.3), `docs/behavior/physics-world.md` (cited as
+rules 5.4, the forces 6.2, the probe and the step replacement 6.3), `docs/behavior/player-body-contacts.md`
+(cited as `pbc`; the player's contacts with a movable body, 1 – 2, the outer sphere, 6),
+`docs/behavior/physics-world.md` (cited as
 `world`; the order of a step, 3), `docs/behavior/player-movement.md` (cited as `movement`; the stored
 acceleration `a_k`, 6.1, and the drive, 6.2), `docs/behavior/climbing.md` (cited as `climbing`; the climbing
-states, 2.2), `docs/behavior/start-position.md`.
+states, 2.2), `movement` 7.1 (the start of a New Game: the stored feet position and the eye height).
 
 Conventions:
 
 - A **movable body** is a physics body other than the player's own: a contact is **with a movable body** when
-  both its shapes are attached to bodies (`door` 3.3 uses the same test). Shapes of the level mesh have no body.
+  both its shapes are attached to bodies (`pbc` uses the same test, 2.1). Shapes of the level mesh have no body.
 - `â` is the unit direction of the stored acceleration `a_k` (`movement` 6.1), `a` that vector. Positions are
   world positions, +y up. "The ground contact", "the obstacle contact", their normals (pointing from the surface
   towards the body) and "walkable" are those of `cform` 6.2; the **ground point** and the **obstacle point** are
@@ -69,7 +70,7 @@ Which contacts reach the rules [T2, T2b, T2c]:
   constant (its value not established here).
 - The **outer sphere** (`cform` 5.1; radius `2r` = 0.7 centred 1.225 m above the feet for the standing box,
   `cform` 7.4) is one of the four shapes the rules recognise. Its own callback marks each of its contacts not
-  made and sets "blocked" (`door` 3.1); its contacts still reach the rules and so **set the touch flag
+  made and sets "blocked" (`pbc` 6); its contacts still reach the rules and so **set the touch flag
   whenever the outer sphere overlaps a movable body's shape**, before any shape of the body proper touches it
   [T1, T2c]. Such contacts end in the rules right after the touch flag (and the step replacement's test): they
   are not counted, and are neither the ground nor the obstacle contact (section 3.2) [T1, S5].
@@ -165,18 +166,18 @@ instruction writes) [S2, S3, S4, K1].
   assistance with an obstacle contact the drive is `25·m·T` along `â` turned into the obstacle plane, × 4,
   with the vertical component made non-negative and the horizontal signs of `â`; the side coefficient 700; they
   read the step-assistance result and the obstacle contact, never the touch flags [D1]. The obstacle contact may
-  be a contact with the movable body (its normal toward the body, `door` 3.3). Example: moving straight into a
+  be a contact with the movable body (its normal toward the body, `pbc` 2.2, rule 8). Example: moving straight into a
   vertical face (obstacle normal `−â`), the assisted drive points straight up, at `100·m·T` [W1, D1].
 - **Step replacement.** Its conditions (`cform` 6.3) contain nothing about movable bodies [D2]; it acts on
-  contacts with movable bodies as on the level's (`door` 3.3). The "two internal body states" `cform` 6.3
+  contacts with movable bodies as on the level's (`pbc` 2.2, rule 2). The "two internal body states" `cform` 6.3
   leaves unestablished are the climbing states *climbing up* and *climbing down* (`climbing` 2.2): the
   replacement is off while climbing [D2, C1]. While the outer sphere overlaps a movable body, the "blocked"
-  flag it sets keeps the replacement off in that step and the next (`cform` 6.3, `door` 3.3).
+  flag it sets keeps the replacement off in that step and the next (`cform` 6.3, `pbc` 6).
   **Disputed in review:** within that step it keeps the replacement off only for contacts handled after the
   outer-sphere contact set the flag (the replacement tests "blocked" as set so far in the step); contacts
   handled earlier in the step are not affected by it.
 - **Contact friction and traction.** The "× 4 during step assistance" of `cform` 5.4 follows the decision as
-  made (section 3.1) [D2b]; a contact with a movable body has the traction value 1 (`cform` 5.4, `door` 3.3).
+  made (section 3.1) [D2b]; a contact with a movable body has the traction value 1 (`cform` 5.4, `pbc` 2.2, rule 6).
 
 ## 5. At the trader's door (derived)
 
@@ -213,7 +214,7 @@ instruction writes) [S2, S3, S4, K1].
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG); binaries `bin\xrGame.dll`,
   `bin\XR_3DA.exe`, `bin\xrCore.dll`.
 - Data examined: the approved specifications listed above (the climbing states' numbering through the climbing
-  specification's own checks; the start eye height of `start-position`).
+  specification's own checks; the start eye height of `movement` 7.1).
 - Analysis: static analysis of the binaries (headless decompilation and disassembly with Ghidra) of the player's
   body: the step probe and its query, the step-assistance decision and its rules for movable bodies, the contact
   rules and the touch flag, the pair contact generation and the shapes' and objects' contact callbacks, the

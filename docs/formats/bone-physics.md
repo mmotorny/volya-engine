@@ -11,10 +11,10 @@ program is marked **believed**.
 
 Builds on (not repeated here):
 
-- `docs/behavior/level-objects.md` section 4: model files, chunk 13 (bone names, parents, bone index = position
-  in its list), the layout of chunk 16 (section 4.4, whose field names this text refines), the bind pose (the
+- `docs/formats/skeleton-ogf.md`: model files, chunk 13 (bone names, parents, bone index = position
+  in its list), the layout of chunk 16 (section 4, whose field names this text refines), the bind pose (the
   bind rotation and position fields and how they make each bone's bind matrix), child meshes and vertex formats
-  (sections 4.5 – 4.6).
+  (sections 5 – 6).
 - `docs/formats/level-cform.md`: the game material library `gamemtl.xr`, its material names and flags (section
   3.2, the **dynamic** flag 0x100), the world's error reduction and constraint-force mixing (section 4.2) and the
   step length (section 6.1).
@@ -23,7 +23,7 @@ Builds on (not repeated here):
 
 Conventions: little-endian; `u16`, `u32` unsigned; `f32` IEEE single; `float3` three `f32` (x, y, z); `stringZ`
 bytes up to and including a zero byte. Bit values are written as numbers (bit 1 = value 1, bit 2 = value 2, bit
-4 = value 4). "The bone's own space" is the bone's bind space of `level-objects.md` 4.4 (the space of its chunk-13
+4 = value 4). "The bone's own space" is the bone's bind space of `skeleton-ogf.md` 4 (the space of its chunk-13
 box). "Above" a bone is its parent, its parent's parent and so on.
 
 **Checks.** Every claim carries a tag: [D*n*] data checks (`data.py`, over every `.ogf` file of the archives and
@@ -54,8 +54,8 @@ byte following its terminating zero.
 | +176 | 4 | break force, `f32` | (3.5) |
 | +180 | 4 | break torque, `f32` | (3.5) |
 | +184 | 4 | friction, `f32` | present only if the version's low 16 bits are not 0; not used (4) |
-| +188 | 12 | bind rotation, `float3` | `level-objects.md` 4.4 |
-| +200 | 12 | bind position, `float3` | `level-objects.md` 4.4 |
+| +188 | 12 | bind rotation, `float3` | `skeleton-ogf.md` 4 |
+| +200 | 12 | bind position, `float3` | `skeleton-ogf.md` 4 |
 | +212 | 4 | mass, `f32` | (5) |
 | +216 | 12 | centre of mass, `float3` | in the bone's own space (5) |
 
@@ -315,7 +315,7 @@ PH-15. Bones that are hidden when the shell is built are passed over, their chil
   (merged view); binaries `bin\XR_3DA.exe`, `bin\xrGame.dll`, `bin\xrRender_R1.dll`.
 - Data examined: every `.ogf` file of the archives (`meshes\` and `levels\*\meshes\`; 1,579 skeleton models,
   20,685 bone records), `gamemtl.xr`.
-- Analysis: a throwaway reader written from `level-objects.md` 4.3 – 4.6 and this text reads every model's chunks
+- Analysis: a throwaway reader written from `skeleton-ogf.md` 3 – 6 and this text reads every model's chunks
   9, 13 and 16 and reproduces the counts of sections 1 – 8; static analysis of the shipped binaries (headless
   disassembly and decompilation) for the model loader's reading of chunk 16 and its defaults, the load-time check
   of breakable bones and the assignment of faces to bones, the test that places hit marks on models, the

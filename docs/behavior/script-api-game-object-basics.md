@@ -25,9 +25,10 @@ Builds on (not repeated here):
   vector object).
 - Spec F, `docs/behavior/script-api-configuration-and-files.md`: the class `ini_file`. What an
   `ini_file` object is and how it reads its text is F's; statements that need it say **depends on F**.
-- `docs/behavior/level-objects.md`, `docs/behavior/offline-simulation.md` (spawn records, simulation objects,
+- `docs/behavior/offline-simulation.md` (spawn records, simulation objects, which objects come online, 6.5,
   level and game vertices, `level.ai` level vertices of 21 bytes), `docs/behavior/player-hits.md` (hit types,
-  wounds, what a hit does to the player), `docs/behavior/trader-door.md` (the worked example of section 12).
+  wounds, what a hit does to the player), `docs/behavior/physics-shells.md` (the trader's door's record, 10: the
+  worked example of section 12).
 
 Conventions:
 
@@ -36,7 +37,7 @@ Conventions:
 - **The listing** is `scripts\lua_help.script` (scoping spec 2.1), a guide only; every member below is
   established from the game library's registration code.
 - An **engine object** is an object of the level as the engine keeps it (created from its spawn data when it
-  comes online, level-objects.md); its **handle** is the `game_object` value scripts hold for it. A call is
+  comes online, offline-simulation.md 6.5); its **handle** is the `game_object` value scripts hold for it. A call is
   written as scripts write it: `obj:position()`, `h.power = 2`. A **number** is the runtime's double; a
   **text** is a Lua string; **nil** is Lua's nil.
 - Class names are given as the game library registers them for scripts (`CAI_Stalker`, `CPhysicObject`, …);
@@ -135,7 +136,7 @@ anomaly members of 6.1 [GO-10].
 ## 3. Identity (static)
 
 All are set when the engine object spawns from its spawn data (the simulation object or spawn record it is
-created from, level-objects.md, offline-simulation.md) [GO-7]:
+created from, offline-simulation.md) [GO-7]:
 
 | Member | Result |
 |---|---|
@@ -443,7 +444,7 @@ script object, and what reading an unregistered name on a handle gives is establ
 
 ## 12. Worked example: the door scheme
 
-The trader's door (`docs/behavior/trader-door.md`) is a spawn record of section `physic_object`, class id
+The trader's door (`docs/behavior/physics-shells.md` 10) is a spawn record of section `physic_object`, class id
 `O_PHYS_S`, whose client class is `CPhysicObject` (spec C 3.3) [GO-15]: its handle's object has the kind
 physical only (2.2). The physics-object binder and the door scheme call, of this spec's members [GO-15]:
 

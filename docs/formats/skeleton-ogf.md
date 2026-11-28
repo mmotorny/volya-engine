@@ -20,7 +20,7 @@ Builds on (not repeated here):
 Conventions: little-endian; `u8`/`u16`/`u32`, `s16`, `f32`; `float3` = 3 × `f32`; `stringZ` zero-terminated
 Windows-1251; "chunk" = `u32 id`, `u32 size`, payload, found by id; matrices in the row-vector convention (a
 point `p` is transformed as `[p 1] · M`; `M[r][c]`, rows and columns counted from 0); angles in radians.
-"Model space" uses the world's axes and units (`docs/behavior/start-position.md` section 1).
+"Model space" uses the world's axes and units (`docs/behavior/world-coordinates.md` section 1).
 
 **Checks.** Bracketed ids [SK-*n*] name the checks of the dirty workspace's
 `checks/level-objects-split/run_all.py` (decoders `ogf.py`, `refs.py`, `named.py` beside it), which reads every
@@ -223,8 +223,8 @@ Nothing of the layout. The meaning of chunks 17 and 18 beyond their text, which 
 
 ## 9. Provenance
 
-- Date: 2026-11-24 (as section 4 of `level-objects.md`); moved into this specification unchanged on
-  2026-11-27 when that specification was split by system.
+- Date: 2026-11-24 (as part of an earlier specification of the level's objects); moved into this specification
+  unchanged on 2026-11-27 when that specification was split by system.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd`; binaries `bin\XR_3DA.exe`, `bin\xrRender_R1.dll`.
 - Data examined: every `.ogf` file under `meshes\` and `levels\*\meshes\`; `spawns\all.spawn` for the

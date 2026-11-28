@@ -36,7 +36,7 @@ Conventions:
   **unestablished**.
 - Bracketed ids are the checks reproducing a statement: `D…` in `c1_data.py`, `B…` in `c2_binary.py`, in the
   dirty workspace's `checks/info-portions/` (`python3 -I run_all.py` runs them all; the data comes from
-  `checks/pda-scope/extract.py`).
+  `checks/pda-scope/extract.py`); `TD-…` by `checks/trader-door-retire/run_all.py` (`python3 run_all.py`).
 
 ## 1. Declaration
 
@@ -343,8 +343,17 @@ The first level's trader dialog and tutorial (`dialogue-scope` 3) use these port
 | `esc_serious_talk` | none | none |
 
 On the player character each of them also calls `inventory_info` (3.4 step 3), through which the shipped
-scripts react (`level_tasks`; the trader's door opens on `esc_trader_can_leave`, `trader-door` 4).
+scripts react (`level_tasks`; the trader's door's locked logic switches on `esc_trader_can_leave`,
+`script-api-configuration-and-files` 9).
 `global_dialogs` (6, 7.2) gives the first talk its `actor_break_dialog`.
+
+Who gives two of them in the shipped data: `esc_trader_can_leave` is given by one dialog phrase of the
+configuration, phrase 32111 of `escape_trader_start_dialog` (`dialogue-scope` 3); elsewhere it occurs only in its
+declaration, in the trader's door's logic (`script-api-configuration-and-files` 9), in a commented-out line of
+another door's logic in `spawns\all.spawn`, and in scripts with a `main` function that no configuration file or
+spawn record names, nor any script that calls them [TD-D6, TD-D6b]. So in play only that phrase gives it
+(**believed**: those scripts are debug scripts that nothing runs), and without that talk the door's logic stays in
+its locked section, whose `on_info` is its only switch (`script-api-configuration-and-files` 9, item 5). `tutorial_end` is given only by phrase 521111 of the same dialog [TD-D7c].
 
 ## 10. Not established
 
@@ -368,7 +377,9 @@ scripts react (`level_tasks`; the trader's door opens on `esc_trader_can_leave`,
   and dialog files, `scripts\*.script`, `spawns\all.spawn`.
 - Binaries examined: `bin\xrGame.dll`, `bin\xrXMLParser.dll`, `bin\xrLUA.dll` of the same installation.
 - Kinds of analysis: static analysis of the shipped binaries (Ghidra, headless, read-only), string
-  searches, and scripted reading of the game data. The game was not run.
+  searches, and scripted reading of the game data. The game was not run. The givers of section 9's last
+  paragraph come, with their checks, from an earlier specification of the trader's door (its data read from the
+  merged archive files of `checks/particles-and-lights-scope/extract_all.py`).
 
 ## Gaps found in review
 
