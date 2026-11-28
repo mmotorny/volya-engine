@@ -10,9 +10,10 @@
 //! caller's (`volya_engine::characters`); how a profile gives a specific
 //! character is CH-2's.
 
-use std::fmt;
 use std::io;
 
+pub use crate::failed_check::FailedCheck;
+use crate::failed_check::{failed, logged};
 use crate::ltx::value;
 use crate::text::string_table::{StringTable, normalize_whitespace};
 use crate::xml::{Document, Element};
@@ -27,54 +28,6 @@ pub const SPECIFIC_CHARACTER: &str = "specific_character";
 pub const DEFAULT_ICON: &str = "ui_npc_u_barman";
 /// `critical_wound_weights`' default (5.2).
 pub const DEFAULT_CRITICAL_WOUND_WEIGHTS: &str = "1";
-
-/// A failed check (conventions): the fatal error's description, its
-/// argument, and the log lines written before it (3.2). It travels inside
-/// an [`io::Error`] ([`Self::of`]).
-// TODO(#1012): the app reports it as a fatal message of its text, without
-// the log lines.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FailedCheck {
-    pub description: String,
-    pub argument: Option<String>,
-    /// Lines written to the log before the report, in order.
-    pub log: Vec<String>,
-}
-
-impl FailedCheck {
-    /// The failed check `error` carries, if any.
-    pub fn of(error: &io::Error) -> Option<&FailedCheck> {
-        error.get_ref()?.downcast_ref()
-    }
-}
-
-impl fmt::Display for FailedCheck {
-    /// The description, then the argument, separated by a space.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.description)?;
-        if let Some(a) = &self.argument {
-            write!(f, " {a}")?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for FailedCheck {}
-
-fn failed(description: impl Into<String>, argument: Option<&str>) -> io::Error {
-    logged(description, argument, Vec::new())
-}
-
-fn logged(description: impl Into<String>, argument: Option<&str>, log: Vec<String>) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        FailedCheck {
-            description: description.into(),
-            argument: argument.map(str::to_owned),
-            log,
-        },
-    )
-}
 
 /// The items of a `[profiles]` list (section 1): comma-separated, each
 /// trimmed of surrounding white space. No value gives no item.

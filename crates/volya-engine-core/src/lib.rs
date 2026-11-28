@@ -19,6 +19,7 @@ pub mod cycles;
 pub mod details;
 pub mod detector;
 pub mod diagnostics;
+pub mod dialogs;
 pub mod display;
 pub mod door;
 pub mod file_cache;

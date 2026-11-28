@@ -17,6 +17,7 @@ The level (`volya-engine::level::LevelScreen`) owns what runs while a game is pl
 `volya-engine-core::info_portions`, docs/behavior/info-portions.md.
 
 - The declarations (the `[info_portions]` files with every portion's children, and the article, dialog and task ids they name) are read once, at the first New Game, and kept in `GameData` for the run; the spec leaves the original's moment open, and reading them then keeps them off the startup.
+- Dialogs (`volya-engine-core::dialogs`, docs/formats/dialog-files.md) are registered with the declarations, each id with its file and position, and loaded by id: a `Dialogs` parses a file again where it first loads one of its dialogs and keeps each dialog it read, where the original keeps the 14 documents open for the run (the files do not change while it runs).
 - The level holds the state: each holder's list by object id, in the shape `sav` 9 part 1 saves; the player character's articles and tasks; the messages sent to the server, which the next level update applies again (3.1). Interface windows give their portions through `LevelScreen::give_player`; an undeclared id is the level's fatal error, after the index's listing goes to the log.
 - The script part (action functions, the `inventory_info`, `article_info` and `task_state` callbacks, the dialogue window's rebuild mark) comes out as events in order, for the script interface (#220) and the dialogue window (#993); the level drops those it has no receiver for.
 

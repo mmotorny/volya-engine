@@ -25,6 +25,7 @@ use std::io;
 use std::sync::Arc;
 
 use volya_engine_formats::cp1251;
+use volya_engine_formats::dialog_files::DIALOG;
 use volya_engine_formats::ltx::Config;
 use volya_engine_formats::ui::int_attr;
 use volya_engine_formats::xml::{self, Document, Element};
@@ -108,10 +109,10 @@ impl Index {
     fn read<'a>(
         files: &'a [(String, Document)],
         element: &'static str,
-    ) -> io::Result<(Self, Vec<&'a Element>)> {
+    ) -> io::Result<(Self, Vec<Entry<'a>>)> {
         let mut index = Self::default();
         let mut elements = Vec::new();
-        for (name, doc) in files {
+        for (file, (name, doc)) in files.iter().enumerate() {
             let Some(root) = doc.root() else {
                 continue;
             };
@@ -120,11 +121,31 @@ impl Index {
                     invalid(format!("id for item don't set, number {number} in {name}"))
                 })?;
                 index.insert(id)?;
-                elements.push(e);
+                elements.push(Entry {
+                    place: Place {
+                        file,
+                        position: number,
+                    },
+                    element: e,
+                });
             }
         }
         Ok((index, elements))
     }
+}
+
+/// Where an indexed element is: its file's place in the list and its
+/// position among that file's elements of its name (`dialog-files` 3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub file: usize,
+    pub position: usize,
+}
+
+/// An indexed element and its place.
+struct Entry<'a> {
+    place: Place,
+    element: &'a Element,
 }
 
 /// A portion's children (1.3), each name's in file order. The children
@@ -201,6 +222,10 @@ pub struct Declarations {
     pub dialogs: Index,
     /// Each dialog's `priority` (`dialog-files` 4), by dialog index.
     dialog_priorities: Vec<i64>,
+    /// The `[dialogs]` list items, in list order (`dialog-files` 1).
+    dialog_files: Vec<String>,
+    /// Where each dialog is (`dialog-files` 3.1), by dialog index.
+    dialog_places: Vec<Place>,
     /// The `id`s of [`TASKS_FILE`]'s root's `game_task` children.
     tasks: HashSet<String>,
 }
@@ -210,6 +235,9 @@ impl Declarations {
     /// `files` of `system` (1.1) and [`TASKS_FILE`] from `vfs`. A missing
     /// section or key stops the game (our reading: the original reads them
     /// unconditionally).
+    // TODO(#995): for `[dialogs]`, what a missing section or key and an
+    // empty item do are review gaps; an empty item is read as the file
+    // `gameplay\.xml`, which cannot be opened.
     pub fn read(vfs: &dyn Vfs, aliases: &PathAliases, system: &Config) -> io::Result<Self> {
         let list = |section: &str| -> io::Result<Vec<(String, Document)>> {
             let files = system.read(section, "files")?;
@@ -235,17 +263,21 @@ impl Declarations {
         tasks: &Document,
     ) -> io::Result<Self> {
         let (portion_index, elements) = Index::read(portions, "info_portion")?;
-        let portion_data = elements.into_iter().map(Portion::read).collect();
+        let portion_data = (elements.into_iter())
+            .map(|e| Portion::read(e.element))
+            .collect();
         let (article_index, elements) = Index::read(articles, "article")?;
         let article_data = (elements.into_iter())
             .map(|e| Article {
-                article_type: e.attr("article_type").map(str::to_owned),
+                article_type: e.element.attr("article_type").map(str::to_owned),
             })
             .collect();
-        let (dialog_index, elements) = Index::read(dialogs, "dialog")?;
-        let dialog_priorities = (elements.into_iter())
-            .map(|e| int_attr(e, "priority", 0))
+        let (dialog_index, elements) = Index::read(dialogs, DIALOG)?;
+        let dialog_priorities = (elements.iter())
+            .map(|e| int_attr(e.element, "priority", 0))
             .collect();
+        let dialog_places = elements.iter().map(|e| e.place).collect();
+        let dialog_files = dialogs.iter().map(|(name, _)| name.clone()).collect();
         let tasks = (tasks.root().into_iter())
             .flat_map(|root| root.children_named("game_task"))
             .filter_map(|t| t.attr("id"))
@@ -258,8 +290,20 @@ impl Declarations {
             article_data,
             dialogs: dialog_index,
             dialog_priorities,
+            dialog_files,
+            dialog_places,
             tasks,
         })
+    }
+
+    /// The `[dialogs]` list items, in list order (`dialog-files` 1).
+    pub fn dialog_files(&self) -> &[String] {
+        &self.dialog_files
+    }
+
+    /// Where the dialog of index `index` is (`dialog-files` 3.1).
+    pub fn dialog_place(&self, index: usize) -> Place {
+        self.dialog_places[index]
     }
 
     /// The declared portion `id`'s children.
@@ -288,7 +332,11 @@ impl Declarations {
 /// be opened stops the game with "error while parsing XML file" and its
 /// name; an include path is relative to `$game_config$`, as `layout` 1.2
 /// reads it outside `ui\`.
-fn read_gameplay(vfs: &dyn Vfs, aliases: &PathAliases, name: &str) -> io::Result<Document> {
+pub(crate) fn read_gameplay(
+    vfs: &dyn Vfs,
+    aliases: &PathAliases,
+    name: &str,
+) -> io::Result<Document> {
     let file = format!("{name}.xml");
     let path = aliases.path(GAME_CONFIG, &format!("gameplay\\{file}"))?;
     let text = vfs::read(vfs, &path)
@@ -640,4 +688,4 @@ impl InfoPortions {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

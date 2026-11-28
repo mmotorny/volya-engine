@@ -81,7 +81,7 @@ fn ids(list: &[Known]) -> Vec<&str> {
 
 /// A file tree in memory, for [`Declarations::read`].
 #[derive(Default)]
-struct Files(HashMap<String, Vec<u8>>);
+pub(crate) struct Files(pub(crate) HashMap<String, Vec<u8>>);
 
 struct File(Cursor<Vec<u8>>);
 
@@ -117,7 +117,7 @@ impl Vfs for Files {
     }
 }
 
-fn aliases() -> PathAliases {
+pub(crate) fn aliases() -> PathAliases {
     PathAliases::parse(
         b"$game_data$ = false| true | $fs_root$ | gamedata\\\r\n\
           $game_config$ = true | false| $game_data$ | config\\\r\n",
