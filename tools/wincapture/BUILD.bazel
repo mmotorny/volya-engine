@@ -50,6 +50,19 @@ wincapture_binary(
     sdk = ["@dynamorio//:client_sdk"],
 )
 
+# The walks' audio device on the frame clock (--mojoal, unverified): an
+# OpenAL32.dll for the game's bin\ (openal.c), MojoAL on SDL 3.
+wincapture_binary(
+    name = "openal",
+    srcs = ["openal.c"],
+    kind = "openal",
+    out = "OpenAL32.dll",
+    sdk = [
+        "@mojoal//:sources",
+        "@sdl3_mingw//:sdk",
+    ],
+)
+
 # The driver (capture.c) and its audio recording (loopback.c).
 wincapture_binary(
     name = "volyacapture",
@@ -110,12 +123,18 @@ d3d9probes_zip(
         ":counter",
         ":counter-kernel32",
         ":counterprobe",
+        ":openal",
         ":plan",
         ":volyacapture",
         ":winmm",
+        "@sdl3_mingw//:runtime",
     ],
     out = "wincapture.zip",
-    trees = {"@dynamorio//:runtime": "dynamorio"},
+    trees = {
+        "@dynamorio//:runtime": "dynamorio",
+        "@mojoal//:license": "mojoal",
+        "@sdl3_mingw//:license": "sdl3",
+    },
 )
 
 volya_checks(wasm = False)

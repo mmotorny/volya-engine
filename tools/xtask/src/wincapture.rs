@@ -90,6 +90,45 @@ const FLAGS: &[&str] = &[
 /// and its import library `dynamorio.lib` among the sources).
 pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
     let mut command = Command::new(clang);
+    if kind == "openal" {
+        // The audio device (openal.c), which includes MojoAL's mojoal.c
+        // unchanged: third-party code, compiled without our warnings.
+        let folder_of = |name: &str, up: usize| -> Result<&Path> {
+            let file = sources
+                .iter()
+                .find(|s| s.ends_with(name))
+                .ok_or(format!("openal: no {name}"))?;
+            let mut folder = Path::new(file);
+            for _ in 0..up {
+                folder = folder.parent().ok_or(format!("{name}: no folder"))?;
+            }
+            Ok(folder)
+        };
+        command
+            .args([
+                "-O2",
+                "-s",
+                "-Wl,--no-insert-timestamp",
+                "-static",
+                "-shared",
+            ])
+            .arg("-Wl,--kill-at")
+            .arg("-I")
+            .arg(folder_of("/mojoal.c", 1)?)
+            .arg("-I")
+            .arg(folder_of("/AL/al.h", 1)?)
+            .arg("-isystem")
+            .arg(folder_of("/SDL3/SDL.h", 2)?)
+            .arg("-o")
+            .arg(out)
+            .args(
+                sources
+                    .iter()
+                    .filter(|s| s.ends_with(".c") && !s.ends_with("/mojoal.c")),
+            )
+            .args(sources.iter().filter(|s| s.ends_with(".dll.a")));
+        return run(&mut command);
+    }
     command
         .args(FLAGS)
         .arg("-o")
@@ -98,7 +137,14 @@ pub fn build(clang: &Path, out: &Path, kind: &str, sources: &[&str]) -> Result {
     match kind {
         // Exports undecorated, as winmm's.
         "dll" => command.args(["-shared", "-Wl,--kill-at", "-luser32"]),
-        "exe" => command.args(["-lbcrypt", "-lwinmm", "-luser32", "-lole32"]),
+        "exe" => command.args([
+            "-lbcrypt",
+            "-lwinmm",
+            "-luser32",
+            "-lole32",
+            "-lpowrprof",
+            "-lwtsapi32",
+        ]),
         // No C runtime: DynamoRIO loads a client privately and its own API
         // replaces the runtime's (counter.c). No system library but ntdll,
         // whose import library comes first: DynamoRIO's also provides one

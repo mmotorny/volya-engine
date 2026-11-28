@@ -233,6 +233,56 @@ filegroup(
     url = "https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-11.92.20777/DynamoRIO-Windows-11.92.20777.zip",
 )
 
+# MojoAL (zlib; LICENSE.txt), the OpenAL 1.1 implementation of the
+# Windows capture's audio device (tools/wincapture/openal.c, which compiles
+# its mojoal.c unchanged): a commit of its main branch.
+http_archive(
+    name = "mojoal",
+    build_file_content = """filegroup(
+    name = "sources",
+    srcs = ["mojoal.c", "AL/al.h", "AL/alc.h"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "license",
+    srcs = ["LICENSE.txt"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "c1042b4f46f1958c10ff28f21fedbfa86b9f55111e9afa2a273aea34167d77bb",
+    strip_prefix = "mojoAL-eec0a9f462afd992ae9e0c4cc87d893e9808f26b",
+    url = "https://github.com/icculus/mojoAL/archive/eec0a9f462afd992ae9e0c4cc87d893e9808f26b.tar.gz",
+)
+
+# SDL 3 (zlib; LICENSE.txt), which MojoAL runs on: its MinGW development
+# release, of which the 32-bit SDL3.dll goes into the capture runner and its
+# headers and import library build the audio device.
+http_archive(
+    name = "sdl3_mingw",
+    build_file_content = """filegroup(
+    name = "sdk",
+    srcs = glob(["i686-w64-mingw32/include/SDL3/*.h"]) + ["i686-w64-mingw32/lib/libSDL3.dll.a"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "runtime",
+    srcs = ["i686-w64-mingw32/bin/SDL3.dll"],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "license",
+    srcs = ["LICENSE.txt"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "d2d3bf3fb97a90b22e908a306d7362631ef1bab229d988fe6669595dc29cd9ed",
+    strip_prefix = "SDL3-3.4.20",
+    url = "https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-devel-3.4.20-mingw.tar.gz",
+)
+
 # Tools installed on the machine, with their versions (build/local_tools.bzl).
 local_tools = use_repo_rule("//build:local_tools.bzl", "local_tools")
 

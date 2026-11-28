@@ -24,11 +24,12 @@ wincapture_binary = rule(
     implementation = _binary_impl,
     doc = "C sources compiled into a 32-bit Windows DLL (`kind` dll), executable (exe) or " +
           "DynamoRIO client (client: `sdk` holds DynamoRIO's headers and import library; " +
-          "client-kernel32 the bisect's variant importing kernel32).",
+          "client-kernel32 the bisect's variant importing kernel32) or the audio device " +
+          "(openal: `sdk` holds MojoAL's sources and SDL 3's headers and import library).",
     attrs = {
-        "kind": attr.string(mandatory = True, values = ["dll", "exe", "client", "client-kernel32"]),
+        "kind": attr.string(mandatory = True, values = ["dll", "exe", "client", "client-kernel32", "openal"]),
         "out": attr.string(mandatory = True),
-        "sdk": attr.label_list(allow_files = [".h", ".lib"]),
+        "sdk": attr.label_list(allow_files = [".h", ".lib", ".a", ".c"]),
         "srcs": attr.label_list(allow_files = [".c", ".h"], mandatory = True),
         "_clang": attr.label(default = "@llvm_mingw//:bin/i686-w64-mingw32-clang", allow_single_file = True, cfg = "exec"),
         "_llvm_mingw": attr.label(default = "@llvm_mingw//:files", cfg = "exec"),

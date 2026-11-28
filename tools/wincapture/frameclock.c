@@ -424,6 +424,76 @@ static IDirect3DDevice9 *the_device;
 static DWORD presenting_thread; /* inside a hooked Present: an inner one counts not */
 static volatile LONG n_tcl, n_begin, n_end, n_reset, n_present, n_chain;
 
+/* The game's audio on the frame clock (openal.c): once the game's
+ * OpenAL32.dll is ours and its device has a context, each frame presented
+ * renders the frame step's samples at its rate (the remainder carried),
+ * appended to the driver's file. */
+typedef uint32_t (*volya_rate_fn)(void);
+typedef uint32_t (*volya_render_fn)(int16_t *, uint32_t);
+static volya_rate_fn audio_rate_of;
+static volya_render_fn audio_render;
+static HANDLE audio_file = INVALID_HANDLE_VALUE;
+static ULONGLONG audio_remainder; /* rate × ticks not yet rendered, in ticks × rate */
+
+static void render_audio(LONGLONG frame) {
+    if (!clock_->audio_path[0] || load(&clock_->audio_error)) {
+        return;
+    }
+    if (!audio_render) {
+        HMODULE al = GetModuleHandleA("OpenAL32.dll");
+        if (!al) {
+            return;
+        }
+        audio_rate_of = (volya_rate_fn)(void *)GetProcAddress(al, "volya_rate");
+        audio_render = (volya_render_fn)(void *)GetProcAddress(al, "volya_render");
+        if (!audio_rate_of || !audio_render) {
+            dlog("audio: the game's OpenAL32.dll is not the capture's");
+            store(&clock_->audio_error, -1);
+            audio_render = NULL;
+            return;
+        }
+    }
+    uint32_t rate = audio_rate_of();
+    if (!rate) {
+        return;
+    }
+    if (audio_file == INVALID_HANDLE_VALUE) {
+        audio_file = CreateFileA(clock_->audio_path, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                 CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (audio_file == INVALID_HANDLE_VALUE) {
+            store(&clock_->audio_error, (LONGLONG)GetLastError());
+            dlog("audio: cannot make the audio file (%lu)", GetLastError());
+            return;
+        }
+        store(&clock_->audio_rate, rate);
+        store(&clock_->audio_first_frame, frame);
+        dlog("audio: frame %lld, the device's first context: %u Hz", frame, rate);
+    }
+    ULONGLONG due = audio_remainder + clock_->step * rate;
+    uint32_t n = (uint32_t)(due / (FRAMECLOCK_TICKS_PER_MS * 1000));
+    audio_remainder = due % (FRAMECLOCK_TICKS_PER_MS * 1000);
+    static int16_t *samples;
+    static uint32_t capacity;
+    if (n > capacity) {
+        HeapFree(GetProcessHeap(), 0, samples);
+        samples = HeapAlloc(GetProcessHeap(), 0, (SIZE_T)n * 4);
+        capacity = samples ? n : 0;
+        if (!samples) {
+            store(&clock_->audio_error, -2);
+            return;
+        }
+    }
+    uint32_t clipped = audio_render(samples, n);
+    DWORD w = 0;
+    if (!WriteFile(audio_file, samples, n * 4, &w, NULL) || w != n * 4) {
+        store(&clock_->audio_error, (LONGLONG)GetLastError() ? (LONGLONG)GetLastError() : -3);
+        dlog("audio: frame %lld: write failed (%lu)", frame, GetLastError());
+        return;
+    }
+    InterlockedAdd64((volatile LONGLONG *)&clock_->audio_clipped, clipped);
+    InterlockedAdd64((volatile LONGLONG *)&clock_->audio_frames, n);
+}
+
 /* A frame presented: the back buffer copied first when asked for, then
  * `present`, then the clock advanced and the frame held. */
 static HRESULT frame_presented(IDirect3DDevice9 *dev, HRESULT (*present)(void *), void *args) {
@@ -457,6 +527,7 @@ static HRESULT frame_presented(IDirect3DDevice9 *dev, HRESULT (*present)(void *)
     /* The clock advances: reads from here on are of the next frame. */
     store(&clock_->frames, frame);
     InterlockedExchange(&reads_since_frame, 0);
+    render_audio(frame);
     if (frame <= 3 || frame % 500 == 0) {
         dlog("frame %lld presented (0x%lx)", frame, (unsigned long)hr);
     }
@@ -633,10 +704,31 @@ static HRESULT WINAPI hook_CreateDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYP
          (unsigned long)flags, params ? params->BackBufferWidth : 0,
          params ? params->BackBufferHeight : 0, params ? params->Windowed : -1);
     log_address_space("before CreateDevice");
+    /* The focus window as the device's creation finds it (#869). */
+    DWORD front = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &front);
+    dlog("the focus window: %s, %s%s; the foreground window is %s",
+         focus ? "given" : "none", focus && IsWindowVisible(focus) ? "visible" : "not visible",
+         focus && IsIconic(focus) ? ", minimised" : "",
+         !front                           ? "none"
+         : front == GetCurrentProcessId() ? (GetForegroundWindow() == focus ? "the focus window"
+                                                                            : "another of the game's")
+                                          : "another process's");
+    DWORD called = GetTickCount();
     HRESULT hr = real_CreateDevice(d3d, adapter, type, focus, flags, params, device);
-    dlog("CreateDevice: 0x%lx", (unsigned long)hr);
+    dlog("CreateDevice: 0x%lx after %llu ms", (unsigned long)hr,
+         (unsigned long long)(GetTickCount() - called));
+    if (clock_) {
+        InterlockedIncrement64((volatile LONGLONG *)&clock_->create_device_calls);
+    }
     if (FAILED(hr)) {
         log_address_space("after the failed CreateDevice");
+        if (clock_) {
+            if (InterlockedIncrement64((volatile LONGLONG *)&clock_->create_device_failures) == 1) {
+                store(&clock_->create_device_first, (LONGLONG)(unsigned long)hr);
+            }
+            store(&clock_->create_device_last, (LONGLONG)(unsigned long)hr);
+        }
     }
     if (SUCCEEDED(hr) && device && *device) {
         the_device = *device;

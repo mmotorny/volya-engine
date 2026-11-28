@@ -23,12 +23,16 @@
  *       drrun and the counter client on this machine, with counterprobe.exe
  *       of ours in place of the game: natively, then under drrun.
  *   volyacapture audio [--walk NAME] [--audio-device NAME] [--runs N] [--game DIR]
- *                      [--work DIR]
+ *                      [--work DIR] [--mojoal]
  *       every walk of the audio-fidelity suite (or the one named) with
  *       sound on, its audio output recorded by loopback (loopback.c) from
  *       the default output device (or the one NAME names), and its frames
  *       at its boundaries kept; N runs (default 1). Walks whose frames
- *       overlap are captured one at a time.
+ *       overlap are captured one at a time. With --mojoal (unverified: the
+ *       game created no sound source on it, #878) the audio is rendered
+ *       instead on the frame clock by the capture's OpenAL32.dll (openal.c)
+ *       in the copy's bin\, with no output device; N runs (default 2)
+ *       compared.
  *
  * Its plan, plan.txt beside it, comes from tests/fidelity/views.rs
  * (`xtask wincapture plan`): the views, their frames, the configuration
@@ -47,7 +51,10 @@
 #include <windows.h>
 #include <bcrypt.h>
 #include <mmsystem.h>
+#include <powersetting.h>
+#include <powrprof.h>
 #include <tlhelp32.h>
+#include <wtsapi32.h>
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -151,6 +158,11 @@ static char failure[2048];
  * deterministic heap (--no-heap), or with the client opening the shared
  * memory through kernel32 as before its rule 2 (--kernel32-client). */
 static int no_heap, kernel32_client;
+
+/* The walks' audio rendered on the frame clock by MojoAL (openal.c) in
+ * place of the loopback recording (--mojoal): unverified, the game created
+ * no sound source on it (#878). */
+static int mojoal;
 
 static int fail(const char *fmt, ...) {
     va_list ap;
@@ -788,7 +800,8 @@ struct run {
     FILE *hashes;
     ULONGLONG front_checked; /* when keep_in_front last looked (real ms) */
     int audio;               /* the walks' run, its audio recorded by `loopback` */
-    struct loopback *loopback;
+    struct loopback *loopback; /* NULL with --mojoal */
+    char audio_raw[MAX_PATH]; /* --mojoal: the frames' samples since the device's first context */
 };
 
 static int ended(struct run *r) {
@@ -830,6 +843,13 @@ static const char *clock_state(struct run *r) {
 
 static void keep_in_front(struct run *r);
 
+/* The machine's state (below). */
+static volatile LONG display_state;
+static int front_from_frame_1;
+static const char *display_name(LONG s);
+static const char *window_kind(HWND w, DWORD game_pid);
+static const char *machine_state(DWORD game_pid);
+
 /* Lets the game run until it has presented `frame` and holds it after it;
  * with `look`, the frame's back buffer is copied into r->pixels. */
 static int advance(struct run *r, int64_t frame, int look) {
@@ -844,11 +864,35 @@ static int advance(struct run *r, int64_t frame, int look) {
     ULONGLONG until = GetTickCount64() + (r->frame ? FRAME_TIMEOUT : FIRST_FRAME_TIMEOUT) * 1000ull;
     ULONGLONG progressed = GetTickCount64();
     int64_t seen[4] = {0};
+    /* Before the first frame (#869): each change of the display's state or
+     * of the foreground window's kind, in the log. */
+    LONG display_seen = display_state;
+    char front_seen[160] = "";
     while (load(&r->clock->held) != frame) {
         if (ended(r)) {
             DWORD code = 0;
             GetExitCodeProcess(r->process, &code);
+            if (r->frame == 0 && load(&r->clock->create_device_failures)) {
+                say("At the end: %s", machine_state(r->pid));
+                return fail("the game ended (exit code 0x%lx) before frame %lld: its full-screen "
+                            "CreateDevice failed %lld time(s) (first 0x%llx, last 0x%llx) with "
+                            "the display %s",
+                            code, (long long)frame,
+                            (long long)load(&r->clock->create_device_failures),
+                            (unsigned long long)load(&r->clock->create_device_first),
+                            (unsigned long long)load(&r->clock->create_device_last),
+                            display_name(display_state));
+            }
             return fail("the game ended (exit code 0x%lx) before frame %lld", code, (long long)frame);
+        }
+        if (r->frame == 0) {
+            const char *front = window_kind(GetForegroundWindow(), r->pid);
+            if (display_state != display_seen || strcmp(front, front_seen)) {
+                display_seen = display_state;
+                snprintf(front_seen, sizeof front_seen, "%s", front);
+                say("Before frame 1 (uptime %llu ms): the display %s, the foreground window: %s",
+                    (unsigned long long)GetTickCount64(), display_name(display_seen), front_seen);
+            }
         }
         /* Progress: a frame, or a clock read or sleep by the main thread
          * (other threads read the clock while the main one is stuck too).
@@ -921,7 +965,9 @@ static void keep_in_front(struct run *r) {
     r->front_checked = GetTickCount64();
     DWORD p = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &p);
-    if (p == r->pid) {
+    /* --front-from-frame-1 (#869's bisect): the game's window left as it
+     * comes up until the first frame. */
+    if (p == r->pid || (front_from_frame_1 && r->frame < 1)) {
         return;
     }
     found_window = NULL;
@@ -1428,6 +1474,192 @@ static int holds(const struct segment *g, WORD key) {
     return 0;
 }
 
+/* The samples (per channel) the device has rendered when `frames` frames
+ * have been presented since its first context: the frame step's samples
+ * each, the remainder carried (frameclock.c, render_audio). */
+static int64_t samples_after(int64_t frames, int64_t rate) {
+    return (int64_t)((uint64_t)frames * (uint64_t)plan.frame_ms * (uint64_t)rate / 1000u);
+}
+
+static void put_le16(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+static void put_le32(uint8_t *p, uint32_t v) {
+    put_le16(p, v);
+    put_le16(p + 2, v >> 16);
+}
+
+/* Samples `from` … `to` (per channel, stereo 16-bit) of the run's audio
+ * file as a PCM WAV file at `rate`; its samples' SHA-256 into `hex`. */
+static int write_wav(struct run *r, const char *path, int64_t from, int64_t to, uint32_t rate,
+                     char hex[65]) {
+    size_t bytes = (size_t)(to - from) * 4;
+    uint8_t *data = malloc(44 + bytes);
+    if (!data) {
+        return fail("out of memory for %s", path);
+    }
+    FILE *raw = fopen(r->audio_raw, "rb");
+    int ok = raw && _fseeki64(raw, from * 4, SEEK_SET) == 0 &&
+             fread(data + 44, 1, bytes, raw) == bytes;
+    if (raw) {
+        fclose(raw);
+    }
+    if (!ok) {
+        free(data);
+        return fail("cannot read samples %lld to %lld of the run's audio", (long long)from,
+                    (long long)to);
+    }
+    memcpy(data, "RIFF", 4);
+    put_le32(data + 4, (uint32_t)(36 + bytes));
+    memcpy(data + 8, "WAVEfmt ", 8);
+    put_le32(data + 16, 16);
+    put_le16(data + 20, 1);
+    put_le16(data + 22, 2);
+    put_le32(data + 24, rate);
+    put_le32(data + 28, rate * 4);
+    put_le16(data + 32, 4);
+    put_le16(data + 34, 16);
+    memcpy(data + 36, "data", 4);
+    put_le32(data + 40, (uint32_t)bytes);
+    sha256_hex(data + 44, bytes, hex);
+    ok = write_file(path, data, 44 + bytes);
+    free(data);
+    return ok ? 1 : fail("cannot write %s", path);
+}
+
+/* Walk `w` from the New Game's frame of play `play` (its frame 1): its
+ * keys pressed and released while the frame before the one that reads
+ * them is held, the game's audio rendered on the frame clock (--mojoal: openal.c,
+ * frameclock.c: each frame presented renders the frame step's samples).
+ * Keeps audio\<walk>.wav, the samples of the frames from `preroll` before
+ * the walk's first to its end, and audio\<walk>.frames.txt: each frame of
+ * play with the recording's samples rendered when it was presented (its
+ * first, and past its last: from the game's state after its update); and
+ * the frames at the walk's boundaries from their back buffers, HUD
+ * included: audio\<walk>-start.png (the last frame before the keys),
+ * audio\<walk>-segNN.png (segment NN's last, 01 the first) and
+ * audio\<walk>-end.png (the walk's last). */
+static int walk_audio_mojoal(struct run *r, int64_t play, const struct walk *w) {
+    /* Frame n of play is the game's frame play + n - 1. */
+    int64_t first = play + w->start - 1, from = first - w->preroll, total = walk_frames(w);
+    if (from - 1 <= r->frame) {
+        return fail("%s: its recording starts at frame %lld, the game is at %lld", w->name,
+                    (long long)from, (long long)r->frame);
+    }
+    if (!advance(r, from - 1, 0)) {
+        return 0;
+    }
+    char what[160];
+    snprintf(what, sizeof what, "%s: recording, its keys from frame %lld of play", w->name,
+             (long long)w->start);
+    event(r, what);
+    const struct segment *held = NULL;
+    int ok = 1;
+    for (int64_t g = from; ok && g < first + total; g++) {
+        const struct segment *want = segment_at(w, g - first);
+        int changed = 0;
+        for (int i = 0; ok && held && i < held->nkeys; i++) {
+            if (!holds(want, held->keys[i])) {
+                ok = send_key(r, held->keys[i], 1);
+                changed = 1;
+            }
+        }
+        for (int i = 0; ok && want && i < want->nkeys; i++) {
+            if (!holds(held, want->keys[i])) {
+                ok = send_key(r, want->keys[i], 0);
+                changed = 1;
+            }
+        }
+        held = want;
+        if (!ok) {
+            break;
+        }
+        if (changed) {
+            Sleep(INPUT_SETTLE_MS);
+        }
+        /* The boundaries' frames (Walk::boundaries). */
+        int64_t k = g - first;
+        const char *suffix = NULL;
+        char seg[16];
+        if (k == -1) {
+            suffix = "start";
+        } else if (k == total - 1) {
+            suffix = "end";
+        }
+        for (int64_t i = 0, end = 0; !suffix && i < w->nsegments; i++) {
+            end += w->segments[i].frames;
+            if (k == end - 1) {
+                snprintf(seg, sizeof seg, "seg%02d", (int)i + 1);
+                suffix = seg;
+            }
+        }
+        ok = advance(r, g, suffix != NULL);
+        if (ok && suffix) {
+            char view_name[160];
+            snprintf(view_name, sizeof view_name, "audio\\%s-%s.png", w->name, suffix);
+            ok = keep_look(r, view_name);
+        }
+    }
+    if (!ok) {
+        return 0;
+    }
+    int64_t rate = load(&r->clock->audio_rate), at = load(&r->clock->audio_first_frame);
+    int64_t error = load(&r->clock->audio_error), have = load(&r->clock->audio_frames);
+    if (error) {
+        return fail("%s: the game's audio was not rendered (error %lld); see frameclock.log",
+                    w->name, (long long)error);
+    }
+    if (!rate || at > from) {
+        return fail("%s: the game's audio device had no context by frame %lld (its first at "
+                    "frame %lld); see the game's log",
+                    w->name, (long long)from, (long long)at);
+    }
+    int64_t s0 = samples_after(from - at, rate), s1 = samples_after(first + total - at, rate);
+    if (have < s1) {
+        return fail("%s: %lld samples rendered, the walk ends at %lld", w->name, (long long)have,
+                    (long long)s1);
+    }
+    char path[MAX_PATH], name[160], hex[65];
+    snprintf(name, sizeof name, "audio\\%s.wav", w->name);
+    join(path, sizeof path, r->out, name);
+    if (!write_wav(r, path, s0, s1, (uint32_t)rate, hex)) {
+        return 0;
+    }
+    fprintf(r->hashes, "%s %lldx2 %s\n", hex, (long long)(s1 - s0), name);
+    fflush(r->hashes);
+    say("frame %6lld  kept %s: %lld samples at %lld Hz from the device's sample %lld (%.16s); "
+        "%lld clipped so far",
+        (long long)r->frame, name, (long long)(s1 - s0), (long long)rate, (long long)s0, hex,
+        (long long)load(&r->clock->audio_clipped));
+    snprintf(name, sizeof name, "audio\\%s.frames.txt", w->name);
+    join(path, sizeof path, r->out, name);
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        return fail("cannot write %s", path);
+    }
+    fprintf(f,
+            "volya-audio-frames 1\nwalk %s\nrate %lld\nchannels 2\nframe_ms %lld\n"
+            "render frame-clock\nstart %lld\npreroll %lld\nframes %lld\n"
+            "# frame of play, the recording's samples rendered after its update: its first, "
+            "past its last\n",
+            w->name, (long long)rate, (long long)plan.frame_ms, (long long)w->start,
+            (long long)w->preroll, (long long)total);
+    for (int64_t g = from; g < first + total; g++) {
+        fprintf(f, "%lld %lld %lld\n", (long long)(g - play + 1),
+                (long long)(samples_after(g - at, rate) - s0),
+                (long long)(samples_after(g - at + 1, rate) - s0));
+    }
+    if (fclose(f) != 0) {
+        return fail("cannot write %s", path);
+    }
+    snprintf(what, sizeof what, "%s: recorded %lld frames, %lld samples", w->name,
+             (long long)(first + total - from), (long long)(s1 - s0));
+    event(r, what);
+    return 1;
+}
+
 /* Walk `w` from the New Game's frame of play `play` (its frame 1): the
  * audio recorded from `preroll` frames before its first, every frame let
  * run at least PACE_MS of real time; its keys pressed and released while
@@ -1439,7 +1671,7 @@ static int holds(const struct segment *g, WORD key) {
  * written once the recording stops: audio\<walk>-start.png (the last frame
  * before the keys), audio\<walk>-segNN.png (segment NN's last, 01 the
  * first) and audio\<walk>-end.png (the walk's last). */
-static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
+static int walk_audio_loopback(struct run *r, int64_t play, const struct walk *w) {
     /* Frame n of play is the game's frame play + n - 1. */
     int64_t first = play + w->start - 1, from = first - w->preroll, total = walk_frames(w);
     if (from - 1 <= r->frame) {
@@ -1566,6 +1798,10 @@ static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
     snprintf(what, sizeof what, "%s: recorded %lld frames", w->name, (long long)rows);
     event(r, what);
     return 1;
+}
+
+static int walk_audio(struct run *r, int64_t play, const struct walk *w) {
+    return mojoal ? walk_audio_mojoal(r, play, w) : walk_audio_loopback(r, play, w);
 }
 
 /* A New Game started from the title menu's console and its intro skipped:
@@ -1876,12 +2112,263 @@ static int detach(struct run *r, const char *exe_dir, const char *work) {
     return 1;
 }
 
-/* One run of the game: `mode` "check" or "full", its outputs in
- * work\runs\<mode>-<n>\. */
+/* --- The machine's state (#869) --------------------------------------------- */
+
+/* The game's full-screen CreateDevice failed intermittently before frame 1
+ * (D3DERR_INVALIDCALL, then E_OUTOFMEMORY), each time a batch's first
+ * launch, a retry after the display was woken passing. What the driver
+ * tells of the machine before each start and at a failure, through
+ * documented Win32 calls, none changing a setting: the display's power
+ * state, the session, the input, the displays' mode and the foreground
+ * window by kind (never a title or a program's name). The display is left
+ * as Windows keeps it; with --keep-display-on (not yet run on the PC) it is
+ * kept on for the invocation as a full-screen program keeps it
+ * (SetThreadExecutionState: this thread's request, gone with it), and one
+ * reported off before a start is waited for. */
+
+/* The display's state as Windows reports it (GUID_CONSOLE_DISPLAY_STATE:
+ * 0 off, 1 on, 2 dimmed), -1 before any report. Its notification comes on
+ * registering and at each change (documented for the window form of the
+ * registration, believed for the callback form; "not reported" otherwise). */
+static volatile LONG display_state = -1;
+static volatile LONG display_reports;
+/* 0 with --keep-display-on; --wake-input (with it) */
+static int display_as_is = 1, wake_input;
+
+/* winnt.h's GUIDs, which mingw-w64 declares without defining. */
+static const GUID console_display_state = {
+    0x6fe69556, 0x704a, 0x47a0, {0x8f, 0x24, 0xc2, 0x8d, 0x93, 0x6f, 0xda, 0x47}};
+static const GUID video_subgroup = {
+    0x7516b95f, 0xf776, 0x4464, {0x8c, 0x53, 0x06, 0x16, 0x7f, 0x40, 0xcc, 0x99}};
+static const GUID video_powerdown_timeout = {
+    0x3c0bc021, 0xc8a8, 0x4e07, {0xa9, 0x73, 0x6b, 0x14, 0xcb, 0xcb, 0x2b, 0x7e}};
+
+/* PowerSettingRegisterNotification's callback form (Microsoft Learn,
+ * DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS), which mingw-w64's headers lack. */
+#define NOTIFY_CALLBACK 2
+struct notify_subscribe {
+    ULONG(CALLBACK *callback)(PVOID context, ULONG type, PVOID setting);
+    PVOID context;
+};
+
+static ULONG CALLBACK display_changed(PVOID context, ULONG type, PVOID setting) {
+    (void)context;
+    const POWERBROADCAST_SETTING *s = setting;
+    if (type == PBT_POWERSETTINGCHANGE && s &&
+        !memcmp(&s->PowerSetting, &console_display_state, sizeof(GUID)) &&
+        s->DataLength >= sizeof(DWORD)) {
+        DWORD v;
+        memcpy(&v, s->Data, sizeof v);
+        InterlockedExchange(&display_state, (LONG)v);
+        InterlockedIncrement(&display_reports);
+    }
+    return 0;
+}
+
+static const char *display_name(LONG s) {
+    return s == 0 ? "off" : s == 1 ? "on" : s == 2 ? "dimmed" : "not reported";
+}
+
+/* A top-level window's kind, from its process and class. */
+static const char *window_kind(HWND w, DWORD game_pid) {
+    static char kind[160];
+    if (!w) {
+        return "none";
+    }
+    DWORD pid = 0;
+    GetWindowThreadProcessId(w, &pid);
+    char cls[64] = "";
+    GetClassNameA(w, cls, sizeof cls);
+    const char *what;
+    if (game_pid && pid == game_pid) {
+        what = "the game's";
+    } else if (w == GetConsoleWindow() || pid == GetCurrentProcessId()) {
+        what = "the driver's console";
+    } else if (!strcmp(cls, "Progman") || !strcmp(cls, "WorkerW")) {
+        what = "the desktop";
+    } else if (!strcmp(cls, "Shell_TrayWnd") || !strcmp(cls, "Shell_SecondaryTrayWnd")) {
+        what = "the taskbar";
+    } else if (!strcmp(cls, "ConsoleWindowClass") ||
+               !strcmp(cls, "CASCADIA_HOSTING_WINDOW_CLASS") ||
+               !strcmp(cls, "PseudoConsoleWindow")) {
+        what = "a console window of another process";
+    } else if (!strcmp(cls, "Windows.UI.Core.CoreWindow") ||
+               !strcmp(cls, "ApplicationFrameWindow")) {
+        what = "an app's or the shell's core window";
+    } else {
+        what = "another process's window";
+    }
+    RECT r;
+    MONITORINFO mi = {.cbSize = sizeof mi};
+    int covers = GetWindowRect(w, &r) &&
+                 GetMonitorInfoA(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi) &&
+                 r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
+                 r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    LONG ex = GetWindowLongA(w, GWL_EXSTYLE);
+    snprintf(kind, sizeof kind, "%s%s%s%s", what, IsIconic(w) ? ", minimised" : "",
+             covers ? ", covering its monitor" : "", ex & WS_EX_TOPMOST ? ", topmost" : "");
+    return kind;
+}
+
+/* The invocation's start: the display's notifications, the display-off
+ * timeout (read), and the display kept on unless --display-as-is. */
+static void machine_start(void) {
+    static struct notify_subscribe sub = {display_changed, NULL};
+    HPOWERNOTIFY registration = NULL;
+    DWORD got = PowerSettingRegisterNotification(&console_display_state, NOTIFY_CALLBACK,
+                                                 (HANDLE)&sub, &registration);
+    if (got != ERROR_SUCCESS) {
+        say("WARNING: cannot follow the display's state (%lu)", (unsigned long)got);
+    }
+    for (int i = 0; i < 50 && !display_reports; i++) {
+        Sleep(10);
+    }
+    GUID *scheme = NULL;
+    DWORD timeout = 0;
+    if (PowerGetActiveScheme(NULL, &scheme) == ERROR_SUCCESS) {
+        if (PowerReadACValueIndex(NULL, scheme, &video_subgroup, &video_powerdown_timeout,
+                                  &timeout) == ERROR_SUCCESS) {
+            if (timeout) {
+                say("Windows turns the display off after %lu s without input (on AC power)",
+                    (unsigned long)timeout);
+            } else {
+                say("Windows never turns the display off (on AC power)");
+            }
+        }
+        LocalFree(scheme);
+    }
+    if (display_as_is) {
+        say("The display as Windows keeps it");
+    } else {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+        say("The display kept on while the driver runs (--keep-display-on)");
+    }
+}
+
+/* The machine's state, one line. */
+static const char *machine_state(DWORD game_pid) {
+    static char s[768];
+    const char *session = "unknown";
+    WTSINFOEXW *info = NULL;
+    DWORD bytes = 0;
+    if (WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION,
+                                    WTSSessionInfoEx, (LPWSTR *)&info, &bytes) &&
+        info && info->Level == 1) {
+        LONG flags = info->Data.WTSInfoExLevel1.SessionFlags;
+        session = flags == WTS_SESSIONSTATE_LOCK     ? "locked"
+                  : flags == WTS_SESSIONSTATE_UNLOCK ? "unlocked"
+                                                     : "unknown";
+    }
+    if (info) {
+        WTSFreeMemory(info);
+    }
+    HDESK input = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS);
+    if (input) {
+        CloseDesktop(input);
+    }
+    LASTINPUTINFO last = {.cbSize = sizeof last};
+    char idle[48] = "unknown";
+    if (GetLastInputInfo(&last)) {
+        snprintf(idle, sizeof idle, "%lu s",
+                 (unsigned long)((GetTickCount() - last.dwTime) / 1000));
+    }
+    DEVMODEA mode = {.dmSize = sizeof mode};
+    char shown[64] = "unreadable";
+    if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode)) {
+        snprintf(shown, sizeof shown, "%lux%lu at %lu Hz", (unsigned long)mode.dmPelsWidth,
+                 (unsigned long)mode.dmPelsHeight, (unsigned long)mode.dmDisplayFrequency);
+    }
+    snprintf(s, sizeof s,
+             "the display %s (%ld reports), the session %s, the input desktop %s, %s since the "
+             "last input, %d monitor(s), the primary display at %s, the foreground window: %s",
+             display_name(display_state), (long)display_reports, session,
+             input ? "accessible" : "not accessible", idle, GetSystemMetrics(SM_CMONITORS), shown,
+             window_kind(GetForegroundWindow(), game_pid));
+    return s;
+}
+
+/* Before a run starts the game: the time since the previous run's start
+ * (the work folder's previous-start.txt: the uptime in ms), the machine's
+ * state, and, unless --display-as-is, the display on: one reported off is
+ * asked on and waited for (after a zero mouse move with --wake-input);
+ * still off, the run fails here, not in the game's CreateDevice. */
+static int machine_ready(const char *work) {
+    char path[MAX_PATH];
+    join(path, sizeof path, work, "previous-start.txt");
+    ULONGLONG now = GetTickCount64();
+    unsigned long long before = 0;
+    FILE *f = fopen(path, "r");
+    if (f) {
+        if (fscanf(f, "%llu", &before) != 1) {
+            before = 0;
+        }
+        fclose(f);
+    }
+    if (before && before < now) {
+        say("%.0f s since the previous run's start", (now - before) / 1000.0);
+    } else {
+        say("No previous run's start since Windows started");
+    }
+    f = fopen(path, "w");
+    if (f) {
+        fprintf(f, "%llu\n", (unsigned long long)now);
+        fclose(f);
+    }
+    say("Before the start (uptime %llu ms): %s", (unsigned long long)now, machine_state(0));
+    if (display_as_is || display_state != 0) {
+        return 1;
+    }
+    if (wake_input) {
+        INPUT in = {.type = INPUT_MOUSE};
+        in.mi.dwFlags = MOUSEEVENTF_MOVE;
+        SendInput(1, &in, sizeof in);
+        say("The display is off: a zero mouse move sent (--wake-input)");
+    }
+    SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
+    ULONGLONG asked = GetTickCount64();
+    while (display_state == 0 && GetTickCount64() - asked < 15000) {
+        Sleep(50);
+    }
+    if (display_state == 0) {
+        return fail("the display is off and did not come on within 15 s: the game's full-screen "
+                    "start would fail. Wake the display and run again");
+    }
+    say("The display came on after %.1f s; 5 s for the monitor to settle",
+        (GetTickCount64() - asked) / 1000.0);
+    Sleep(5000);
+    say("Now: %s", machine_state(0));
+    return 1;
+}
+
+/* The copy's bin\ with the install's OpenAL32.dll and no SDL3.dll again
+ * after a --mojoal run swapped them (the copy's volya-openal.txt, written
+ * before the swap); nothing when none did. */
+static int put_back_openal(const char *game, const char *copy, const char *bin) {
+    char from[MAX_PATH], path[MAX_PATH], marker[MAX_PATH];
+    join(marker, sizeof marker, copy, "volya-openal.txt");
+    if (GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES) {
+        return 1;
+    }
+    join(path, sizeof path, bin, "SDL3.dll");
+    DeleteFileA(path);
+    join(from, sizeof from, game, "bin\\OpenAL32.dll");
+    join(path, sizeof path, bin, "OpenAL32.dll");
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    if (GetFileAttributesA(from) != INVALID_FILE_ATTRIBUTES && !CopyFileA(from, path, FALSE)) {
+        return fail("cannot put back the shipped %s (%lu)", path, GetLastError());
+    }
+    DeleteFileA(marker);
+    say("The shipped OpenAL32.dll put back in the copy");
+    return 1;
+}
+
+/* One run of the game: `mode` "check", "full" or "audio", its outputs in
+ * work\runs\<mode>-<n>\; the walks' audio recorded by `loopback`, or with
+ * --mojoal (it NULL) rendered by openal.c. */
 static int run_once(const char *exe_dir, const char *game, const char *work, const char *mode,
                     int index, struct loopback *loopback) {
     struct run r = {0};
-    r.audio = loopback != NULL;
+    r.audio = !strcmp(mode, "audio");
     r.loopback = loopback;
     char copy[MAX_PATH], bin[MAX_PATH], path[MAX_PATH], from[MAX_PATH];
     snprintf(r.dir, sizeof r.dir, "%s\\runs\\%s-%d", work, mode, index);
@@ -1913,6 +2400,30 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     if (!CopyFileA(from, path, FALSE)) {
         return fail("cannot copy %s to %s", from, path);
     }
+    /* The shipped OpenAL library, if an earlier --mojoal run died before
+     * putting it back; then for the walks with --mojoal our audio device
+     * (openal.c) in its place, with the SDL it runs on, put back after the
+     * run. */
+    if (!put_back_openal(game, copy, bin)) {
+        return 0;
+    }
+    if (r.audio && mojoal) {
+        static const char swapped[] = "OpenAL32.dll and SDL3.dll in bin\\ are the capture's\r\n";
+        join(path, sizeof path, copy, "volya-openal.txt");
+        if (!write_file(path, swapped, sizeof swapped - 1)) {
+            return fail("cannot write %s", path);
+        }
+    }
+    for (int i = 0; r.audio && mojoal && i < 2; i++) {
+        const char *dll = i ? "SDL3.dll" : "OpenAL32.dll";
+        join(from, sizeof from, exe_dir, dll);
+        join(path, sizeof path, bin, dll);
+        SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+        if (!CopyFileA(from, path, FALSE)) {
+            return fail("cannot copy %s to %s", from, path);
+        }
+    }
+    join(r.audio_raw, sizeof r.audio_raw, r.dir, "audio.raw");
 
     SetLastError(0);
     r.map = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
@@ -1937,6 +2448,9 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
     join(r.clock->log_path, sizeof r.clock->log_path, r.dir, "frameclock.log");
     r.clock->hold = 1;
     r.clock->heap_off = (uint64_t)no_heap;
+    if (r.audio && mojoal) {
+        snprintf(r.clock->audio_path, sizeof r.clock->audio_path, "%s", r.audio_raw);
+    }
     r.clock->version = FRAMECLOCK_VERSION;
     r.clock->magic = FRAMECLOCK_MAGIC;
 
@@ -1997,6 +2511,10 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
                        .hStdOutput = output,
                        .hStdError = output};
     PROCESS_INFORMATION pi;
+    if (!machine_ready(work)) {
+        CloseHandle(output);
+        return 0;
+    }
     r.job = CreateJobObjectA(NULL, NULL);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -2088,7 +2606,7 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         ok = detach(&r, exe_dir, work);
     }
     ok = ok && steer(&r, !strcmp(mode, "full"), written);
-    if (r.audio) {
+    if (r.loopback) {
         loopback_stop(r.loopback);
     }
     double seconds = (GetTickCount64() - started_ms) / 1000.0;
@@ -2119,11 +2637,21 @@ static int run_once(const char *exe_dir, const char *game, const char *work, con
         CloseHandle(r.drrun);
     }
     CloseHandle(r.job);
+    if (r.audio && mojoal) {
+        say("The device rendered %lld samples from frame %lld, %lld clipped",
+            (long long)load(&r.clock->audio_frames),
+            (long long)load(&r.clock->audio_first_frame),
+            (long long)load(&r.clock->audio_clipped));
+    }
     UnmapViewOfFile(r.clock);
     CloseHandle(r.map);
     free(r.pixels);
     join(path, sizeof path, bin, "winmm.dll");
     DeleteFileA(path);
+    if (r.audio && mojoal) {
+        put_back_openal(game, copy, bin);
+        DeleteFileA(r.audio_raw);
+    }
     fclose(log_file);
     log_file = NULL;
     return ok;
@@ -2360,6 +2888,35 @@ static int compare(const char *work, const char *mode, int runs) {
                 }
                 free(p1);
                 free(p2);
+            } else if (strstr(name, ".wav")) {
+                /* The samples: how many differ, the first, the largest. */
+                uint8_t *w1 = NULL, *w2 = NULL;
+                size_t n1 = 0, n2 = 0;
+                snprintf(a, sizeof a, "%s\\runs\\%s-1\\%s", work, mode, name);
+                snprintf(path, sizeof path, "%s\\runs\\%s-%d\\%s", work, mode, k, name);
+                if (!read_file(a, &w1, &n1) || !read_file(path, &w2, &n2) || n1 < 44 ||
+                    n2 < 44) {
+                    snprintf(result, sizeof result, "run 1 / run %d  %s: missing", k, name);
+                } else {
+                    size_t n = (n1 < n2 ? n1 : n2) - 44, differ = 0, first = 0;
+                    int max = 0;
+                    for (size_t i = 0; i + 1 < n; i += 2) {
+                        int s1 = (int16_t)(w1[44 + i] | w1[45 + i] << 8);
+                        int s2 = (int16_t)(w2[44 + i] | w2[45 + i] << 8);
+                        int d = abs(s1 - s2);
+                        if (d) {
+                            first = differ ? first : i / 4;
+                            differ++;
+                            max = d > max ? d : max;
+                        }
+                    }
+                    snprintf(result, sizeof result,
+                             "run 1 / run %d  %s: %zu and %zu bytes; %zu of %zu values differ, "
+                             "the first at sample %zu, largest %d",
+                             k, name, n1, n2, differ, n / 2, first, max);
+                }
+                free(w1);
+                free(w2);
             } else {
                 snprintf(result, sizeof result, "run 1 / run %d  %s: differs", k, name);
             }
@@ -2457,6 +3014,7 @@ int main(int argc, char **argv) {
     }
     int runs = -1;
     char audio_device[256] = "", walk_name[64] = "";
+    int keep_display_on = 0;
     for (int i = 2; i < argc; i++) {
         if (!strcmp(argv[i], "--game") && i + 1 < argc) {
             snprintf(game, sizeof game, "%s", argv[++i]);
@@ -2472,21 +3030,43 @@ int main(int argc, char **argv) {
             no_heap = 1;
         } else if (!strcmp(argv[i], "--kernel32-client")) {
             kernel32_client = 1;
+        } else if (!strcmp(argv[i], "--display-as-is")) {
+            /* The default, accepted as before. */
+        } else if (!strcmp(argv[i], "--keep-display-on")) {
+            keep_display_on = 1;
+        } else if (!strcmp(argv[i], "--mojoal")) {
+            mojoal = 1;
+        } else if (!strcmp(argv[i], "--front-from-frame-1")) {
+            front_from_frame_1 = 1;
+        } else if (!strcmp(argv[i], "--wake-input")) {
+            wake_input = 1;
         } else {
             mode = "";
         }
     }
     int audio = !strcmp(mode, "audio");
     if (runs < 0) {
-        /* The walks' audio is not compared run with run: one by default. */
-        runs = audio ? 1 : 2;
+        /* The walks' loopback recording is not compared run with run: one by
+         * default. */
+        runs = audio && !mojoal ? 1 : 2;
+    }
+    display_as_is = !keep_display_on;
+    if (!strcmp(mode, "state")) {
+        /* The machine's state alone, the display left as it is. */
+        display_as_is = 1;
+        machine_start();
+        say("%s", machine_state(0));
+        return 0;
     }
     if ((strcmp(mode, "check") && strcmp(mode, "full") && strcmp(mode, "selftest") && !audio) ||
-        runs < 1) {
-        fprintf(stderr, "usage: volyacapture check|full|selftest [--runs N] [--game DIR] "
-                        "[--work DIR] [--no-heap] [--kernel32-client]\n"
-                        "       volyacapture audio [--walk NAME] [--audio-device NAME] [--runs N] "
-                        "[--game DIR] [--work DIR] [--no-heap] [--kernel32-client]\n");
+        runs < 1 || (wake_input && !keep_display_on) || (mojoal && (!audio || audio_device[0]))) {
+        fprintf(stderr, "usage: volyacapture state\n"
+                        "       volyacapture check|full|selftest [--runs N] [--game DIR] "
+                        "[--work DIR] [--no-heap] [--kernel32-client] "
+                        "[--keep-display-on [--wake-input]] [--front-from-frame-1]\n"
+                        "       volyacapture audio [--walk NAME] [--audio-device NAME | --mojoal] "
+                        "[--runs N] [--game DIR] [--work DIR] [--no-heap] [--kernel32-client] "
+                        "[--keep-display-on [--wake-input]] [--front-from-frame-1]\n");
         return 2;
     }
     GetModuleFileNameA(NULL, exe_dir, MAX_PATH);
@@ -2555,6 +3135,14 @@ int main(int argc, char **argv) {
     say("volyacapture %s: %d run(s), game %s, work folder %s", mode, runs, game, work);
     say("The deterministic heap %s; the client %s", no_heap ? "OFF (--no-heap)" : "on",
         kernel32_client ? "counter-kernel32.dll (--kernel32-client)" : "counter.dll");
+    if (front_from_frame_1) {
+        say("The game's window not brought to the front before frame 1 (--front-from-frame-1)");
+    }
+    if (audio && mojoal) {
+        say("The walks' audio rendered on the frame clock by MojoAL (--mojoal; unverified: the "
+            "game created no sound source on it)");
+    }
+    machine_start();
     for (int i = 0; audio && i < plan.nwalks; i++) {
         say("Walk %s: from frame %lld of play, %lld frames", plan.walks[i].name,
             (long long)plan.walks[i].start, (long long)walk_frames(&plan.walks[i]));
@@ -2562,7 +3150,7 @@ int main(int argc, char **argv) {
     clear_outputs(work, mode);
     /* The walks' output device: the default as it is, or the one named. */
     struct loopback *lb = NULL;
-    if (audio) {
+    if (audio && !mojoal) {
         lb = loopback_open(audio_device, say);
         if (!lb) {
             fail("no audio output to record");
@@ -2574,7 +3162,7 @@ int main(int argc, char **argv) {
         ok = run_once(exe_dir, game, work, mode, i, lb);
     }
     loopback_close(lb);
-    if (ok && runs > 1 && !audio) {
+    if (ok && runs > 1 && (!audio || mojoal)) {
         compare(work, mode, runs);
     } else if (!ok) {
         /* A summary of this invocation, never an earlier one's. */

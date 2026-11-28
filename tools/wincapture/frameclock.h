@@ -19,7 +19,7 @@
 
 #define FRAMECLOCK_NAME "Local\\VolyaFrameClock"
 #define FRAMECLOCK_MAGIC 0x6b636f6c63796c76ull /* "vlyclock" */
-#define FRAMECLOCK_VERSION 10
+#define FRAMECLOCK_VERSION 11
 
 /* The counter client's time-stamp counter (counter.c): TSC_BASE +
  * clock_ms × TSC_PER_MS + n × TSC_STEP, n the reads substituted
@@ -50,6 +50,7 @@ struct frameclock {
     uint64_t prestart_sleeps; /* 1: sleeps before the first frame advance the clock too */
     char log_path[260];      /* the proxy's own log (empty: none) */
     int64_t heap_off;        /* 1: no deterministic heap (the bisect's --no-heap) */
+    char audio_path[260];    /* the game's audio, rendered a frame at a time (empty: none) */
 
     /* Written by the driver while the game runs. */
     volatile int64_t hold;    /* hold after presenting this frame (0: never) */
@@ -91,6 +92,22 @@ struct frameclock {
      * capture-recipe.md rule 3). */
     volatile int64_t heap; /* 1 its region reserved, -1 the reservation failed, 0 off */
     volatile int64_t heap_carved; /* bytes carved from the region (every 2 s) */
+
+    /* Written by the proxy: the device's creation (#869). */
+    volatile int64_t create_device_calls;
+    volatile int64_t create_device_failures;
+    volatile int64_t create_device_first; /* the first failure's HRESULT (0: none) */
+    volatile int64_t create_device_last;  /* the last failure's */
+
+    /* Written by the proxy: the game's audio on the frame clock (openal.c),
+     * appended to audio_path at each frame presented once the game's
+     * OpenAL32.dll is ours: 16-bit stereo at audio_rate, audio_first_frame
+     * the first frame whose samples the file starts with. */
+    volatile int64_t audio_rate;        /* 0 until the device's first context */
+    volatile int64_t audio_first_frame; /* 0 until then */
+    volatile int64_t audio_frames;      /* samples (per channel) written */
+    volatile int64_t audio_clipped;     /* samples clipped converting to 16 bits */
+    volatile int64_t audio_error;       /* a failed write's error, else 0 */
     uint8_t pixels[FRAMECLOCK_MAX_PIXELS * 4]; /* rows top first, B G R X */
 };
 

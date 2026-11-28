@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use super::{Result, cmd, locked_version, output, root, run, step};
 
 /// Moves everything to its latest release: Rust, the crates, Bazel, its
-/// modules, the wasm LLVM, the Windows cross LLVM (llvm-mingw), DynamoRIO and the
+/// modules, the wasm LLVM, the Windows cross LLVM (llvm-mingw), DynamoRIO, MojoAL, SDL 3 and the
 /// wasm-bindgen CLI's pin; then the checks and the advisories.
 pub fn update() -> Result {
     let module_path = root().join("MODULE.bazel");
@@ -47,6 +47,9 @@ pub fn update() -> Result {
     module = update_llvm_mingw(&module)?;
     step("DynamoRIO (the Windows capture's counter client)");
     module = update_dynamorio(&module)?;
+    step("MojoAL and SDL 3 (the Windows capture's audio device)");
+    module = update_mojoal(&module)?;
+    module = update_sdl3(&module)?;
     fs::write(&module_path, &module).map_err(|e| format!("MODULE.bazel: {e}"))?;
 
     step("Bazel");
@@ -274,6 +277,86 @@ fn update_dynamorio(module: &str) -> Result<String> {
     let block = replace_quoted_after(&block, "url = ", &url)?;
     println!("{name}");
     Ok(format!("{head}{block}"))
+}
+
+/// Points the http_archive `repo` at `url` with `strip_prefix`, the file's
+/// checksum `sha` (downloaded when None).
+fn set_archive(
+    module: &str,
+    repo: &str,
+    url: &str,
+    strip_prefix: &str,
+    sha: Option<&str>,
+) -> Result<String> {
+    if module.contains(url) {
+        println!("{strip_prefix} (unchanged)");
+        return Ok(module.to_owned());
+    }
+    let sha = match sha {
+        Some(sha) => sha.to_owned(),
+        None => {
+            let file = std::env::temp_dir().join(format!("{repo}-update"));
+            run(&mut cmd(
+                "curl",
+                &["-sfL", "-o", &file.to_string_lossy(), url],
+            ))?;
+            let sha = sha256_file(&file)?;
+            let _ = fs::remove_file(&file);
+            sha
+        }
+    };
+    let start = module
+        .find(&format!("name = \"{repo}\""))
+        .ok_or(format!("MODULE.bazel: no {repo}"))?;
+    let (head, block) = module.split_at(start);
+    let block = replace_quoted_after(block, "sha256 = ", &sha)?;
+    let block = replace_quoted_after(&block, "strip_prefix = ", strip_prefix)?;
+    let block = replace_quoted_after(&block, "url = ", url)?;
+    println!("{strip_prefix}");
+    Ok(format!("{head}{block}"))
+}
+
+/// Points `@mojoal` at the head of MojoAL's main branch.
+fn update_mojoal(module: &str) -> Result<String> {
+    let sha = output(&mut cmd(
+        "gh",
+        &["api", "repos/icculus/mojoAL/commits/main", "--jq", ".sha"],
+    ))?;
+    let sha = sha.trim();
+    let url = format!("https://github.com/icculus/mojoAL/archive/{sha}.tar.gz");
+    set_archive(module, "mojoal", &url, &format!("mojoAL-{sha}"), None)
+}
+
+/// Points `@sdl3_mingw` at SDL's latest release's MinGW development
+/// archive, with the checksum GitHub records for it.
+fn update_sdl3(module: &str) -> Result<String> {
+    let release = output(&mut cmd(
+        "gh",
+        &[
+            "api",
+            "repos/libsdl-org/SDL/releases/latest",
+            "--jq",
+            r#".tag_name + " " + ([.assets[] | select(.name | test("^SDL3-devel-.*-mingw\\.tar\\.gz$")) | .name + " " + .digest][0])"#,
+        ],
+    ))?;
+    let words: Vec<&str> = release.split_whitespace().collect();
+    let [tag, asset, digest] = words[..] else {
+        return Err(format!("SDL's latest release: {release}"));
+    };
+    let sha = digest
+        .strip_prefix("sha256:")
+        .ok_or(format!("{asset}: digest {digest}"))?;
+    let version = tag
+        .strip_prefix("release-")
+        .ok_or(format!("SDL tag {tag}"))?;
+    let url = format!("https://github.com/libsdl-org/SDL/releases/download/{tag}/{asset}");
+    set_archive(
+        module,
+        "sdl3_mingw",
+        &url,
+        &format!("SDL3-{version}"),
+        Some(sha),
+    )
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
