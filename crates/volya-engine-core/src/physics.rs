@@ -12,6 +12,7 @@
 //! [`Object`] and [`Updater`].
 
 pub mod ode;
+pub mod shell;
 #[cfg(test)]
 mod tests;
 
@@ -41,6 +42,9 @@ pub const RESTING_COUNT: u32 = 10;
 pub const MAX_GROUP_JOINTS: usize = 1500;
 pub const MAX_GROUP_BODIES: usize = 500;
 pub const MAX_PAIR_CONTACTS: usize = 809;
+/// A group marked for the exact solver is solved by it only with fewer
+/// joints than this, contacts included (4.2).
+pub const EXACT_SOLVER_JOINTS: usize = 30;
 
 /// A fatal error (`console-log` 3.8): the program shows it and stops.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -383,6 +387,18 @@ impl<O: Object, S: Solver<O>> World<O, S> {
         self.actions.retain(|a| a.object() != Some(id));
         self.resting.retain(|&(r, _)| r != id);
         Some(self.objects.remove(i).object)
+    }
+
+    /// An object and the solver together.
+    pub fn with_solver(&mut self, id: ObjectId) -> (Option<&mut O>, &mut S) {
+        let o = (self.objects.iter_mut())
+            .find(|e| e.id == id)
+            .map(|e| &mut e.object);
+        (o, &mut self.solver)
+    }
+
+    pub fn solver(&self) -> &S {
+        &self.solver
     }
 
     pub fn get(&self, id: ObjectId) -> Option<&O> {

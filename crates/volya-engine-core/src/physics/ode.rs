@@ -30,6 +30,7 @@ mod harness_rules;
 #[cfg(test)]
 mod harness_rules_2;
 pub mod msvc_rand;
+pub mod shell;
 pub mod x87;
 
 use std::collections::HashMap;
@@ -39,7 +40,10 @@ use std::sync::Mutex;
 /// Held by each world's parameters and step (above).
 static STEPPING: Mutex<()> = Mutex::new(());
 
-use super::{Active, MAX_GROUP_BODIES, MAX_GROUP_JOINTS, MAX_PAIR_CONTACTS, Params, Solver};
+use super::{
+    Active, EXACT_SOLVER_JOINTS, MAX_GROUP_BODIES, MAX_GROUP_JOINTS, MAX_PAIR_CONTACTS, Params,
+    Solver,
+};
 use crate::collision::geometry::Vec3;
 
 /// ODE's `dReal`: single precision (`dSINGLE`, csrc/ode/include/ode/config.h).
@@ -181,6 +185,7 @@ unsafe extern "C" {
     fn dWorldSetContactSurfaceLayer(w: *mut DxWorld, depth: Real);
     fn dWorldSetContactMaxCorrectingVel(w: *mut DxWorld, vel: Real);
     fn dWorldQuickStep(w: *mut DxWorld, stepsize: Real);
+    fn dWorldStep(w: *mut DxWorld, stepsize: Real);
     fn dWorldAddBody(w: *mut DxWorld, b: *mut DxBody);
     fn dWorldRemoveBody(w: *mut DxWorld, b: *mut DxBody);
     fn dWorldAddJoint(w: *mut DxWorld, j: *mut DxJoint);
@@ -207,7 +212,14 @@ unsafe extern "C" {
     fn dBodyGetPosition(b: *mut DxBody) -> *const Real;
     fn dBodySetMass(b: *mut DxBody, mass: *const DMass);
     fn dBodySetGravityMode(b: *mut DxBody, mode: c_int);
+    fn dBodyGetGravityMode(b: *mut DxBody) -> c_int;
     fn dMassSetSphereTotal(m: *mut DMass, total: Real, radius: Real);
+}
+
+/// A body's gravity switch (1.4).
+fn body_gravity(b: *mut DxBody) -> bool {
+    // SAFETY: called on live bodies only.
+    unsafe { dBodyGetGravityMode(b) != 0 }
 }
 
 /// A body of an [`OdeSolver`].
@@ -218,10 +230,20 @@ pub struct BodyId(*mut DxBody);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GroupId(u32);
 
+/// A joint of an [`OdeSolver`] (a shell's own, not a contact).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct JointId(*mut DxJoint);
+
 /// What an object of a world over an [`OdeSolver`] has besides
-/// [`super::Object`]: its group.
+/// [`super::Object`]: its group, and its work on its bodies around the
+/// solving of a step (item 7), when it is active.
 pub trait Grouped {
     fn group(&self) -> GroupId;
+    /// Before the groups are solved.
+    fn before_solve(&mut self, _: &mut OdeSolver, _: &Params) {}
+    /// After they are solved and every group lists its own bodies again,
+    /// before the object's post-step work (item 8).
+    fn after_solve(&mut self, _: &OdeSolver) {}
 }
 
 /// A group: its list, its own bodies (in the order made) and, while the
@@ -229,6 +251,13 @@ pub trait Grouped {
 struct Group {
     world: *mut DxWorld,
     own: Vec<*mut DxBody>,
+    /// Its object's own joints (in the order made).
+    own_joints: Vec<*mut DxJoint>,
+    /// Its object's request for the exact solver (`root` 1.4), and its
+    /// mark for this step: the request, and those of the groups merged
+    /// into it (4.2; physics-shell-shapeless-root.md 1.4, 4.3).
+    requests: bool,
+    marks: bool,
     /// The group this one is merged into this step (itself if none).
     parent: u32,
     /// The groups merged into this one this step, itself first (while it
@@ -243,11 +272,14 @@ struct Group {
 
 /// The groups of a level's world and the contacts of its step.
 pub struct OdeSolver {
+    /// This solver among those made (a shell's bodies are its solver's).
+    serial: u64,
     groups: Vec<Option<Group>>,
     contacts: *mut DxJointGroup,
     /// The step's contacts.
     made: Vec<*mut DxJoint>,
     bodies: HashMap<BodyId, GroupId>,
+    joints: HashMap<JointId, GroupId>,
 }
 
 impl OdeSolver {
@@ -255,11 +287,14 @@ impl OdeSolver {
         // SAFETY: ODE 0.5.0 needs no initialisation; it fails fatally
         // rather than return null.
         let contacts = unsafe { dJointGroupCreate(0) };
+        static SOLVERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         Self {
+            serial: SOLVERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             groups: Vec::new(),
             contacts,
             made: Vec::new(),
             bodies: HashMap::new(),
+            joints: HashMap::new(),
         }
     }
 
@@ -272,25 +307,22 @@ impl OdeSolver {
             // SAFETY: as in `new`.
             unsafe { dWorldCreate() }
         };
-        let index = self
-            .groups
-            .iter()
-            .position(Option::is_none)
-            .unwrap_or(self.groups.len());
+        // A removed group's index is not reused, so a group id names one
+        // group for the solver's life.
+        let index = self.groups.len();
         let group = Group {
             world,
             own: Vec::new(),
+            own_joints: Vec::new(),
+            requests: false,
+            marks: false,
             parent: index as u32,
             members: vec![index as u32],
             bodies: 0,
             joints: 0,
             contacts: Vec::new(),
         };
-        if index == self.groups.len() {
-            self.groups.push(Some(group));
-        } else {
-            self.groups[index] = Some(group);
-        }
+        self.groups.push(Some(group));
         GroupId(index as u32)
     }
 
@@ -303,9 +335,17 @@ impl OdeSolver {
         for &b in &group.own {
             self.bodies.remove(&BodyId(b));
         }
+        for &j in &group.own_joints {
+            self.joints.remove(&JointId(j));
+        }
         // SAFETY: the world is this solver's and lists the group's own
         // bodies only (no step is under way); destroying it destroys them.
         unsafe { dWorldDestroy(group.world) };
+    }
+
+    /// Whether `id` of the solver `serial` is a live group of this one.
+    fn live(&self, serial: u64, id: GroupId) -> bool {
+        serial == self.serial && self.group(id).is_some()
     }
 
     fn group(&self, id: GroupId) -> Option<&Group> {
@@ -396,7 +436,7 @@ impl OdeSolver {
     /// Merges group `from` (merged groups both) into `into` for the rest of
     /// the step: its bodies and contacts move to `into`'s list.
     fn merge(&mut self, into: u32, from: u32) {
-        let (members, contacts, bodies, joints) = {
+        let (members, contacts, bodies, joints, marks, requests) = {
             let g = self.group_mut(from);
             g.parent = into;
             (
@@ -404,6 +444,8 @@ impl OdeSolver {
                 std::mem::take(&mut g.contacts),
                 g.bodies,
                 g.joints,
+                g.marks,
+                g.requests,
             )
         };
         let (from_world, into_world) = (self.group_mut(from).world, self.group_mut(into).world);
@@ -413,6 +455,13 @@ impl OdeSolver {
                 unsafe {
                     dWorldRemoveBody(from_world, b);
                     dWorldAddBody(into_world, b);
+                }
+            }
+            for &j in &self.group_mut(m).own_joints.clone() {
+                // SAFETY: as above, for the member's own joint.
+                unsafe {
+                    dWorldRemoveJoint(from_world, j);
+                    dWorldAddJoint(into_world, j);
                 }
             }
         }
@@ -428,6 +477,10 @@ impl OdeSolver {
         g.contacts.extend(contacts);
         g.bodies += bodies;
         g.joints += joints;
+        // physics-shell-shapeless-root.md 4.3: the merged group's requests
+        // join the colliding object's own, kept from then on.
+        g.marks |= marks;
+        g.requests |= requests;
     }
 
     /// Step item 3 (4.2): up to [`MAX_PAIR_CONTACTS`] of `contacts`, the
@@ -512,9 +565,11 @@ impl OdeSolver {
 
     /// Step item 7 (4.2): every merged group of `groups` (each the group of
     /// an active object, in the objects' order) solved once for a step of
-    /// `params`. A group is solved by the iterative solver (2.4): the exact
-    /// one only for a group marked for it, which no code marks. Then every
-    /// group lists its own bodies again (item 8).
+    /// `params`. A group is solved by the iterative solver (2.4), unless it
+    /// is marked for the exact one and has fewer than
+    /// [`EXACT_SOLVER_JOINTS`] joints, contacts included (a shell naming
+    /// fixed bones requests it, physics-shell-shapeless-root.md 1.4). Then
+    /// every group lists its own bodies again (item 8).
     fn solve_groups(&mut self, params: &Params, groups: impl Iterator<Item = GroupId>) {
         let _turn = STEPPING.lock().unwrap_or_else(|e| e.into_inner());
         Self::apply(params);
@@ -531,7 +586,13 @@ impl OdeSolver {
             let g = self.group_mut(root);
             if g.bodies > 0 {
                 // SAFETY: the world is live; ODE steps what it lists.
-                unsafe { dWorldQuickStep(g.world, params.step) };
+                unsafe {
+                    if g.marks && g.joints < EXACT_SOLVER_JOINTS {
+                        dWorldStep(g.world, params.step);
+                    } else {
+                        dWorldQuickStep(g.world, params.step);
+                    }
+                }
             }
         }
         self.reset();
@@ -556,7 +617,8 @@ impl OdeSolver {
                 member.parent = m;
                 member.members = vec![m];
                 member.bodies = member.own.len();
-                member.joints = 0;
+                member.joints = member.own_joints.len();
+                member.marks = member.requests;
                 if m == index {
                     continue;
                 }
@@ -566,6 +628,13 @@ impl OdeSolver {
                     unsafe {
                         dWorldRemoveBody(world, b);
                         dWorldAddBody(own_world, b);
+                    }
+                }
+                for &j in &member.own_joints {
+                    // SAFETY: as above, for the member's own joint.
+                    unsafe {
+                        dWorldRemoveJoint(world, j);
+                        dWorldAddJoint(own_world, j);
                     }
                 }
             }
@@ -608,13 +677,19 @@ impl OdeSolver {
 }
 
 impl<O: Grouped> Solver<O> for OdeSolver {
-    // TODO(#883): the contacts are gathered as PH-4 specifies, through
+    // TODO(#956): the contacts are gathered as physics-contacts.md specifies, through
     // `OdeSolver::add_contacts`.
     fn collide(&mut self, _: &Params, _: &mut Active<'_, O>) {}
 
     fn solve(&mut self, params: &Params, objects: &mut Active<'_, O>) {
+        for (_, o) in objects.iter_mut() {
+            o.before_solve(self, params);
+        }
         let groups: Vec<GroupId> = objects.iter_mut().map(|(_, o)| o.group()).collect();
         self.solve_groups(params, groups.into_iter());
+        for (_, o) in objects.iter_mut() {
+            o.after_solve(self);
+        }
     }
 
     fn drop_contacts(&mut self) {

@@ -4,45 +4,110 @@
 //! The level's physics world (docs/behavior/physics-world.md, cited by
 //! section): made under `st_client_spawning` (1.1) over the ODE solver,
 //! run after the frame's object updates (2.1), following `ph_frequency`
-//! and `ph_iterations` (2.3, 2.4), removed with the level.
+//! and `ph_iterations` (2.3, 2.4), removed with the level; and its shells
+//! (docs/behavior/physics-shells.md, cited as `shells`): those of the
+//! physics objects, hanging lamps and skeleton objects online at the start
+//! (TODO(#949): those coming online later), built as the client creates
+//! its objects (`shells` 1, 7).
 
-use crate::core::collision::geometry::Vec3;
+use std::collections::HashMap;
+use std::io;
+use std::rc::Rc;
+
+use crate::core::collision::body::BodyBox;
+use crate::core::collision::geometry::{Vec3, normalize};
 use crate::core::console::{Console, Value};
-use crate::core::physics::ode::{GroupId, Grouped, OdeSolver};
-use crate::core::physics::{INITIAL_STEP, Kind, LIBRARY_ITERATIONS, Object, Params, Timers, World};
+use crate::core::physics::ode::shell::OdeShell;
+use crate::core::physics::ode::{GroupId, Grouped, JointId, OdeSolver};
+use crate::core::physics::shell::{
+    self, BoneState, LampRecord, PhysicsRecord, Shape, Shell, ShellModel, turn,
+};
+use crate::core::physics::{
+    INITIAL_STEP, Kind, LIBRARY_ITERATIONS, Object, ObjectId, Params, Timers, World,
+};
+use crate::core::vfs::{self, Vfs};
+use crate::data::GameData;
+use crate::objects::{LevelObject, locate_model};
+use volya_engine_formats::gamemtl::GameMaterial;
+use volya_engine_formats::ltx;
+use volya_engine_formats::model::{transform, transform_point};
+use volya_engine_formats::object::{Object as Record, Skeleton};
 
-/// What the level's world steps. Nothing enters it yet: shells come with
-/// PH-3 (#882), the characters' bodies with their specs (PH-8, PH-22).
-pub enum LevelBody {}
+/// What the level's world steps: shells; the characters' bodies come with
+/// their specs (PH-8, PH-22).
+pub enum LevelBody {
+    Shell(OdeShell),
+}
 
 impl Object for LevelBody {
     fn kind(&self) -> Kind {
-        match *self {}
+        match self {
+            Self::Shell(s) => s.kind(),
+        }
     }
     fn has_geometry(&self) -> bool {
-        match *self {}
+        match self {
+            Self::Shell(s) => s.has_geometry(),
+        }
     }
     fn height(&self) -> f32 {
-        match *self {}
+        match self {
+            Self::Shell(s) => s.height(),
+        }
     }
-    fn set_gravity(&mut self, _: bool) {
-        match *self {}
+    fn set_gravity(&mut self, on: bool) {
+        match self {
+            Self::Shell(s) => s.set_gravity(on),
+        }
     }
-    fn add_force(&mut self, _: Vec3) {
-        match *self {}
+    fn add_force(&mut self, force: Vec3) {
+        match self {
+            Self::Shell(s) => s.add_force(force),
+        }
     }
-    fn pre_step(&mut self, _: &Params) {
-        match *self {}
+    fn pre_step(&mut self, params: &Params) {
+        match self {
+            Self::Shell(s) => s.pre_step(params),
+        }
     }
-    fn post_step(&mut self, _: &Params) -> bool {
-        match *self {}
+    fn post_step(&mut self, params: &Params) -> bool {
+        match self {
+            Self::Shell(s) => s.post_step(params),
+        }
     }
 }
 
 impl Grouped for LevelBody {
     fn group(&self) -> GroupId {
-        match *self {}
+        match self {
+            Self::Shell(s) => Grouped::group(s),
+        }
     }
+    fn before_solve(&mut self, solver: &mut OdeSolver, params: &Params) {
+        match self {
+            Self::Shell(s) => s.before_solve(solver, params),
+        }
+    }
+    fn after_solve(&mut self, solver: &OdeSolver) {
+        match self {
+            Self::Shell(s) => s.after_solve(solver),
+        }
+    }
+}
+
+/// A level object's shell in the world.
+struct LevelShell {
+    /// The object's id.
+    object: u16,
+    id: ObjectId,
+    /// The joints made, by the name of the bone each was made from.
+    joints: Vec<(String, JointId)>,
+    /// Its boxes in their elements' frames, with their materials.
+    boxes: Vec<(usize, Shape, u32)>,
+}
+
+fn invalid(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
 /// The console's physics values in force.
@@ -99,6 +164,9 @@ pub struct PhysicsReport {
     pub iterations: u32,
     /// The floor's height, m (4.5).
     pub floor: f32,
+    /// The shells in the world, and those active (stepped).
+    pub shells: usize,
+    pub active: usize,
 }
 
 /// The world of one level.
@@ -106,6 +174,9 @@ pub struct LevelPhysics {
     world: World<LevelBody, OdeSolver>,
     /// The `ph_iterations` runs the world has followed.
     iterations_runs: u64,
+    shells: Vec<LevelShell>,
+    /// The next collision-group number (`shells` 5.2, `not_collide_parts`).
+    collision_groups: u32,
 }
 
 impl LevelPhysics {
@@ -121,6 +192,8 @@ impl LevelPhysics {
                 lowest_y,
             ),
             iterations_runs: settings.iterations_runs,
+            shells: Vec::new(),
+            collision_groups: 0,
         }
     }
 
@@ -148,6 +221,8 @@ impl LevelPhysics {
             step: w.params().step,
             iterations: w.params().iterations,
             floor: w.floor(),
+            shells: self.shells.len(),
+            active: (self.shells.iter()).filter(|s| w.is_active(s.id)).count(),
         }
     }
 
@@ -161,6 +236,219 @@ impl LevelPhysics {
     pub fn take_timers(&mut self) -> Timers {
         self.world.take_timers()
     }
+
+    /// The shells of `objects` online at the start (`shells` 1): physics
+    /// objects by their physics type (4), hanging lamps with a shell (5.3)
+    /// and skeleton objects, each model read once; `materials` the game
+    /// materials (the collision world's). An object without a model has
+    /// none (our choice: none in the data).
+    pub fn load_shells(
+        &mut self,
+        tree: &dyn Vfs,
+        data: &GameData,
+        dir: &str,
+        objects: &[LevelObject],
+        materials: &[GameMaterial],
+    ) -> io::Result<()> {
+        let mut models: HashMap<String, Rc<ShellModel>> = HashMap::new();
+        for o in objects.iter().filter(|o| o.online) {
+            let (visual, custom, skeleton) = match &o.record.object {
+                Record::PhysicsObject(p) => (&p.visual, &p.object.custom_data, &p.skeleton),
+                Record::HangingLamp(l) => (&l.visual, &l.object.custom_data, &l.skeleton),
+                Record::SkeletonObject(s) => (&s.visual, &s.object.custom_data, &s.skeleton),
+                _ => continue,
+            };
+            if visual.model.is_empty() {
+                continue;
+            }
+            let h = &o.record.header;
+            let named = |e: io::Error| invalid(format!("{}: {e}", h.name.as_str()));
+            let path = locate_model(tree, data, dir, &visual.model)?;
+            let model = match models.get(&path) {
+                Some(m) => m.clone(),
+                None => {
+                    let m = Rc::new(
+                        ShellModel::read(&vfs::read(tree, &path)?)
+                            .map_err(|e| invalid(format!("{path}: {e}")))?,
+                    );
+                    models.insert(path, m.clone());
+                    m
+                }
+            };
+            // Custom data that is not LTX text has no keys (our choice).
+            let custom = ltx::parse(custom.as_bytes()).ok();
+            let x = transform(h.position, h.angles);
+            let state = bone_state(skeleton);
+            let shell = match &o.record.object {
+                Record::PhysicsObject(p) => {
+                    let r = PhysicsRecord {
+                        physics_type: p.physics_type,
+                        mass: p.mass,
+                        fixed_bones: &p.fixed_bones,
+                        skeleton_flags: p.skeleton.flags,
+                        startup_animation: &p.skeleton.startup_animation,
+                        custom_data: custom.as_ref(),
+                        transform: x,
+                        bone_state: state,
+                    };
+                    let Some(mut s) =
+                        shell::physics_object(&model, &r, materials).map_err(named)?
+                    else {
+                        continue;
+                    };
+                    shell::apply_parts_keys(&mut s, &model, &mut self.collision_groups);
+                    s
+                }
+                Record::HangingLamp(l) => {
+                    let r = LampRecord {
+                        light_flags: l.light_flags,
+                        fixed_bones: &l.fixed_bones,
+                        custom_data: custom.as_ref(),
+                        transform: x,
+                        bone_state: state,
+                    };
+                    let Some(s) = shell::hanging_lamp(&model, &r, materials).map_err(named)? else {
+                        continue;
+                    };
+                    s
+                }
+                _ => shell::skeleton_object(&model, skeleton.flags, x, state, materials)
+                    .map_err(named)?,
+            };
+            self.add_shell(o.id, &shell, &model).map_err(named)?;
+        }
+        Ok(())
+    }
+
+    /// Activates object `object`'s shell built from `model` (`shells` 2.1):
+    /// active unless switched off (`root` 3.1).
+    pub fn add_shell(&mut self, object: u16, shell: &Shell, model: &ShellModel) -> io::Result<()> {
+        let params = *self.world.params();
+        let body = self.world.solver_mut().activate_shell(&params, shell);
+        let joints = body
+            .joints()
+            .map(|(j, id)| (model.bones[shell.joints[j].bone].name.clone(), id))
+            .collect();
+        let id = self.world.add(LevelBody::Shell(body));
+        if !shell.switched_off {
+            self.world.activate(id).map_err(|e| invalid(e.0))?;
+        }
+        let boxes = (shell.elements.iter().enumerate())
+            .flat_map(|(i, e)| {
+                (e.geometries.iter())
+                    .filter(|g| matches!(g.shape, Shape::Box { .. }))
+                    .map(move |g| (i, g.shape, e.material))
+            })
+            .collect();
+        self.shells.push(LevelShell {
+            object,
+            id,
+            joints,
+            boxes,
+        });
+        Ok(())
+    }
+
+    fn shell(&self, object: u16) -> Option<&LevelShell> {
+        self.shells.iter().find(|s| s.object == object)
+    }
+
+    /// The joint of object `object`'s shell made from bone `bone`.
+    fn joint(&self, object: u16, bone: &str) -> Option<(ObjectId, JointId)> {
+        let s = self.shell(object)?;
+        let (_, j) = s
+            .joints
+            .iter()
+            .find(|(b, _)| b.eq_ignore_ascii_case(bone))?;
+        Some((s.id, *j))
+    }
+
+    /// A joint's motor on its axis (`door` 2.3: `set_max_force_and_velocity`
+    /// on a hinge): it wakes the shell (`root` 3.1), then sets the hinge's
+    /// maximum force and velocity. Nothing without the joint.
+    pub fn set_max_force_and_velocity(
+        &mut self,
+        object: u16,
+        bone: &str,
+        force: f32,
+        velocity: f32,
+    ) -> io::Result<()> {
+        let Some((id, joint)) = self.joint(object, bone) else {
+            return Ok(());
+        };
+        let (body, solver) = self.world.with_solver(id);
+        if let Some(LevelBody::Shell(s)) = body {
+            s.wake(solver);
+        }
+        solver.set_hinge_motor(joint, force, velocity);
+        self.world.activate(id).map_err(|e| invalid(e.0))
+    }
+
+    /// Object `object`'s shell, and whether it is active.
+    pub fn shell_of(&self, object: u16) -> Option<(&OdeShell, bool)> {
+        let s = self.shell(object)?;
+        let Some(LevelBody::Shell(body)) = self.world.get(s.id) else {
+            return None;
+        };
+        Some((body, self.world.is_active(s.id)))
+    }
+
+    /// The joint of object `object`'s shell made from bone `bone`.
+    pub fn joint_of(&self, object: u16, bone: &str) -> Option<JointId> {
+        self.joint(object, bone).map(|(_, j)| j)
+    }
+
+    /// The hinge angle of the joint of object `object`'s shell made from
+    /// bone `bone` (`root` 2.2).
+    pub fn hinge_angle(&self, object: u16, bone: &str) -> Option<f32> {
+        let (_, joint) = self.joint(object, bone)?;
+        self.world.solver().hinge_angle(joint)
+    }
+
+    /// The boxes of object `object`'s shell where its bodies hold them
+    /// (`shells` 2.1, 2.2), as the player's body meets them.
+    pub fn boxes(&self, object: u16) -> Vec<BodyBox> {
+        let Some(s) = self.shell(object) else {
+            return Vec::new();
+        };
+        let Some(LevelBody::Shell(body)) = self.world.get(s.id) else {
+            return Vec::new();
+        };
+        let solver = self.world.solver();
+        (s.boxes.iter())
+            .filter_map(|&(e, shape, material)| {
+                let Shape::Box {
+                    axes,
+                    centre,
+                    half_size,
+                } = shape
+                else {
+                    return None;
+                };
+                let frame = body.frame(solver, e)?;
+                Some(BodyBox {
+                    centre: transform_point(&frame, centre),
+                    axes: axes.map(|a| {
+                        let w = turn(&frame, a);
+                        normalize(w).unwrap_or(w)
+                    }),
+                    half_size,
+                    material,
+                })
+            })
+            .collect()
+    }
+}
+
+/// The root and visible bones of a Skeleton block (`shells` 3.1).
+fn bone_state(skeleton: &Skeleton) -> BoneState {
+    skeleton
+        .bone_state
+        .as_ref()
+        .map_or_else(BoneState::default, |s| BoneState {
+            root: usize::from(s.root_bone),
+            visible: s.bones_mask,
+        })
 }
 
 #[cfg(test)]

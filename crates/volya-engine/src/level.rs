@@ -2089,11 +2089,18 @@ impl NewGameLoad {
                 sound.zones = (self.zones.zones().iter())
                     .map(|z| z.section.sounds.clone())
                     .collect();
-                // The doors as the client creates its objects (our choice:
-                // the shells are built with them, trader-door.md 2.4); the
-                // sounds their sections play are the level's (2.5).
+                // physics-shells.md 1, 7: the shells as the client creates
+                // its objects; the doors with them (trader-door.md 2.4),
+                // the sounds their sections play the level's (2.5).
                 let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
-                let doors = LevelDoors::load(tree, data, &dir, &self.level_objects, materials)?;
+                earlier(self.physics.as_mut(), "physics world")?.load_shells(
+                    tree,
+                    data,
+                    &dir,
+                    &self.level_objects,
+                    materials,
+                )?;
+                let doors = LevelDoors::load(tree, data, &self.level_objects)?;
                 sound.doors = doors.sound_names();
                 self.doors = Some(doors);
                 sound.check(tree, &data.aliases)?;
@@ -2457,8 +2464,8 @@ impl NewGameLoad {
         let player_sphere = earlier(self.player_sphere, "player's model")?;
         let torches = earlier(self.torches, "torches")?;
         let detectors = earlier(self.detectors, "detectors")?;
-        let doors = earlier(self.doors, "objects")?;
-        let physics = earlier(self.physics, "physics world")?;
+        let mut doors = earlier(self.doors, "objects")?;
+        let mut physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
             return Err(invalid("loading stages out of order: no light inputs"));
         }
@@ -2496,7 +2503,9 @@ impl NewGameLoad {
             Angles::from_spawn(actor.angles),
             now,
         );
-        // trader-door.md 3: the closed doors' leaves stop the player.
+        // trader-door.md 3: the doors' leaves stop the player, from their
+        // shells.
+        doors.sync(&mut physics)?;
         player.body_mut().set_bodies(doors.boxes());
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
@@ -2764,7 +2773,11 @@ impl LevelScreen {
         // player's update picks the object under the crosshair.
         self.doors.update();
         self.player.frame(&self.collision, now, &request);
-        self.doors.physics_steps(self.player.steps());
+        self.doors.physics_steps(self.player.steps(), &self.physics);
+        // 2.3: the motors set reach the hinges (physics-shells.md 10).
+        if let Err(e) = self.doors.sync(&mut self.physics) {
+            self.record_fatal(e.to_string());
+        }
         let view = self.player.view();
         self.doors.pick(view.eye, view.direction, now);
         // The use action on the picked door (2.5).
@@ -2882,6 +2895,12 @@ impl LevelScreen {
         // physics-world.md 2.1: the physics world after the frame's object
         // updates, on the movement's display frame time (2.2).
         self.physics.frame(self.player.frame_time(), now);
+        // trader-door.md 3: the leaves where their shells now hold them,
+        // for the player's next steps.
+        if let Err(e) = self.doors.sync(&mut self.physics) {
+            self.record_fatal(e.to_string());
+        }
+        self.player.body_mut().set_bodies(self.doors.boxes());
     }
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,

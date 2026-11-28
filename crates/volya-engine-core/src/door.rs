@@ -4,28 +4,24 @@
 //! The door scheme `ph_door` of a physics object
 //! (docs/behavior/trader-door.md, cited by section): the scheme's section
 //! (2.1), its start (2.2) and per-step call (2.2, 2.3), the hint it sets
-//! (5.1), the use action's sound (2.5), and the door leaf's boxes the
-//! player's body meets (1, 3).
+//! (5.1), the use action's sound (2.5), the motor it sets on the leaf's
+//! hinge (2.2, 2.3), and the leaf's boxes the player's body meets (1, 3).
 //!
 //! The shipped scripts do not run yet: the scheme here is the spec's
 //! statement of what the scripts do, standing in for them (TODO(#875)). The
-//! leaf's shell is not simulated: how a shell is built for a model whose
-//! root bone has no shape, and whether a shell held at rest sleeps and
-//! still meets the player's body, are open (TODO(#873)). The simplest
-//! behaviour consistent with 2.4 stands in: a closed door's leaf stays at
-//! its placed pose, the hinge's closed stop and its motor (up to 10 000 of
-//! torque, 2.4) holding it against the player, whose push is far weaker
-//! (believed; how far it yields is unestablished, 3.3).
+//! leaf is its shell's (docs/behavior/physics-shells.md 10): the level
+//! hands the scheme's motor to the hinge and the shell's boxes, where its
+//! bodies hold them, to the door. The player's body meets those boxes under
+//! its own contact rules (3.3) and does not push the leaf or wake its
+//! shell: the contacts of docs/behavior/physics-contacts.md 7 are not
+//! gathered yet (TODO(#956)). The resting closed leaf still blocks the
+//! player: whether its shell ignores characters once at rest is open, and
+//! the simplest reading is that it does not (TODO(#954)).
 
-use std::io;
-
-use volya_engine_formats::bone_physics::{self, UsedShape};
-use volya_engine_formats::gamemtl::GameMaterial;
 use volya_engine_formats::ltx::{Section, value};
-use volya_engine_formats::model::{Mat4, Model, multiply, transform_point};
 
 use crate::collision::body::BodyBox;
-use crate::collision::geometry::{Vec3, normalize};
+use crate::collision::geometry::Vec3;
 
 /// The door scheme's name: a logic section `ph_door` or `ph_door@…`.
 pub const SCHEME: &str = "ph_door";
@@ -58,6 +54,9 @@ pub fn start_section(cfg: &str) -> Option<&'static str> {
 pub fn is_door_section(name: &str) -> bool {
     name.split('@').next() == Some(SCHEME)
 }
+
+/// The bone whose joint the scheme drives (2.2).
+pub const JOINT_BONE: &str = "door";
 
 /// The sound sets the door scheme's sections name and their sounds (2.5):
 /// only the spec's own. The sets are the shipped scripts' (TODO(#875)).
@@ -138,47 +137,6 @@ impl DoorSection {
     }
 }
 
-/// The boxes of a type-3 shell's bones (`physics-scope` 1.2) at the bind
-/// pose under `transform`, the record's (2.3: the shell is believed built
-/// in the bind pose): every bone with a used box shape (`bone` 2.2), with
-/// its material's index in `materials`. Fixed bones (`fixed`,
-/// comma-separated) must be bones of the model ("wrong fixed bone", fatal
-/// in the original). Spheres and cylinders are not met (none on a door).
-pub fn shell_boxes(
-    model: &Model,
-    transform: &Mat4,
-    fixed: &str,
-    materials: &[GameMaterial],
-) -> io::Result<Vec<BodyBox>> {
-    for name in fixed.split(',').map(str::trim).filter(|b| !b.is_empty()) {
-        if model.bone(&name.to_lowercase()).is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("wrong fixed bone '{name}'"),
-            ));
-        }
-    }
-    let pose = model.bind_pose()?;
-    let mut boxes = Vec::new();
-    for (bone, bind) in model.bones.iter().zip(&pose) {
-        let Some(UsedShape::Box(b)) = bone.physics.shape.used() else {
-            continue;
-        };
-        let m = multiply(bind, transform);
-        let turn = |v: Vec3| -> Vec3 {
-            let w: Vec3 = std::array::from_fn(|c| (0..3).map(|k| v[k] * m[k][c]).sum());
-            normalize(w).unwrap_or(w)
-        };
-        boxes.push(BodyBox {
-            centre: transform_point(&m, b.centre),
-            axes: b.axes.map(turn),
-            half_size: b.collision_half_size(),
-            material: bone_physics::material(&bone.physics.material, materials)? as u32,
-        });
-    }
-    Ok(boxes)
-}
-
 /// A physics object under the door scheme.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Door {
@@ -189,6 +147,8 @@ pub struct Door {
     /// Set by the closing until the per-step call acts (2.2).
     to_block: bool,
     motor: Option<Motor>,
+    /// Set since last taken (2.3: each setting wakes the shell).
+    motor_set: bool,
     tip: Option<String>,
     boxes: Vec<BodyBox>,
     /// The object's position (the record's).
@@ -204,6 +164,7 @@ impl Door {
             started: false,
             to_block: false,
             motor: None,
+            motor_set: false,
             tip: None,
             boxes,
             position: [0.0; 3],
@@ -250,7 +211,7 @@ impl Door {
         // 2.2: a closed section closes the door; a locked one sets the
         // locked hint.
         if self.section.closed {
-            self.motor = Some(CLOSING);
+            self.set_motor(CLOSING);
             self.to_block = true;
         }
         if self.section.locked && self.section.show_tips {
@@ -258,13 +219,32 @@ impl Door {
         }
     }
 
-    /// One physics step's per-step call (2.2): once the door is closed it
-    /// is held. The leaf stays at its placed pose, angle 0, which the
-    /// closed test (angle ≤ −0, 2.3) passes.
-    pub fn physics_step(&mut self) {
-        if std::mem::take(&mut self.to_block) {
-            self.motor = Some(HOLDING);
+    /// One physics step's per-step call (2.2): once the door is `closed`
+    /// it is held. Closed is the hinge angle at most the low limit the
+    /// script receives, −0 for a hinge whose first element is fixed (2.3;
+    /// physics-shell-shapeless-root.md 2.2).
+    pub fn physics_step(&mut self, closed: bool) {
+        if self.to_block && closed {
+            self.to_block = false;
+            self.set_motor(HOLDING);
         }
+    }
+
+    fn set_motor(&mut self, motor: Motor) {
+        self.motor = Some(motor);
+        self.motor_set = true;
+    }
+
+    /// The motor set since last taken, for the hinge (2.3).
+    pub fn take_motor(&mut self) -> Option<Motor> {
+        std::mem::take(&mut self.motor_set)
+            .then_some(self.motor)
+            .flatten()
+    }
+
+    /// The leaf's boxes where its shell holds them.
+    pub fn set_boxes(&mut self, boxes: Vec<BodyBox>) {
+        self.boxes = boxes;
     }
 
     pub fn started(&self) -> bool {

@@ -3,10 +3,11 @@
 
 //! The level's doors under the door scheme (docs/behavior/trader-door.md,
 //! cited by section; [`crate::core::door`]): found among the objects online
-//! at the start, their leaves' boxes handed to the player's body (3), their
-//! scheme updated with the level (2.1, 2.2), and the player's hint from the
-//! one the crosshair picks (5.1), with when it came under the crosshair
-//! (5.3).
+//! at the start, their scheme updated with the level (2.1, 2.2), its motor
+//! handed to the leaf's hinge in the level's physics (2.3), the leaves'
+//! boxes from their shells handed to the player's body (3), and the
+//! player's hint from the one the crosshair picks (5.1), with when it came
+//! under it (5.3).
 
 use std::io;
 
@@ -16,26 +17,23 @@ use crate::core::collision::body::BodyBox;
 use crate::core::collision::geometry::Vec3;
 use crate::core::config;
 use crate::core::door::{self, Door, DoorSection, DoorSound};
-use crate::core::vfs::{self, Vfs};
+use crate::core::vfs::Vfs;
 use crate::data::GameData;
-use crate::objects::{LevelObject, locate_model};
-use volya_engine_formats::gamemtl::GameMaterial;
+use crate::level_physics::LevelPhysics;
+use crate::objects::LevelObject;
 use volya_engine_formats::ltx::{self, value};
-use volya_engine_formats::model::{Model, transform};
 use volya_engine_formats::object::Object;
 
 /// The physics type whose shell comes from the model's bone data
 /// (`physics-scope` 1.2).
 const BONE_DATA_SHELL: u32 = 3;
 
-fn invalid(message: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.into())
-}
-
 /// The level's doors and the player's hint.
 #[derive(Clone, Debug, Default)]
 pub struct LevelDoors {
     doors: Vec<Door>,
+    /// Each door's object id (its shell's in the physics).
+    objects: Vec<u16>,
     /// `[inventory] take_dist` (5.1).
     take_dist: f32,
     /// The door the crosshair picks within `take_dist` and the engine
@@ -58,17 +56,11 @@ pub struct DoorReport {
 
 impl LevelDoors {
     /// The doors among `objects` (1, 2.1): online physics objects with a
-    /// shell from the bone data whose logic starts in a door scheme section,
-    /// `materials` the game materials (the collision world's).
-    pub fn load(
-        tree: &dyn Vfs,
-        data: &GameData,
-        dir: &str,
-        objects: &[LevelObject],
-        materials: &[GameMaterial],
-    ) -> io::Result<Self> {
+    /// shell from the bone data whose logic starts in a door scheme section.
+    pub fn load(tree: &dyn Vfs, data: &GameData, objects: &[LevelObject]) -> io::Result<Self> {
         let take_dist = value::float(data.system.read("inventory", "take_dist")?);
         let mut doors = Vec::new();
+        let mut ids = Vec::new();
         for o in objects.iter().filter(|o| o.online) {
             let Object::PhysicsObject(p) = &o.record.object else {
                 continue;
@@ -97,23 +89,16 @@ impl LevelDoors {
             else {
                 continue;
             };
-            let model_path = locate_model(tree, data, dir, &p.visual.model)?;
-            let model = Model::parse(&vfs::read(tree, &model_path)?)
-                .map_err(|e| invalid(format!("{model_path}: {e}")))?;
             let h = &o.record.header;
-            let boxes = door::shell_boxes(
-                &model,
-                &transform(h.position, h.angles),
-                &p.fixed_bones,
-                materials,
-            )
-            .map_err(|e| invalid(format!("{}: {e}", h.name.as_str())))?;
             doors.push(
-                Door::new(h.name.to_string(), DoorSection::read(section), boxes).at(h.position),
+                Door::new(h.name.to_string(), DoorSection::read(section), Vec::new())
+                    .at(h.position),
             );
+            ids.push(o.id);
         }
         Ok(Self {
             doors,
+            objects: ids,
             take_dist,
             picked: None,
             sounds: Vec::new(),
@@ -138,14 +123,23 @@ impl LevelDoors {
         std::mem::take(&mut self.sounds)
     }
 
-    /// The boxes of the closed doors' leaves, held at their placed pose
-    /// (2.4; [`crate::core::door`]: an open door's leaf would move, which
-    /// is not simulated, so it meets nothing here).
+    /// The leaves' boxes, where their shells hold them (3.1).
     pub fn boxes(&self) -> Vec<BodyBox> {
         (self.doors.iter())
-            .filter(|d| d.section.closed)
             .flat_map(|d| d.boxes().iter().copied())
             .collect()
+    }
+
+    /// The motors the schemes set since last handed on, to their hinges
+    /// (2.3: each wakes the shell), and the leaves' boxes from their shells.
+    pub fn sync(&mut self, physics: &mut LevelPhysics) -> io::Result<()> {
+        for (d, &id) in self.doors.iter_mut().zip(&self.objects) {
+            if let Some(m) = d.take_motor() {
+                physics.set_max_force_and_velocity(id, door::JOINT_BONE, m.force, m.velocity)?;
+            }
+            d.set_boxes(physics.boxes(id));
+        }
+        Ok(())
     }
 
     /// The objects' update (2.1).
@@ -153,10 +147,17 @@ impl LevelDoors {
         self.doors.iter_mut().for_each(Door::update);
     }
 
-    /// The per-step calls of `steps` physics steps (2.2).
-    pub fn physics_steps(&mut self, steps: u32) {
-        for _ in 0..steps {
-            self.doors.iter_mut().for_each(Door::physics_step);
+    /// The per-step calls of `steps` physics steps (2.2), each door closed
+    /// when its hinge's angle is at most −0 (2.3; a door without a hinge
+    /// stands closed).
+    pub fn physics_steps(&mut self, steps: u32, physics: &LevelPhysics) {
+        for (d, &id) in self.doors.iter_mut().zip(&self.objects) {
+            let closed = physics
+                .hinge_angle(id, door::JOINT_BONE)
+                .is_none_or(|a| a <= -0.0);
+            for _ in 0..steps {
+                d.physics_step(closed);
+            }
         }
     }
 
