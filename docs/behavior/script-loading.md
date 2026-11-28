@@ -11,8 +11,8 @@ Conventions:
 
 - Binaries are those of the script environment specification, identified by size and MD5:
   `xrLUA.dll` (290,816 bytes, `a65ba53867962afc92e0f17409e9cd1f`) and `xrGame.dll` (6,246,400 bytes,
-  `19938b4b9fa11e3b4b6462ce7e7a12ac`). "At offset X" means the file holds exactly those bytes from file
-  offset X (hexadecimal), followed by a NUL byte.
+  `19938b4b9fa11e3b4b6462ce7e7a12ac`). "Contains a string" means the file holds exactly those bytes,
+  followed by a NUL byte.
 - Each fact is **measured** (read from file bytes or game data, or by compiling game data with the public
   LuaJIT 1.0.3 release), **static** (from static analysis of the binaries, not observed at run time) or
   **unestablished**. No binary was run.
@@ -110,7 +110,7 @@ applies. The extension is always `.script`, and the directory is always `$game_s
 The name `_G` is special: its file is `$game_scripts$_G.script`, i.e. `scripts\_g.script`, and it is loaded
 into the global environment (2.3).
 
-`.script` string at offset `[position removed]` and `$game_scripts$` at offset `[position removed]` of `xrGame.dll` (measured).
+`xrGame.dll` contains the strings `.script` and `$game_scripts$` (measured).
 
 ### 2.2 When a file is loaded (static)
 
@@ -143,7 +143,7 @@ below. N is loaded on these occasions:
    and loads nothing. This is established for `class_registrators`; other engine-called names (in
    `script.ltx` the keys `game_type_clsid_factory` and `ui_type_clsid_factory`, and the `namespace.function`
    names in other configuration) are **believed** to take the same path but were not each traced.
-5. **`prefetch(N)`.** The global function `prefetch` (string at offset `[position removed]`), given a script name,
+5. **`prefetch(N)`.** The global function `prefetch` (`xrGame.dll` contains the string), given a script name,
    loads it as in occasion 4.
 
 The game-type sections of `script.ltx` (`[single]`, `[deathmatch]`, …) also have a `script` key listing
@@ -161,12 +161,12 @@ the chunk is the prefix's bytes followed by the file's bytes. For `_G` the chunk
 The prefix is one of two `xrGame.dll` strings, with its three `%s` replaced in order by: N; the
 **opening** text; the **closing** text.
 
-- Default (at offset `[position removed]`, 126 bytes):
+- Default (126 bytes):
   `local function script_name() return "%s" end local this = {} %s this %s setmetatable(this, {__index = _G}) setfenv(1, this) `
   followed by two tab bytes (09 09). (The text shown ends with one space, 20, before the tabs.)
-- If the lowercased command line contains `-_g` as a substring (string at offset `[position removed]`; the same
+- If the lowercased command line contains `-_g` as a substring (`xrGame.dll` contains the string; the same
   lowercasing and substring test as for `-nojit` in the script environment specification), this one is
-  used instead (at offset `[position removed]`, 104 bytes):
+  used instead (104 bytes):
   `local function script_name() return "%s" end local this = {} this._G = _G %s this %s setfenv(1, this) `
   followed by 09 09.
 

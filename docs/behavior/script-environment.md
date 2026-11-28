@@ -14,8 +14,8 @@ Conventions:
   | `XR_3DA.exe` | 1,636,424 | `ba3ad0127bff6619ed991a7c82d8b946` |
   | `dedicated\XR_3DA.exe` | 1,599,560 | `2e668e1acb298b403c6fd2d67575fb91` |
 
-- "At offset X" means the file holds exactly those bytes from file offset X (hexadecimal), followed by a NUL
-  byte unless stated otherwise; a hex viewer confirms it. Export and import names are read from the PE export
+- "Contains a string" means the file holds exactly those bytes, followed by a NUL byte unless stated
+  otherwise; a byte search confirms it. Export and import names are read from the PE export
   and import tables (any PE viewer lists them).
 - Each fact is **measured** (read from file bytes or tables), **static** (from static analysis of the
   binaries, not observed at run time) or **unestablished**. No binary was run: no Windows execution
@@ -28,16 +28,18 @@ The Lua runtime is **LuaJIT 1.0.3**, which identifies itself as built on **Lua 5
 
 ### 1.1 Self-identification strings (measured, `xrLUA.dll`)
 
-| Offset | Bytes |
-|---|---|
-| `0x37940` | `$Lua: Lua 5.1 (alpha) + LuaJIT 1.0.3 Copyright (C) 1994-2005 Lua.org, PUC-Rio $`, line feed (0A), `$Authors: R. Ierusalimschy, L. H. de Figueiredo & W. Celes $`, line feed, `$URL: www.lua.org $`, line feed, then NUL |
-| `[position removed]` | `Lua 5.1 (alpha) + LuaJIT 1.0.3`; the next string, at `0x37ed8`, is `_VERSION` |
-| `0x386e8` | `[LuaJIT frontend failed: %s]`, line feed, then NUL |
-| `0x38790` | `JIT engine init failed (%08x)` |
-| `0x38774` | `jit.util` |
+`xrLUA.dll` contains these strings:
 
-These are the only occurrences of `LuaJIT` (at `[position removed]`, `[position removed]`, `0x386e9`) and of `Lua 5.1` (at
-`[position removed]`, `[position removed]`) in `xrLUA.dll`. The string at `[position removed]` is the value of the global `_VERSION` (static).
+| Bytes |
+|---|
+| `$Lua: Lua 5.1 (alpha) + LuaJIT 1.0.3 Copyright (C) 1994-2005 Lua.org, PUC-Rio $`, line feed (0A), `$Authors: R. Ierusalimschy, L. H. de Figueiredo & W. Celes $`, line feed, `$URL: www.lua.org $`, line feed, then NUL |
+| `Lua 5.1 (alpha) + LuaJIT 1.0.3` |
+| `[LuaJIT frontend failed: %s]`, line feed, then NUL |
+| `JIT engine init failed (%08x)` |
+| `jit.util` |
+
+These hold the only occurrences of `LuaJIT` (three) and of `Lua 5.1` (two) in `xrLUA.dll`. The string
+`Lua 5.1 (alpha) + LuaJIT 1.0.3` is the value of the global `_VERSION` (static).
 
 ### 1.2 Library signatures (measured, `xrLUA.dll` exports)
 
@@ -87,7 +89,7 @@ Libraries opened (static):
 | game (`xrGame.dll`) | `base`, `table`, `string`, `math` | `jit`, `coco` |
 | shader (`XR_3DA.exe`) | `base`, `table`, `string`, `math`, `jit` | (no such check) |
 
-`xrGame.dll` contains `-nojit` at `[position removed]` (its only occurrence); the test is a substring search of the
+`xrGame.dll` contains `-nojit` once; the test is a substring search of the
 command line, which is lowercased first, so it is case-insensitive (static). So `io`, `os`, `debug`,
 `package`, `require` and `module` never exist.
 
@@ -126,15 +128,15 @@ spec.
 
 ### 2.4 ffi
 
-None (measured): `xrLUA.dll` exports no `luaopen_ffi`, and its only occurrence of the bytes `ffi` is inside
-the export name `luaL_buffinit` (at `[position removed]`).
+None (measured): `xrLUA.dll` exports no `luaopen_ffi`, and the bytes `ffi` occur in it only as part of
+the export name `luaL_buffinit`.
 
 ### 2.5 Number type
 
 - One number type: the IEEE-754 64-bit double (static). Numbers are stored as 8-byte doubles with one type
   tag; integers passed in from C are converted to double under the same tag, and conversions to integers
   round the double. There is no separate integer representation.
-- `xrLUA.dll` contains the format `%.14g` at `[position removed]` (measured), the number-to-string format (static).
+- `xrLUA.dll` contains the format `%.14g` (measured), the number-to-string format (static).
 
 ## Provenance
 
