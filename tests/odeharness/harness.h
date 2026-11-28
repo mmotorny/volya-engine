@@ -189,7 +189,34 @@ enum {
   X(int, dCollideRaySphere, (dGeomID, dGeomID, int, dContactGeom *, int)) \
   X(int, dCollideRayBox, (dGeomID, dGeomID, int, dContactGeom *, int)) \
   X(int, dCollideRayCCylinder, (dGeomID, dGeomID, int, dContactGeom *, int)) \
-  X(int, dAreConnected, (dBodyID, dBodyID))
+  X(int, dAreConnected, (dBodyID, dBodyID)) \
+  X(void, dQFromAxisAndAngle, (dReal *, dReal, dReal, dReal, dReal)) \
+  X(void, dQfromR, (dReal *, const dReal *)) \
+  X(void, dGeomGetQuaternion, (dGeomID, dReal *)) \
+  X(void, dBodySetQuaternion, (dBodyID, const dReal *)) \
+  X(void, dBodyAddRelForce, (dBodyID, dReal, dReal, dReal)) \
+  X(void, dBodyAddRelTorque, (dBodyID, dReal, dReal, dReal)) \
+  X(void, dBodyAddForceAtPos, (dBodyID, dReal, dReal, dReal, dReal, dReal, dReal)) \
+  X(void, dBodyAddForceAtRelPos, (dBodyID, dReal, dReal, dReal, dReal, dReal, dReal)) \
+  X(void, dBodyAddRelForceAtPos, (dBodyID, dReal, dReal, dReal, dReal, dReal, dReal)) \
+  X(const dReal *, dBodyGetForce, (dBodyID)) \
+  X(const dReal *, dBodyGetTorque, (dBodyID)) \
+  X(void, dBodySetForce, (dBodyID, dReal, dReal, dReal)) \
+  X(void, dBodySetTorque, (dBodyID, dReal, dReal, dReal)) \
+  X(void, dMassRotate, (dMass *, const dReal *)) \
+  X(void, dMassTranslate, (dMass *, dReal, dReal, dReal)) \
+  X(void, dMassAdd, (dMass *, const dMass *)) \
+  X(int, dGeomGetClass, (dGeomID)) \
+  X(void, dGeomSphereSetRadius, (dGeomID, dReal)) \
+  X(dReal, dGeomSphereGetRadius, (dGeomID)) \
+  X(void, dGeomBoxSetLengths, (dGeomID, dReal, dReal, dReal)) \
+  X(void, dGeomBoxGetLengths, (dGeomID, dReal *)) \
+  X(void, dGeomCCylinderSetParams, (dGeomID, dReal, dReal)) \
+  X(void, dGeomCCylinderGetParams, (dGeomID, dReal *, dReal *)) \
+  X(void, dGeomPlaneSetParams, (dGeomID, dReal, dReal, dReal, dReal)) \
+  X(void, dGeomPlaneGetParams, (dGeomID, dReal *)) \
+  X(void, dGeomRayGet, (dGeomID, dReal *, dReal *)) \
+  X(dReal, dGeomRayGetLength, (dGeomID))
 
 #define VOLYA_ODE_FIELD(ret, name, params) ret (*name) params;
 
