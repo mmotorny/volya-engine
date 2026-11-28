@@ -33,6 +33,8 @@ mod harness_rules;
 mod harness_rules_2;
 #[cfg(test)]
 mod harness_rules_3;
+#[cfg(test)]
+mod harness_rules_4;
 pub mod msvc_rand;
 pub mod shell;
 pub mod x87;

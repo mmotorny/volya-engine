@@ -52,9 +52,9 @@ const NO_CONTACT: ContactGeom = ContactGeom {
     g2: std::ptr::null_mut(),
 };
 
-type V3 = [f32; 3];
+pub(super) type V3 = [f32; 3];
 
-fn dot(o: Sum, a: V3, b: V3) -> f32 {
+pub(super) fn dot(o: Sum, a: V3, b: V3) -> f32 {
     sum3(o, a[0] * b[0], a[1] * b[1], a[2] * b[2])
 }
 
@@ -71,15 +71,15 @@ fn mul_t(r: &M3, v: V3, o: [Sum; 3]) -> V3 {
     std::array::from_fn(|i| dot(o[i], col(r, i), v))
 }
 
-fn add(a: V3, b: V3) -> V3 {
+pub(super) fn add(a: V3, b: V3) -> V3 {
     std::array::from_fn(|i| a[i] + b[i])
 }
 
-fn sub(a: V3, b: V3) -> V3 {
+pub(super) fn sub(a: V3, b: V3) -> V3 {
     std::array::from_fn(|i| a[i] - b[i])
 }
 
-fn cross(a: V3, b: V3) -> V3 {
+pub(super) fn cross(a: V3, b: V3) -> V3 {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -92,7 +92,7 @@ fn three(v: [f32; 4]) -> V3 {
 }
 
 /// A shipped grouping or public 0.5.0's source order.
-fn pick(shipped: bool, o: Sum) -> Sum {
+pub(super) fn pick(shipped: bool, o: Sum) -> Sum {
     if shipped { o } else { Xyz }
 }
 
@@ -2100,22 +2100,22 @@ fn params(world: *mut DxWorld, gravity: V3) -> Params {
 
 /// A body as the steppers read it.
 #[derive(Clone, Copy, Debug)]
-struct Body {
+pub(super) struct Body {
     mass: f32,
     inv_mass: f32,
     i: M3,
     inv_i: M3,
-    r: M3,
-    q: [f32; 4],
-    pos: V3,
-    lvel: V3,
-    avel: V3,
+    pub(super) r: M3,
+    pub(super) q: [f32; 4],
+    pub(super) pos: V3,
+    pub(super) lvel: V3,
+    pub(super) avel: V3,
     facc: V3,
     tacc: V3,
 }
 
 /// A body of the library's, read back.
-fn body_of(b: *mut DxBody, facc: V3, tacc: V3) -> Body {
+pub(super) fn body_of(b: *mut DxBody, facc: V3, tacc: V3) -> Body {
     let mut m = DMass::default();
     // SAFETY: a body.
     unsafe {
@@ -2138,7 +2138,7 @@ fn body_of(b: *mut DxBody, facc: V3, tacc: V3) -> Body {
 
 /// A random body of a world: a box mass rotated (a full inertia), a pose,
 /// velocities and accumulated force and torque.
-fn random_body(world: *mut DxWorld, inputs: &mut Inputs) -> *mut DxBody {
+pub(super) fn random_body(world: *mut DxWorld, inputs: &mut Inputs) -> *mut DxBody {
     // SAFETY: a body made in the world.
     unsafe {
         let b = dBodyCreate(world);
@@ -2792,6 +2792,7 @@ unsafe extern "C" {
     fn dJointSetSliderAxis(j: *mut DxJoint, x: Real, y: Real, z: Real);
     fn dJointSetSliderParam(j: *mut DxJoint, parameter: c_int, value: Real);
     fn dJointGetSliderPosition(j: *mut DxJoint) -> Real;
+    fn dJointGetSliderPositionRate(j: *mut DxJoint) -> Real;
     fn dJointSetUniversalAnchor(j: *mut DxJoint, x: Real, y: Real, z: Real);
     fn dJointSetUniversalAxis1(j: *mut DxJoint, x: Real, y: Real, z: Real);
     fn dJointSetUniversalAxis2(j: *mut DxJoint, x: Real, y: Real, z: Real);
@@ -2807,17 +2808,17 @@ const BOUNCE_PARAM: c_int = 5;
 
 /// A rotation of a stored vector into the world frame, R v, and back, Rᵀ
 /// v: every row (y + z) + x (5.1 rule 1), or in source order.
-fn rot(r: &M3, v: V3, shipped: bool) -> V3 {
+pub(super) fn rot(r: &M3, v: V3, shipped: bool) -> V3 {
     mul331(r, v, picks(shipped, [Yzx; 3]))
 }
 
-fn rot_back(r: &M3, v: V3, shipped: bool) -> V3 {
+pub(super) fn rot_back(r: &M3, v: V3, shipped: bool) -> V3 {
     mul_t(r, v, picks(shipped, [Yzx; 3]))
 }
 
 /// The relative rotation q1⁻¹ q2 (`dQMultiply1`), its scalar part summing
 /// the products of components `order` in that order.
-fn relative(q1: [f32; 4], q2: [f32; 4], order: [usize; 4]) -> [f32; 4] {
+pub(super) fn relative(q1: [f32; 4], q2: [f32; 4], order: [usize; 4]) -> [f32; 4] {
     let [a, b, c, d] = order;
     [
         q1[a] * q2[a] + q1[b] * q2[b] + q1[c] * q2[c] + q1[d] * q2[d],
@@ -2829,7 +2830,7 @@ fn relative(q1: [f32; 4], q2: [f32; 4], order: [usize; 4]) -> [f32; 4] {
 
 /// qb qc⁻¹ (`dQMultiply2`), its scalar part summing the products of
 /// components `order` in that order.
-fn times_inverse(qb: [f32; 4], qc: [f32; 4], order: [usize; 4]) -> [f32; 4] {
+pub(super) fn times_inverse(qb: [f32; 4], qc: [f32; 4], order: [usize; 4]) -> [f32; 4] {
     let [a, b, c, d] = order;
     [
         qb[a] * qc[a] + qb[b] * qc[b] + qb[c] * qc[c] + qb[d] * qc[d],
@@ -2839,7 +2840,7 @@ fn times_inverse(qb: [f32; 4], qc: [f32; 4], order: [usize; 4]) -> [f32; 4] {
     ]
 }
 
-const INDEX_ORDER: [usize; 4] = [0, 1, 2, 3];
+pub(super) const INDEX_ORDER: [usize; 4] = [0, 1, 2, 3];
 
 /// A joint's state as its setters store it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -2965,11 +2966,25 @@ fn fixed_orientation_rows(rows: &mut [Row], qrel: [f32; 4], start: usize, x: &Ct
     }
 }
 
-/// `getHingeAngle` with two bodies (5.2 rule 12).
-fn hinge_angle(s: &Stored, q1: [f32; 4], q2: [f32; 4], shipped: bool) -> f32 {
-    let qq = relative(q1, q2, INDEX_ORDER);
-    let order = if shipped { [0, 3, 1, 2] } else { INDEX_ORDER };
-    let qrel = times_inverse(qq, s.qrel, order);
+/// `getHingeAngle` (5.2 rule 12; with one body, physics-harness-4.md 3).
+fn hinge_angle(s: &Stored, q1: [f32; 4], q2: Option<[f32; 4]>, shipped: bool) -> f32 {
+    let qrel = match q2 {
+        Some(q2) => {
+            let qq = relative(q1, q2, INDEX_ORDER);
+            let order = if shipped { [0, 3, 1, 2] } else { INDEX_ORDER };
+            times_inverse(qq, s.qrel, order)
+        }
+        // dQMultiply3 (qrel,q1,qrel stored).
+        None => {
+            let q = s.qrel;
+            [
+                q1[0] * q[0] - q1[1] * q[1] - q1[2] * q[2] - q1[3] * q[3],
+                -q1[0] * q[1] - q1[1] * q[0] + q1[2] * q[3] - q1[3] * q[2],
+                -q1[0] * q[2] - q1[2] * q[0] + q1[3] * q[1] - q1[1] * q[3],
+                -q1[0] * q[3] - q1[3] * q[0] + q1[1] * q[2] - q1[2] * q[1],
+            ]
+        }
+    };
     let cost2 = qrel[0];
     let sint2 = if shipped {
         (qrel[3] * qrel[3] + qrel[2] * qrel[2] + qrel[1] * qrel[1]).sqrt()
@@ -3039,16 +3054,30 @@ fn limit_row(row: &mut Row, ax1: V3, limit: (u8, f32), rotational: bool, s: &Sto
     }
 }
 
-/// `dJointGetSliderPosition` with two bodies (5.2 rule 14).
-fn slider_position(s: &Stored, b1: &Body, b2: &Body, shipped: bool) -> f32 {
+/// `dJointGetSliderPosition` (5.2 rule 14; with one body,
+/// physics-harness-4.md 4 item 1).
+fn slider_position(s: &Stored, b1: &Body, b2: Option<&Body>, shipped: bool) -> f32 {
     let ax1 = rot(&b1.r, s.axis1, shipped);
-    let q = rot(&b2.r, s.offset, shipped);
-    let c: V3 = std::array::from_fn(|i| b1.pos[i] - q[i] - b2.pos[i]);
+    let c: V3 = match b2 {
+        Some(b2) => {
+            let q = rot(&b2.r, s.offset, shipped);
+            std::array::from_fn(|i| b1.pos[i] - q[i] - b2.pos[i])
+        }
+        None => sub(b1.pos, s.offset),
+    };
     dot(pick(shipped, Yzx), c, ax1)
 }
 
+/// `dJointGetSliderPositionRate` (physics-harness-4.md 4 item 2).
+fn slider_position_rate(s: &Stored, b1: &Body, b2: Option<&Body>, shipped: bool) -> f32 {
+    let ax1 = rot(&b1.r, s.axis1, shipped);
+    let o = pick(shipped, Yzx);
+    let rate = dot(o, ax1, b1.lvel);
+    b2.map_or(rate, |b2| rate - dot(o, ax1, b2.lvel))
+}
+
 /// normalise a given its squared length (physics-library.md 3.5).
-fn normalise_with(a: V3, l: f32) -> V3 {
+pub(super) fn normalise_with(a: V3, l: f32) -> V3 {
     if l >= f32::from_bits(0x3748_0000) {
         let k = 1.0 / l.sqrt();
         a.map(|x| x * k)
@@ -3081,17 +3110,19 @@ fn joint_rows(kind: Kind, s: &Stored, x: &Ctx) -> Vec<Row> {
             rows
         }
         Kind::Hinge => {
-            let b2 = x.body2().unwrap();
-            let limit = limit_of(hinge_angle(s, b1.q, b2.q, shipped), s);
+            let b2 = x.body2();
+            let limit = limit_of(hinge_angle(s, b1.q, b2.map(|b| b.q), shipped), s);
             let mut rows = vec![Row::new(x.p.cfm); if limit.0 != 0 { 6 } else { 5 }];
             ball_rows(&mut rows, s, x);
             let ax1 = rot(&b1.r, s.axis1, shipped);
             let (p, q) = plane_space(ax1);
             rows[3].j[3..6].copy_from_slice(&p);
             rows[4].j[3..6].copy_from_slice(&q);
-            rows[3].j[9..12].copy_from_slice(&p.map(|v| -v));
-            rows[4].j[9..12].copy_from_slice(&q.map(|v| -v));
-            let ax2 = rot(&b2.r, s.axis2, shipped);
+            if b2.is_some() {
+                rows[3].j[9..12].copy_from_slice(&p.map(|v| -v));
+                rows[4].j[9..12].copy_from_slice(&q.map(|v| -v));
+            }
+            let ax2 = b2.map_or(s.axis2, |b2| rot(&b2.r, s.axis2, shipped));
             let b = cross(ax1, ax2);
             rows[3].c = k * dot(y, b, p);
             rows[4].c = k * dot(y, b, q);
@@ -3101,24 +3132,35 @@ fn joint_rows(kind: Kind, s: &Stored, x: &Ctx) -> Vec<Row> {
             rows
         }
         Kind::Slider => {
-            let b2 = x.body2().unwrap();
+            let b2 = x.body2();
             let limit = limit_of(slider_position(s, b1, b2, shipped), s);
             let mut rows = vec![Row::new(x.p.cfm); if limit.0 != 0 { 6 } else { 5 }];
-            let mut c = sub(b2.pos, b1.pos);
             fixed_orientation_rows(&mut rows, s.qrel, 0, x);
             let ax1 = rot(&b1.r, s.axis1, shipped);
             let (p, q) = plane_space(ax1);
-            let half = |v: V3| v.map(|e| 0.5 * e);
-            rows[3].j[9..12].copy_from_slice(&half(cross(c, p)));
-            rows[4].j[9..12].copy_from_slice(&half(cross(c, q)));
-            rows[3].j[6..9].copy_from_slice(&p.map(|v| -v));
-            rows[4].j[6..9].copy_from_slice(&q.map(|v| -v));
             rows[3].j[..3].copy_from_slice(&p);
             rows[4].j[..3].copy_from_slice(&q);
-            c = add(c, rot(&b2.r, s.offset, shipped));
-            let xz = pick(shipped, Xzy);
-            rows[3].c = k * dot(xz, p, c);
-            rows[4].c = k * dot(xz, q, c);
+            match b2 {
+                Some(b2) => {
+                    let mut c = sub(b2.pos, b1.pos);
+                    let half = |v: V3| v.map(|e| 0.5 * e);
+                    rows[3].j[9..12].copy_from_slice(&half(cross(c, p)));
+                    rows[4].j[9..12].copy_from_slice(&half(cross(c, q)));
+                    rows[3].j[6..9].copy_from_slice(&p.map(|v| -v));
+                    rows[4].j[6..9].copy_from_slice(&q.map(|v| -v));
+                    c = add(c, rot(&b2.r, s.offset, shipped));
+                    let xz = pick(shipped, Xzy);
+                    rows[3].c = k * dot(xz, p, c);
+                    rows[4].c = k * dot(xz, q, c);
+                }
+                // physics-harness-4.md 4 item 3: p's dot in source order,
+                // q's (y + z) + x.
+                None => {
+                    let o = sub(s.offset, b1.pos);
+                    rows[3].c = k * dot(Xyz, p, o);
+                    rows[4].c = k * dot(y, q, o);
+                }
+            }
             if limit.0 != 0 {
                 limit_row(&mut rows[5], ax1, limit, false, s, x);
             }
@@ -3286,14 +3328,24 @@ fn random_joint(
             Kind::Hinge => {
                 (s.axis1, s.axis2) = set_axes(axis, b1, b2, shipped);
                 let order = if shipped { [3, 0, 2, 1] } else { INDEX_ORDER };
-                s.qrel = relative(b1.q, b2.unwrap().q, order);
+                s.qrel = match b2 {
+                    Some(b2) => relative(b1.q, b2.q, order),
+                    None => [b1.q[0], -b1.q[1], -b1.q[2], -b1.q[3]],
+                };
             }
             Kind::Slider => {
                 s.axis1 = set_axes(axis, b1, b2, shipped).0;
-                let b2 = b2.unwrap();
-                let order = if shipped { [0, 3, 2, 1] } else { INDEX_ORDER };
-                s.qrel = relative(b1.q, b2.q, order);
-                s.offset = rot_back(&b2.r, sub(b1.pos, b2.pos), shipped);
+                match b2 {
+                    Some(b2) => {
+                        let order = if shipped { [0, 3, 2, 1] } else { INDEX_ORDER };
+                        s.qrel = relative(b1.q, b2.q, order);
+                        s.offset = rot_back(&b2.r, sub(b1.pos, b2.pos), shipped);
+                    }
+                    None => {
+                        s.qrel = [b1.q[0], -b1.q[1], -b1.q[2], -b1.q[3]];
+                        s.offset = b1.pos;
+                    }
+                }
             }
             Kind::Universal => {
                 s.axis1 = set_axes(axis, b1, b2, shipped).0;
@@ -3302,13 +3354,13 @@ fn random_joint(
             Kind::Hinge2 => {
                 s.axis1 = rot_back(&b1.r, normalise(axis), shipped);
                 s.axis2 = rot_back(&b2.unwrap().r, normalise(axis2), shipped);
-                // The axis setters' stored sine and cosine (public 0.5.0's,
-                // 5.4).
-                let ax1 = rot(&b1.r, s.axis1, false);
-                let ax2 = rot(&b2.unwrap().r, s.axis2, false);
+                // The axis setters' stored sine and cosine
+                // (physics-harness-4.md 6 item 1).
+                let ax1 = rot(&b1.r, s.axis1, shipped);
+                let ax2 = rot(&b2.unwrap().r, s.axis2, shipped);
                 let q = cross(ax1, ax2);
-                s.s0 = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt();
-                s.c0 = dot(Xyz, ax1, ax2);
+                s.s0 = dot(pick(shipped, Yzx), q, q).sqrt();
+                s.c0 = dot(pick(shipped, Xzy), ax1, ax2);
             }
             Kind::Fixed => match b2 {
                 Some(b2) => {
@@ -3343,16 +3395,22 @@ fn joints_in_the_shipped_groupings() {
         Kind::Hinge2,
         Kind::Fixed,
     ];
-    let mut steps = [0; 7];
-    let mut differ = [0; 7];
+    let mut steps = [0; 9];
+    let mut differ = [0; 9];
     let mut limits = 0;
     let mut getters_differ = 0;
-    for i in 0..1400 {
-        // The kind, and for the fixed joint every other one held to the
-        // world.
-        let slot = i % 7;
-        let kind = kinds[slot.min(5)];
-        let one_body = slot == 6;
+    let mut rates_differ = 0;
+    for i in 0..1800 {
+        // The kind, and the fixed joint, the hinge and the slider held to
+        // the world too (physics-harness-4.md 3 and 4).
+        let slot = i % 9;
+        let kind = match slot {
+            6 => Kind::Fixed,
+            7 => Kind::Hinge,
+            8 => Kind::Slider,
+            _ => kinds[slot],
+        };
+        let one_body = slot >= 6;
         // SAFETY: a world, its bodies and joint made, stepped and destroyed
         // here, under the lock.
         unsafe {
@@ -3392,11 +3450,13 @@ fn joints_in_the_shipped_groupings() {
             dWorldAddJoint(world, j);
             let h = inputs.next(0.005, 0.03);
             // The getters.
-            if let Some(i2) = i2 {
-                let (b1, b2) = (&bodies[i1], &bodies[i2]);
+            {
+                let b1 = &bodies[i1];
+                let b2o = i2.map(|i| &bodies[i]);
                 let mut got = [0.0; 4];
                 match kind {
                     Kind::Ball => {
+                        let b2 = b2o.unwrap();
                         dJointGetBallAnchor(j, got.as_mut_ptr());
                         let want = add(rot(&b1.r, shipped.anchor1, true), b1.pos);
                         assert_eq!(bits(three(got)), bits(want));
@@ -3409,19 +3469,27 @@ fn joints_in_the_shipped_groupings() {
                     Kind::Hinge => {
                         dJointGetHingeAxis(j, got.as_mut_ptr());
                         assert_eq!(bits(three(got)), bits(rot(&b1.r, shipped.axis1, true)));
-                        let want = hinge_angle(&shipped, b1.q, b2.q, true);
+                        let q2 = b2o.map(|b| b.q);
+                        let want = hinge_angle(&shipped, b1.q, q2, true);
                         assert_eq!(dJointGetHingeAngle(j).to_bits(), want.to_bits());
-                        let old = hinge_angle(&public, b1.q, b2.q, false);
+                        let old = hinge_angle(&public, b1.q, q2, false);
                         getters_differ += usize::from(want.to_bits() != old.to_bits());
                         let axis = rot(&b1.r, shipped.axis1, true);
-                        let rate = dot(Yzx, axis, b1.avel) - dot(Yzx, axis, b2.avel);
+                        let mut rate = dot(Yzx, axis, b1.avel);
+                        if let Some(b2) = b2o {
+                            rate -= dot(Yzx, axis, b2.avel);
+                        }
                         assert_eq!(dJointGetHingeAngleRate(j).to_bits(), rate.to_bits());
                     }
                     Kind::Slider => {
-                        let want = slider_position(&shipped, b1, b2, true);
+                        let want = slider_position(&shipped, b1, b2o, true);
                         assert_eq!(dJointGetSliderPosition(j).to_bits(), want.to_bits());
-                        let old = slider_position(&public, b1, b2, false);
+                        let old = slider_position(&public, b1, b2o, false);
                         getters_differ += usize::from(want.to_bits() != old.to_bits());
+                        let want = slider_position_rate(&shipped, b1, b2o, true);
+                        assert_eq!(dJointGetSliderPositionRate(j).to_bits(), want.to_bits());
+                        let old = slider_position_rate(&public, b1, b2o, false);
+                        rates_differ += usize::from(want.to_bits() != old.to_bits());
                     }
                     _ => {}
                 }
@@ -3482,7 +3550,11 @@ fn joints_in_the_shipped_groupings() {
         getters_differ > 0,
         "the getters' public rules round the same"
     );
-    for slot in 0..7 {
+    assert!(
+        rates_differ > 0,
+        "the slider rate's public rule rounds the same"
+    );
+    for slot in 0..9 {
         assert!(
             differ[slot] > 0,
             "{slot}: the public rules round the same ({} steps)",
