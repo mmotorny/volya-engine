@@ -5,8 +5,6 @@
       "Bash(bazel run //tools/xtask -- wait-memory)",
       "Bash(bazel test //:checks)",
       "Bash(bazel run //tools/xtask -- spec-lint *)",
-      "Bash(container list)",
-      "Bash(container list *)",
       "Bash(shasum *)"
     ]
   }
