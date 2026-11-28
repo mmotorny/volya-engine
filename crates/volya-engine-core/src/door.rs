@@ -4,7 +4,8 @@
 //! The door scheme `ph_door` of a physics object
 //! (docs/behavior/trader-door.md, cited by section): the scheme's section
 //! (2.1), its start (2.2) and per-step call (2.2, 2.3), the hint it sets
-//! (5.1), and the door leaf's boxes the player's body meets (1, 3).
+//! (5.1), the use action's sound (2.5), and the door leaf's boxes the
+//! player's body meets (1, 3).
 //!
 //! The shipped scripts do not run yet: the scheme here is the spec's
 //! statement of what the scripts do, standing in for them (TODO(#875)). The
@@ -58,6 +59,26 @@ pub fn is_door_section(name: &str) -> bool {
     name.split('@').next() == Some(SCHEME)
 }
 
+/// The sound sets the door scheme's sections name and their sounds (2.5):
+/// only the spec's own. The sets are the shipped scripts' (TODO(#875)).
+pub const SOUND_SETS: [(&str, &str); 1] = [("trader_door_unlock", "device\\door_servomotor")];
+
+/// The sound of sound set `name`, as [`SOUND_SETS`] has it.
+pub fn sound_set(name: &str) -> Option<&'static str> {
+    SOUND_SETS
+        .iter()
+        .find(|(set, _)| set.eq_ignore_ascii_case(name.trim()))
+        .map(|&(_, sound)| sound)
+}
+
+/// A sound the scheme plays at a position (2.5).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DoorSound {
+    /// The sound's name (S1's name rules).
+    pub sound: &'static str,
+    pub position: Vec3,
+}
+
 /// The hinge motor's values on axis 0 (2.3): maximum force (a torque) and
 /// target velocity, rad/s.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,6 +114,8 @@ pub struct DoorSection {
     pub show_tips: bool,
     /// The locked hint id: `tip_open`, default [`LOCKED_TIP`].
     pub locked_tip: String,
+    /// The sound set `snd_open_start` (2.1), if any.
+    pub snd_open_start: Option<String>,
 }
 
 impl DoorSection {
@@ -109,6 +132,8 @@ impl DoorSection {
                 .flatten()
                 .map_or(LOCKED_TIP, value::unquote)
                 .to_owned(),
+            snd_open_start: (section.get("snd_open_start").flatten())
+                .map(|v| value::unquote(v).to_owned()),
         }
     }
 }
@@ -166,6 +191,8 @@ pub struct Door {
     motor: Option<Motor>,
     tip: Option<String>,
     boxes: Vec<BodyBox>,
+    /// The object's position (the record's).
+    position: Vec3,
 }
 
 impl Door {
@@ -179,13 +206,40 @@ impl Door {
             motor: None,
             tip: None,
             boxes,
+            position: [0.0; 3],
         }
     }
 
-    /// The use action on the door (2.5): a locked section switches only by
-    /// an `on_use` condition, which the sections here lack, so the door
-    /// does not move and nothing changes.
-    pub fn use_action(&mut self) {}
+    /// The door object at `position`.
+    pub fn at(mut self, position: Vec3) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// The use action on the door (2.5), its scheme started (the scheme's
+    /// use callback exists from its start, 2.1): a locked section plays its
+    /// `snd_open_start` sound set at the door's position, returned here; a
+    /// set [`SOUND_SETS`] lacks plays nothing (TODO(#875)). It switches
+    /// section only by an `on_use` condition, which the sections here lack,
+    /// so the door does not move and nothing else changes.
+    pub fn use_action(&mut self) -> Option<DoorSound> {
+        if !self.started || !self.section.locked {
+            return None;
+        }
+        let set = self.section.snd_open_start.as_deref()?;
+        Some(DoorSound {
+            sound: sound_set(set)?,
+            position: self.position,
+        })
+    }
+
+    /// The sounds its sections can play (2.5), for creating them with the
+    /// level's.
+    pub fn sounds(&self) -> impl Iterator<Item = &'static str> {
+        (self.section.snd_open_start.as_deref())
+            .and_then(sound_set)
+            .into_iter()
+    }
 
     /// The object's update: the first starts the scheme (2.1; believed
     /// the first frame of play).

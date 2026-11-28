@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::core::collision::body::BodyBox;
 use crate::core::collision::geometry::Vec3;
 use crate::core::config;
-use crate::core::door::{self, Door, DoorSection};
+use crate::core::door::{self, Door, DoorSection, DoorSound};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
 use crate::objects::{LevelObject, locate_model};
@@ -41,6 +41,8 @@ pub struct LevelDoors {
     /// The door the crosshair picks within `take_dist` and the engine
     /// clock when it came under it (5.3).
     picked: Option<(usize, u64)>,
+    /// The sounds played since last taken (2.5).
+    sounds: Vec<DoorSound>,
 }
 
 /// The doors as the engine interface reports them.
@@ -106,17 +108,34 @@ impl LevelDoors {
                 materials,
             )
             .map_err(|e| invalid(format!("{}: {e}", h.name.as_str())))?;
-            doors.push(Door::new(
-                h.name.to_string(),
-                DoorSection::read(section),
-                boxes,
-            ));
+            doors.push(
+                Door::new(h.name.to_string(), DoorSection::read(section), boxes).at(h.position),
+            );
         }
         Ok(Self {
             doors,
             take_dist,
             picked: None,
+            sounds: Vec::new(),
         })
+    }
+
+    /// The sounds the doors' sections can play (2.5), each once: created
+    /// with the level's sounds (our choice: when the scripts create a sound
+    /// set's sounds is theirs, TODO(#875)).
+    pub fn sound_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for s in self.doors.iter().flat_map(Door::sounds) {
+            if !names.iter().any(|n| n == s) {
+                names.push(s.to_owned());
+            }
+        }
+        names
+    }
+
+    /// The sounds the doors played since last taken (2.5).
+    pub fn take_sounds(&mut self) -> Vec<DoorSound> {
+        std::mem::take(&mut self.sounds)
     }
 
     /// The boxes of the closed doors' leaves, held at their placed pose
@@ -166,10 +185,11 @@ impl LevelDoors {
         Some((self.doors[i].tip()?, at))
     }
 
-    /// The use action on the door the crosshair picks, if any (2.5).
+    /// The use action on the door the crosshair picks, if any (2.5): the
+    /// sound it plays is kept for [`Self::take_sounds`].
     pub fn use_picked(&mut self) {
         if let Some((i, _)) = self.picked {
-            self.doors[i].use_action();
+            self.sounds.extend(self.doors[i].use_action());
         }
     }
 

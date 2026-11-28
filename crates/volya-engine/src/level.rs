@@ -2068,6 +2068,13 @@ impl NewGameLoad {
                 sound.zones = (self.zones.zones().iter())
                     .map(|z| z.section.sounds.clone())
                     .collect();
+                // The doors as the client creates its objects (our choice:
+                // the shells are built with them, trader-door.md 2.4); the
+                // sounds their sections play are the level's (2.5).
+                let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
+                let doors = LevelDoors::load(tree, data, &dir, &self.level_objects, materials)?;
+                sound.doors = doors.sound_names();
+                self.doors = Some(doors);
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
@@ -2116,16 +2123,6 @@ impl NewGameLoad {
                     }
                 }
                 self.spawned = Some(spawned);
-                // The doors as the client creates its objects (our choice:
-                // the shells are built with them, trader-door.md 2.4).
-                let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
-                self.doors = Some(LevelDoors::load(
-                    tree,
-                    data,
-                    &dir,
-                    &level_objects,
-                    materials,
-                )?);
                 // The lamps' colour animations (docs/formats/lanims-xr.md),
                 // read here with the lamps (our choice: when the game reads
                 // the file is unestablished); without the file, none.
@@ -3071,6 +3068,12 @@ impl LevelScreen {
     /// (trader-door.md).
     pub fn doors(&self) -> &LevelDoors {
         &self.doors
+    }
+
+    /// The sounds the doors played since last taken (trader-door.md 2.5;
+    /// the app plays them on the level's sounds).
+    pub fn take_door_sounds(&mut self) -> Vec<crate::core::door::DoorSound> {
+        self.doors.take_sounds()
     }
 
     pub fn detectors(&self) -> &PlayerDetectors {

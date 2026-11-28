@@ -18,6 +18,7 @@ import {
   clickAt,
   client,
   coarse,
+  doorSound,
   enterLevel,
   inGame,
   keptSetup,
@@ -1689,7 +1690,7 @@ export const tests = {
     return `moved ${moved.toFixed(2)} m, turned ${turned.toFixed(2)} rad, sprint-locked ${sprinted.toFixed(2)} m`;
   },
 
-  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap and the d-pad right use it, leaving it locked": async () => {
+  "touch and gamepad: Use shows while the trader's door is under the crosshair; a tap and the d-pad right use it, playing the servomotor and leaving it locked": async () => {
     needsGame();
     if ((await state()).phase === "menu") await enterLevel();
     let s = await until((s) => s.phase === "level" && !s.menu && !s.intro, "the level's controls");
@@ -1713,6 +1714,7 @@ export const tests = {
     await until((s) => s.level.player.hint === "tip_door_locked", "the door-locked hint");
     for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
     assert(!use.hidden, "Use shown");
+    await doorSound(false);
     const r = use.getBoundingClientRect();
     for (const type of ["pointerdown", "pointerup"]) {
       use.dispatchEvent(
@@ -1729,9 +1731,11 @@ export const tests = {
         }),
       );
     }
-    await sleep(300);
+    // 2.5: the use plays the servomotor and leaves the door locked.
+    await doorSound();
     s = await state();
     assertEqual([s.level.doors[0].locked, s.level.player.hint], [true, "tip_door_locked"], "the door after the touch Use");
+    await doorSound(false);
     // The gamepad's d-pad right (button 15 of the standard mapping).
     const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
     const getGamepads = navigator.getGamepads;
@@ -1740,7 +1744,7 @@ export const tests = {
       pad.buttons[15] = { pressed: true, value: 1 };
       await sleep(100);
       pad.buttons[15] = { pressed: false, value: 0 };
-      await sleep(300);
+      await doorSound();
       s = await state();
     } finally {
       navigator.getGamepads = getGamepads;

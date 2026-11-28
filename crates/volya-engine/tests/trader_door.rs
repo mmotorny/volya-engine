@@ -5,7 +5,8 @@
 //! (BYOA), against docs/behavior/trader-door.md: the door found with its
 //! locked section, its leaf's box (1), the scheme's start and motor (2.2),
 //! the player run at it stopped (3) and the door-locked hint while it is
-//! under the crosshair within 2 m (5.1). Skips when `VOLYA_GOG_INSTALLER`
+//! under the crosshair within 2 m (5.1), and a use of it playing its sound
+//! and leaving it locked (2.5). Skips when `VOLYA_GOG_INSTALLER`
 //! is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -66,7 +67,10 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
     let root = StdVfs::new(archives[0].file.parent().unwrap());
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
-    let level = LevelScreen::load(&tree, &data, 0).unwrap();
+    let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
+    // 2.5: the sound the locked section's use plays is the level's.
+    let sound = level.take_sound_data().unwrap();
+    assert_eq!(sound.doors, ["device\\door_servomotor"]);
 
     // Section 1, 2.1: one door, the record `trader_door`, in its locked
     // section; no motor and no hint before its first update.
@@ -196,15 +200,27 @@ fn the_locked_door_stops_the_player_and_shows_its_hint() {
         .find(|c| matches!(c, Control::Key(_)))
         .expect("a key bound to use");
     eprintln!("use is bound to {use_key:?}");
+    run.level.take_door_sounds();
     press(&mut run, use_key);
     assert!(run.level.state().doors[0].locked);
+    assert_eq!(run.level.take_door_sounds(), []);
 
-    // 2.5: facing the door again, a use leaves it locked and in the way.
+    // 2.5: facing the door again, a use plays `device\door_servomotor` at
+    // the door and leaves it locked and in the way.
     run.level
         .set_camera([feet[0], feet[1] + h, feet[2]], angles);
     run.frames(2);
     assert_eq!(run.hint().as_deref(), Some("tip_door_locked"));
     press(&mut run, use_key);
+    let played = run.level.take_door_sounds();
+    assert_eq!(played.len(), 1, "{played:?}");
+    assert_eq!(played[0].sound, "device\\door_servomotor");
+    let off = sub(played[0].position, leaf.centre);
+    eprintln!(
+        "the use's sound at {:?}, {off:?} from the leaf's centre",
+        played[0].position
+    );
+    assert!(off.iter().all(|v| v.abs() < 2.0), "{off:?}");
     let d = &run.level.state().doors[0];
     assert!(d.locked && d.section == "ph_door@locked", "{d:?}");
     assert_eq!(run.hint().as_deref(), Some("tip_door_locked"));

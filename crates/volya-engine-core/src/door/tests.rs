@@ -128,10 +128,12 @@ fn the_logic_starts_in_the_locked_section() {
             closed: true,
             show_tips: true,
             locked_tip: LOCKED_TIP.into(),
+            snd_open_start: Some("trader_door_unlock".into()),
         }
     );
     let s = section("ph_door@tips");
     assert!(s.locked && !s.closed && !s.show_tips && s.locked_tip == "tip_other");
+    assert_eq!(s.snd_open_start, None);
 }
 
 #[test]
@@ -201,14 +203,43 @@ fn the_crosshair_picks_the_leaf() {
     assert_eq!(door.pick([3.0, 1.5, -2.038], [0.0, 0.0, 1.0]), None);
 }
 
-/// 2.5: a use of the locked door changes nothing.
+/// 2.5: a use of the locked door plays `trader_door_unlock`,
+/// `device\door_servomotor`, at the door's position, each time, and changes
+/// nothing else.
 #[test]
-fn a_use_leaves_the_locked_door_locked() {
-    let mut door = Door::new("trader_door".into(), section("ph_door@locked"), Vec::new());
+fn a_use_of_the_locked_door_plays_its_sound_and_leaves_it_locked() {
+    let at = [10.0, 2.0, -5.0];
+    let mut door = Door::new("trader_door".into(), section("ph_door@locked"), Vec::new()).at(at);
+    assert_eq!(
+        door.sounds().collect::<Vec<_>>(),
+        ["device\\door_servomotor"]
+    );
+    assert_eq!(door.use_action(), None, "the scheme not started");
     door.update();
     door.physics_step();
     let before = door.clone();
-    door.use_action();
+    let played = DoorSound {
+        sound: "device\\door_servomotor",
+        position: at,
+    };
+    for _ in 0..2 {
+        assert_eq!(door.use_action(), Some(played.clone()));
+    }
     assert_eq!(door, before);
     assert_eq!(door.tip(), Some("tip_door_locked"));
+    // Unlocked, or locked without the key or with a set not known: none.
+    let mut unlocked = Door::new("d".into(), section("ph_door@closed"), Vec::new());
+    let mut quiet = Door::new("d".into(), section("ph_door@tips"), Vec::new());
+    let mut other = section("ph_door@locked");
+    other.snd_open_start = Some("some_set".into());
+    let mut other = Door::new("d".into(), other, Vec::new());
+    for d in [&mut unlocked, &mut quiet, &mut other] {
+        d.update();
+        assert_eq!(d.use_action(), None, "{}", d.section.name);
+        assert_eq!(d.sounds().count(), 0);
+    }
+    assert_eq!(
+        sound_set("TRADER_door_unlock"),
+        Some("device\\door_servomotor")
+    );
 }

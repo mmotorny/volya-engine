@@ -1296,6 +1296,12 @@ impl App {
             Some(Phase::Level { level, .. }) => level.take_body_events(),
             _ => Vec::new(),
         };
+        // The doors' sounds of this frame (trader-door.md 2.5), taken the
+        // same way.
+        let door_sounds = match &mut self.phase {
+            Some(Phase::Level { level, .. }) => level.take_door_sounds(),
+            _ => Vec::new(),
+        };
         let Some(sounds) = audio.sounds() else {
             return Ok(());
         };
@@ -1409,6 +1415,11 @@ impl App {
                         )
                     {
                         fatal = Some(e);
+                    }
+                }
+                if let Some(level_sounds) = &self.level_sounds {
+                    for sound in &door_sounds {
+                        level_sounds.door(sounds, sound);
                     }
                 }
                 // The player's body sounds (S17) on the global clock: the

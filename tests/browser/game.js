@@ -272,6 +272,20 @@ export async function until(test, what, ms = 5000) {
   throw new Error(`timed out waiting for ${what}; state ${JSON.stringify(s).slice(0, 400)}`);
 }
 
+/** The sound a use of the trader's locked door plays (trader-door.md 2.5). */
+export const DOOR_SOUND = "device\\door_servomotor";
+
+/** Its emitter (`sound_state`) once it plays, or, with `playing` false, once it has ended. */
+export async function doorSound(playing = true, ms = 10000) {
+  const deadline = performance.now() + ms;
+  while (performance.now() < deadline) {
+    const e = (await volya.call("sound_state")).emitters.find((e) => e.name === DOOR_SOUND);
+    if (playing ? e : !e) return e ?? null;
+    await sleep(30);
+  }
+  throw new Error(`timed out waiting for ${DOOR_SOUND} to ${playing ? "play" : "end"}`);
+}
+
 export function key(code) {
   for (const type of ["keydown", "keyup"]) {
     document.body.dispatchEvent(new KeyboardEvent(type, { code, bubbles: true, cancelable: true }));
