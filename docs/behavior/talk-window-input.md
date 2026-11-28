@@ -58,7 +58,7 @@ Conventions:
 
 **Checks.** Every claim carries the label of an assertion of `checks/talk-window-input/checks.py` in the dirty
 workspace (`run_all.py` runs it; `python3 -I run_all.py`): K (keys), M (mouse), O (opening), C (closing), U (the
-screen's update), W (other windows, saving), V (input devices), D (game data). All 55 pass.
+screen's update), W (other windows, saving), V (input devices), D (game data). All 59 pass.
 
 ## 1. Opening
 
@@ -114,7 +114,7 @@ shows what it showed last, and closes itself at its first update (4.1).
   still be hurt, and its condition changes as without the screen (believed: nothing of the opening or the
   screen's update touches them).
 - **The camera turns toward the partner** on every update of the screen (4.2).
-- **HUD**: hidden as in 1.2 item 1. **Cursor**: the menu cursor, moved by the mouse (3.5).
+- **HUD**: hidden as in 1.2 item 1 (numpad plus and minus can show and hide its indicators, 3.1). **Cursor**: the menu cursor, moved by the mouse (3.5).
 - **Weapon**: `wpn_fire` and `wpn_zoom` were released (1.2); no press reaches the character (3.3), so the weapon
   is not fired or aimed. The item in the hands is not changed (believed: nothing of the opening touches the
   slots).
@@ -130,15 +130,21 @@ A key press reaches the level's key handling as `keys` 5 says. While the talk sc
 2. Every other key is offered to the in-game interface before the level tests the pause, and the interface
    offers it to the topmost window first; while any in-game window is open the interface keeps the press, so
    neither `quick_save` (F6) nor `quick_load` (F7) acts (`autosave-timing` 5.2) and no console-line binding is
-   executed (`keys` 5) [K9]. The game type's interface still sees the press when the topmost window did not
-   take it (`keys` 5 rule 3), but `inventory`, `active_jobs`, `map` and `contacts` act only when no window is
-   open or their own window is the topmost one, so with the talk screen topmost they do nothing [K10].
-   **Disputed in review:** the list is incomplete. `scores` acts with any window open and is not taken (`keys`
-   5 rule 3), so it acts during a talk too. And before the game type's interface, the in-game interface's own
-   handling is offered every press the topmost window did not take: numpad minus and numpad plus (key codes
-   74 and 78), with neither Shift key held, hide and show the HUD indicators and are taken. So during a talk
-   these keys show or hide the indicators that opening hid (1.2 item 1). Closing, as the topmost window,
-   restores the state saved at opening (5 item 4).
+   executed (`keys` 5) [K9]. A press the topmost window did not take (below: every press but `use`, a mouse
+   press an element takes, and, with a special-mode partner while the game is not paused, every press) goes
+   on, in this order, to [K12, K13]:
+   - **The in-game interface's own handling** (by key code, not action; the adjustment mode of `keys` 5 is
+     never on): with neither Shift key (`kLSHIFT` 42, `kRSHIFT` 54) held, numpad minus (`kSUBTRACT`, 74)
+     hides the HUD indicators and numpad plus (`kADD`, 78) shows them, and the press is taken; with a Shift
+     key held, both are taken and do nothing. These are the indicators opening hid (1.2 item 1), so during a
+     talk these keys show and hide them; this is offered before the level tests the pause, so it acts also
+     while paused. Closing restores what opening saved (5 item 4), so a change made during the talk is undone
+     when the screen closes [K12].
+   - **The game type's interface** (`keys` 5 rule 3), which acts only while the game is not paused and the
+     player character is alive: `inventory`, `active_jobs`, `map` and `contacts` act only when no window is
+     open or their own window is the topmost one, so with the talk screen topmost they do nothing [K10];
+     `scores` acts whatever windows are open (what it shows is outside this specification) and does not take
+     the press, so it acts during a talk too [K13]. The in-game interface still keeps the press (above).
 
 The talk screen, offered a key press as the topmost window, handles it in this order [K1, K1b, K3, K6]:
 
@@ -239,7 +245,9 @@ again (giving `ui_talk`, section 6) and the trade window hidden [M6]; when 52 is
 | key bound to `console` | opens the console |
 | `inventory`, `active_jobs`, `map`, `contacts` | nothing |
 | `quick_save`, `quick_load`, console-line bindings | nothing |
-| any other key | nothing (not passed to the character) **Disputed in review:** `scores` acts; numpad minus and plus (no Shift) hide and show the HUD indicators (3.1 item 2) |
+| `scores` | acts as without the screen, unless paused or the partner has the special mode (3.1 item 2) |
+| numpad minus, numpad plus | with no Shift key held, hide, show the HUD indicators; also while paused; not with a special-mode partner unless paused (3.1 item 2) |
+| any other key | nothing (not passed to the character) |
 | left click on a question | message 46: the choice is taken unless one is pending (3.4) |
 | left click on the trade button | message 45: trade when both speakers have it enabled (DG-10) |
 | wheel, drag, scroll bar over a list | scrolls that list |
@@ -280,18 +288,21 @@ When there is no player-character object at all, only the last two tests apply [
     brought into −π … π first) [U5]. Then, with δ the difference target − current (in −π … π):
     1. the turning speed is *v* = 0.15 + ((0.2 − 0.15) / (π/6)) · |δ| per second;
     2. the angle moves toward the target the shorter way round by min(|δ|, *v* · *dt*), and the result is
-       brought into 0 … 2π;
-    3. if it is still more than **π/6** from its target, it is set to the target ± π/6, on its own side [U6].
+       brought into 0 … 2π, then back into −π … π (when it lies outside it) [U6, U8];
+    3. with *e* the difference of that angle and the target (in −π … π), brought into −π … π: when |*e*| is
+       at most **π/6** the angle is stored; otherwise the stored angle is the target on the angle's side (the
+       angle − *e*, the target's value within π of the angle) moved π/6 toward the angle [U6, U8].
 
-    **Disputed in review:** the result of step 2 is not what is kept. After the step, the angle is brought
-    back into −π … π (when it lies outside it). Step 3 tests that angle. The angle stored is then either that
-    angle or the target (in −π … π) ± π/6. So a turned yaw or pitch is never above π, except that target
-    ± π/6 can go past ±π by up to π/6.
+    So the stored angle can lie outside −π … π, by at most 5π/6: a yaw stepped to 2.01 with the target
+    −2.0 is stored as −2.0 + 2π − π/6 ≈ 3.76 [U8]. A pitch is not: with the angle and the target both within
+    −π/2 … π/2 the stored angle lies between them, the target pitch is within −π/2 … π/2 (above), and the
+    actor cameras' pitch limits (`config\system.ltx`, `lim_pitch` of `[actor_firsteye_cam]`,
+    `[actor_ladder_cam]`, `[actor_free_cam]`, `[actor_look_cam]`, `[actor_look_cam_psp]`) are all within
+    −1.5 … 1.5; so, the camera's pitch being within its limits (`player-movement` 7), no pitch above π is
+    stored [U9].
   - So a partner far to the side is faced within π/6 at once, and the camera then drifts slowly (0.15 to 0.2 per
     second) until it is within 0.2 of the target, where it stops turning. The mouse cannot turn the camera while
-    the screen is open (3.5). How the camera treats a pitch brought into 0 … 2π (above π) is **unestablished**
-    here (`player-movement` 7's limits are applied by the camera itself). **Disputed in review:** no pitch
-    above π is stored (see the note after step 3); the question does not arise.
+    the screen is open (3.5). How the camera treats a yaw stored outside −π … π is **unestablished** here.
 
 ### 4.3 The refill mark
 
@@ -416,6 +427,8 @@ they must reach is this set:
 3. **Scroll the answer log** and **scroll the question list** (3.4, 3.5).
 4. **Leave the talk** (`use` or `quit`; neither with a special-mode partner while not paused) (3.1, 3.2).
 5. **Pause** and **open the console**, as without the screen (3.6).
+6. **Show and hide the HUD indicators** (numpad plus and minus) and the action **`scores`**, which are not the
+   talk screen's but act while it is open (3.1 item 2).
 
 Nothing else of the screen takes input: no keyboard navigation of the questions, no key for the trade button, no
 way to move the character or the camera during a talk.
@@ -438,8 +451,7 @@ in the screen's input.
 - That the console leaves the screen open behind it (believed, 3.6).
 - That the speakers' positions of 4.1 are their world positions, and the target point's bounds are the partner's
   bounding sphere (believed, 4.1, 4.2).
-- How the camera treats a pitch the turn brought above π (4.2). **Disputed in review:** moot, the turn
-  stores no angle above π (4.2).
+- How the camera treats a yaw the turn stored outside −π … π (4.2).
 - Which speaker gets the dialog's phrase notice that marks a refill (believed: the one answering next, 4.3).
 - That the screen's own sound is never set (believed, section 5).
 - The outcome of 7.3 as one run (believed, from the rules).
@@ -458,7 +470,7 @@ The names `dialogue-scope` section 7 gives DG-6: `api:TALK_DIALOG_QUESTION_CLICK
   `gamedata.dbd`; binaries `bin\xrGame.dll` (6,246,400 bytes) and `bin\XR_3DA.exe`, and the other shipped binaries
   of `bin\` for the input-device search.
 - Data examined: the winning copies of `config\` and `scripts\` as extracted for the approved `pda-scope`:
-  `config\gameplay\info_portions.xml`, `config\default_controls.ltx`, `config\ui\talk.xml`, `talk_16.xml`,
+  `config\gameplay\info_portions.xml`, `config\default_controls.ltx`, `config\system.ltx`, `config\ui\talk.xml`, `talk_16.xml`,
   `trade.xml`, the shipped scripts and the API listing `scripts\lua_help.script`.
 - Analysis: static analysis of `bin\xrGame.dll` with Ghidra 12.2 (headless; the decompilation and instruction
   listings of the approved `pda-controls` and `talk-window` work, and class tables found by run-time type
@@ -468,12 +480,9 @@ The names `dialogue-scope` section 7 gives DG-6: `api:TALK_DIALOG_QUESTION_CLICK
   the camera turn and its angle routines, the refill triggers, the death rule, the `save` console command;
   constants read from the binary; byte searches of the shipped binaries for input-device identifiers and names.
   No debugging or execution; the game was not run.
-- Checks: `checks/talk-window-input/checks.py` (with `twilib.py`, the `talk-window`, `use-action`, `pda-scope` and
-  `script-api-dialogs-and-trade` helpers and evidence), run with `python3 -I run_all.py`; all 55 pass.
+- Checks: `checks/talk-window-input/checks.py` (with `twilib.py`; `tailsim.py`, a small interpreter of our own
+  that evaluates the instruction listing of the camera turn's last part on chosen angles, the binary itself not
+  being run; the `talk-window`, `use-action`, `pda-scope` and `script-api-dialogs-and-trade` helpers and
+  evidence), run with `python3 -I run_all.py`; all 59 pass.
 - No leaked source code, derived projects or third-party documentation of the engine were used. The DirectInput
   device identifiers are those of Microsoft's public DirectInput documentation.
-
-## Gaps found in review
-
-- Section 9's set leaves out the inputs that act during a talk without being the talk screen's: `scores`, and
-  numpad minus and plus (no Shift) hiding and showing the HUD indicators (3.1 item 2).
