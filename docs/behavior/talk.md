@@ -48,10 +48,11 @@ Conventions:
 - **Scheduled update**: the periodic update each character gets while it is online (how often is not established
   here).
 - **Fatal**: a failed check reported as `console-log` 3.8, after which the program ends.
-- Statements are **static** (read from the shipped `bin\xrGame.dll`; the game was not run) or **measured** (from
-  the game data) unless marked **believed** (with the reason) or **unestablished**.
+- Statements are **static** (read from the shipped `bin\xrGame.dll`, and for the scheduler `bin\XR_3DA.exe`; the
+  game was not run) or **measured** (from the game data) unless marked **believed** (with the reason) or
+  **unestablished**.
 - **Checks**: every claim carries a label in brackets, an assertion of `checks/talk/checks.py` in the dirty
-  workspace (`python3 -I checks.py`; `B` from the static analysis, `D` from the data). All 39 pass.
+  workspace (`python3 -I checks.py`; `B` from the static analysis, `D` from the data). All 43 pass.
 
 ## 1. The talk state of a character
 
@@ -78,9 +79,9 @@ In the shipped scripts `run_talk_dialog` is called on the player character by `x
 picks `self` and the character is not talking) and by `xr_effects.esc_init_dialod` (with the object of story id 3, the
 trader; the function the tutorial `part_1_pda` names on its stop, `dialogue-scope` 3) [D5, D6]. `xr_sos` and
 `xr_zoneguard` also call it, but no other script and no configuration file names either of them, so they never
-load (`script-loading`) and never run; `xr_sos` calls it on a non-player character, which would do nothing
-[D7]. **Disputed in review:** that `xr_sos` calls it on a non-player character is unbacked: D7 checks only
-that neither script is named elsewhere, not which object `xr_sos` calls it on.
+load (`script-loading`) and never run [D7]. `xr_sos` calls it on the character its storage holds as the one in
+distress (`npc`), with its own stalker as the partner; no shipped script ever sets that field (`xr_sos` only clears
+it), so which object it would be called on is **unestablished** [D9].
 
 ### 2.2 The offer
 
@@ -206,6 +207,16 @@ So the first update of a talk brings the view to within π/6 of the partner (the
 then creeps on at 0.15 to 0.2 rad/s until it is within 0.2 rad of the target, where it stops. The window's update is **believed** to run once per
 frame while it is shown (the in-game windows' update).
 
+**The player character's weapon** (measured, the shipped scripts) [D10]: at each update of the player binder of
+`bind_stalker` (`script-api-object-binders` 5.2), when the player character is talking or the binder's hide request
+is set, and the binder has not hidden the weapon, it calls `hide_weapon` on the player character and records that it
+hid it; when neither holds and it had hidden it, it calls `restore_weapon` and clears the record. The hide request
+is set by `bind_stalker.hide_weapon()` and cleared by `bind_stalker.restore_weapon()`, which only `sr_no_weapon`
+calls (on the player character entering and leaving its zone); the record and the request are both cleared when the
+player character comes online. So the weapon is hidden from the first binder update of a talk to the first one
+after the player character's side stops (5.1), unless the request holds it hidden. What `hide_weapon` and
+`restore_weapon` do is `hud-scope` 26's (`hud-first-person-model`).
+
 ## 5. How a talk ends
 
 ### 5.1 The end of a side
@@ -217,6 +228,15 @@ A side ends (1) when:
   and if its own health is 0 or less, its side stops [B3, B3b]. The same rule holds for the player character, the
   stalkers and the trader;
 - for the player character only: when the talk window is hidden while it is still talking (5.2) [B8].
+
+**Death and the scheduled update**: the engine's scheduler runs an object's scheduled update only while the object
+is not marked for destruction (for the player character, the stalkers and the trader alike); the mark is set only on
+the object's destroy event, its removal from the level [B30]. Each of the
+three classes' scheduled updates runs the step of the second rule above without testing health first [B31]. So, if the
+believed statement below holds, a dead character keeps getting scheduled updates while it stays in the level, and its
+side stops at the first of them after its death. **Believed**: death itself neither marks a character for destruction nor removes it from the
+scheduler (the static reading found no step of death that does either). Whether and when a dead character is
+removed from the level is not established here.
 
 ### 5.2 The window
 
@@ -327,6 +347,9 @@ and 3.3). The disputed `dlg:info_portion/dialog` (scope 7, DG-4's row): its use 
   per frame (4, believed).
 - That the positions compared in 5.2 are the objects' positions (believed).
 - How often a scheduled update runs (5.1, 5.3).
+- That death neither marks a character for destruction nor removes it from the scheduler (5.1, believed); whether
+  and when a dead character is removed from the level (5.1).
+- Which object `xr_sos` would call `run_talk_dialog` on (2.1).
 - That a stalker's saved start dialog is never read back (6, believed).
 - That the talk contacts are never filled (7, believed); saving while a talk is open and what loading restores
   (7).
@@ -338,24 +361,19 @@ and 3.3). The disputed `dlg:info_portion/dialog` (scope 7, DG-4's row): its use 
 ## Provenance
 
 - Date: 2026-11-28. Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives
-  `gamedata.db0` … `gamedata.dbd`; binary `bin\xrGame.dll` (6,246,400 bytes).
+  `gamedata.db0` … `gamedata.dbd`; binaries `bin\xrGame.dll` (6,246,400 bytes) and `bin\XR_3DA.exe` (1,636,424 bytes).
 - Data examined: the winning copies of `config\` and `scripts\` as extracted for the approved `pda-scope`:
   `dialogs.xml`, `dialogs_escape.xml`, the shipped scripts (`dialogs`, `xr_meet`, `xr_effects`, `xr_wounded`,
-  `xr_sos`, `xr_zoneguard`, `bind_stalker`, `modules`) and every configuration file.
+  `xr_sos`, `xr_zoneguard`, `bind_stalker`, `sr_no_weapon`, `modules`) and every configuration file.
 - Analysis: static analysis of `bin\xrGame.dll` (the full headless Ghidra decompilation and instruction listing
   made for earlier approved specifications; run-time type information read from the file bytes): the talk offer
   and both sides' start and stop, the characters' inventory-owner update and the scheduled updates that run it,
   the talk window's show, set-up, update and hide, the opening list and the trying of dialogs, the player
   character's list, the sort and its comparison, starting and choosing dialogs, saying a phrase and receiving it,
   the camera turn, the start dialog at coming online, the stalker's update export and its simulation object's
-  update, and the save registries. No debugging or execution; the game was not run.
+  update, and the save registries; static analysis of `bin\XR_3DA.exe` (its headless Ghidra decompilation): the
+  scheduler's run of real-time and queued objects and the destruction mark. No debugging or execution; the game was
+  not run.
 - Checks: `checks/talk/checks.py` (with the `talk-window` and `game-object-basics` helpers), run with `python3 -I`;
-  39 pass.
+  43 pass.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
-
-## Gaps found in review
-
-- Whether a dead character still gets its scheduled update is not established; the health rule of 5.1 and the
-  partner's-death and player's-death rows of 5.3 depend on it.
-- The shipped player binder (`bind_stalker`) hides the player character's weapon while it is talking and
-  restores it afterwards; this specification does not describe it and names no owner for it.
