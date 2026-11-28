@@ -20,8 +20,8 @@ checks folder (the check code itself is unchanged, in `checks/physics-shapeless-
 | 4.1 It is still collided (B11) | `physics-contacts.md` 1.1, 1.5 |
 | 4.2 It is woken by a kept contact (B12) | `physics-contacts.md` 1.2, 1.5; the player's shapes: 7 item 5 |
 | 4.3 The merge and the solver (B13, B4c) | `physics-contacts.md` 1.6, 7 item 5 |
-| 5 `set_nonscript_usable` (B14) | the setter and default: `script-api-game-object-basics.md` 6.3 (already owned by M, unchanged); hint beside the flag: `use-action-usable-flag.md` 1 |
-| 5 The use action and the flag (D5, B15, B16, D6) | `use-action-usable-flag.md` 2, 3 (sections for `use-action.md`, #989, to absorb) |
+| 5 `set_nonscript_usable` (B14) | the setter and default: `script-api-game-object-basics.md` 6.3 (already owned by M, unchanged) and `use-action.md` 10.1; hint beside the flag: `use-action.md` 10.1 |
+| 5 The use action and the flag (D5, B15, B16, D6) | `use-action.md` 1.1 (the action `use`, 42), 2.2 (the crosshair record; the hint reads only its text), 3 (the steps and the gate), 10.2, 10.3 (the flag's readers and what it does), 7.1 and 11.1 (`[ph_capture_visuals]`; the trader's door) |
 | 6 The record's mass (B17) | `physics-shells.md` 4.1 table, 4.5; the door: 10 item 1 |
 | 7 Corrections: `scope` 1.2, `bone` 8, `world` 4.2, `door` 2.4, `door` 2.3 (first element) | `physics-shells.md` 11 |
 | 7 Corrections: `door` 2.3 (angle, closed test, motor) | `physics-joints.md` 4 |
@@ -29,13 +29,13 @@ checks folder (the check code itself is unchanged, in `checks/physics-shapeless-
 | 8 Unestablished: checking-build callers | `physics-shells.md` 1, 12 (already there) |
 | 8 Unestablished: rest while held, other wakers, rest rule | `physics-resting.md` 4, 5 |
 | 8 Unestablished: solver of a merged group | `physics-contacts.md` 1.6, 9 |
-| 8 Unestablished: living character's action; believed single flag reader | `use-action-usable-flag.md` 2, 4 |
+| 8 Unestablished: living character's action; believed single flag reader | `use-action.md` 6.2 (the action is the talk); 10.2 (the flag has three readers) |
 | 8 Believed: frame body never moves; mass reader | `physics-shells.md` 3.5, 4.5, 12 |
 | 8 Believed: φ = 0 is the placed pose | `physics-joints.md` 3, 5 |
 | 9 Provenance | the provenance of each receiving spec |
-| Gaps found in review 1 – 3 (use action) | `use-action-usable-flag.md`, Gaps found in review |
+| Gaps found in review 1 – 3 (use action) | `use-action.md` 3 steps 2, 3 (gap 1); 3 step 7 and 6.1 (gap 2); 10.2 (gap 3) |
 | Gaps found in review 4 (activated switched off, resting list) | `physics-resting.md`, Gaps found in review |
 
 ## Gaps found in review
 
-- `use-action-usable-flag.md` was not approved as a separate specification: reading the flag belongs to the use action's own specification, which is to absorb those facts; until it does, they stay in `physics-shell-shapeless-root.md` section 5 and its first three review gaps.
+- `use-action-usable-flag.md` was not approved as a separate specification: reading the flag belongs to the use action's own specification, `use-action.md`, which absorbs those facts (sections 1.1, 2.2, 3, 6.2, 7.1, 10, 11.1), with the checks `SR-B14`, `SR-B14b`, `SR-D5`, `SR-B15`, `SR-B15b`, `SR-B15c`, `SR-B15d`, `SR-B16`, `SR-D6`, and answers the first three review gaps.

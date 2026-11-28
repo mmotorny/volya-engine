@@ -20,9 +20,9 @@ Builds on (not repeated here):
   pair) and section 2 (the menu pauses game sounds).
 - `docs/behavior/options-screens.md` (the settings `snd_volume_eff`, `snd_volume_music`, `snd_targets`;
   the sound restart).
-- `docs/behavior/start-position.md` section 6 (the camera's eye position *e*, direction *d*, up vector *u*,
-  and the derived *u'* and right vector *r*; the left-handed world) and `docs/behavior/player-movement.md`
-  sections 8, 9 (the camera during play).
+- `docs/behavior/view-projection.md` section 1.1 (the camera's eye position *e*, direction *d*, up vector
+  *u*, and the derived *u'* and right vector *r*), `docs/behavior/world-coordinates.md` section 1 (the
+  left-handed world) and `docs/behavior/player-movement.md` sections 8, 9 (the camera during play).
 - `docs/behavior/loading-screen.md` section 6 (sound is muted during the loading overlay frames).
 - `docs/behavior/startup.md` (the user settings file `user.ltx`) and `docs/formats/ltx-config.md`
   section 10 (path aliases).
@@ -296,13 +296,13 @@ the gain sent is limited to 1.
 ### 7.2 Listener
 
 Every update the listener is the camera of the frame: its eye position *e*, view direction *d* and up
-vector *u* as applied to the device (the values the view of `start-position.md` section 6 is built from;
+vector *u* as applied to the device (the values the view of `view-projection.md` section 1.1 is built from;
 during play those of `player-movement.md` sections 8, 9) [G1]. They are sent as OpenAL listener position
 (*e*.x, *e*.y, −*e*.z), orientation "at" (*d*.x, *d*.y, −*d*.z) and "up" (*u*.x, *u*.y, −*u*.z), and zero
-velocity [B17]. Negating z turns the left-handed world (`start-position.md` section 1) into OpenAL's
+velocity [B17]. Negating z turns the left-handed world (`world-coordinates.md` section 1) into OpenAL's
 right-handed one, for the listener and the sources alike, so a sound on the side of the camera's right
 vector *r* is heard on the right, one along *d* in front [M5]. In terms of the view space of
-`start-position.md` section 6, a source at world position *p* is heard in the direction
+`view-projection.md` section 1.1, a source at world position *p* is heard in the direction
 ((*p* − *e*) · *r*, (*p* − *e*) · *u'*, (*p* − *e*) · *d*) (x right, y up, z ahead) (believed for *u* not
 perpendicular to *d*, e.g. while bobbing: OpenAL implementations make "up" perpendicular to "at").
 How the device renders a direction (panning, filtering) is the device's and **unestablished**; any

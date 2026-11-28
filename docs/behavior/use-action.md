@@ -131,7 +131,7 @@ Each run [U6, U6b, U6c, U6d, U6e, SR-B15, SR-B15b]:
 
 Left Shift is the key state of DirectInput code 0x2A (public documentation) <!-- spec-lint: constant --> on the
 level's input [U6f]. With no object under the crosshair, step 6 passes and step 8 still acts on the pick, at any
-distance. Note: `physics-shell-shapeless-root` 5 calls the event of step 8 without Shift a take event; it is the
+distance. Note: the event of step 8 without Shift is not a take event; it is the
 request to enter a holder [U5b, U5c]. This specification also corrects `M` 6.3: the usable flag has three readers
 (section 10.2), and with left Shift the engine's handling is the drag of section 7, not a handling for items.
 
@@ -433,10 +433,9 @@ the key (1.3).
   name drawing, the item usefulness and take tests, the server's and the player's handling of the take request,
   the setter and every reader of the usable flag; constants read from the binary. No execution or debugging; the
   game was not run.
-- The usable flag's facts of the earlier draft `specs/use-action-usable-flag.md` (moved there from
-  `physics-shell-shapeless-root` 5) are folded into this specification, which owns them in full, with their checks
-  (`SR-*`, `checks/use-action-usable-flag/`); this specification corrects their "take event" to the request to
-  enter a holder (section 3) and answers that draft's review gaps (sections 3, 7, 10.2).
+- The usable flag's facts of the earlier draft `specs/use-action-usable-flag.md` are folded into this
+  specification, which owns them in full, with their checks (`SR-*`, `checks/use-action-usable-flag/`); this specification corrects their "take
+  event" to the request to enter a holder (section 3) and answers that draft's review gaps (sections 3, 7, 10.2).
 - The checks in `checks/use-action/` (`run_all.py`) reproduce every fact.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 

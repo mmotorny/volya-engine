@@ -18,8 +18,9 @@ Builds on (not repeated): `docs/behavior/dynamic-lights.md` (cited as `DL`: ligh
 updates, which lights are drawn and how), `docs/behavior/glows.md` (cited as `GL`: glows), 
 `docs/formats/lanims-xr.md` (colour animations), `docs/behavior/player-state.md` (cited as `PS`: the
 starting inventory, slots, the torch's state at creation), `docs/formats/sav.md` (the torch byte of the
-update packet, section 7.4.2), `docs/behavior/level-objects.md` (cited as `LO`: the object transform
-(section 3.4), model files, bones and the pose at rest (section 4)), `docs/behavior/player-movement.md`
+update packet, section 7.4.2), `docs/behavior/object-visual-and-transform.md` (cited as `OV`: the object
+transform (section 4)), `docs/formats/skeleton-ogf.md` (cited as `SK`: model files and bones (sections 3,
+4)), `docs/behavior/model-shading.md` (the pose at rest (section 2)), `docs/behavior/player-movement.md`
 (cited as `PM`: bindings (section 2.1), the camera's yaw and pitch (section 8)),
 `docs/behavior/sound-positional.md` (cited as `SPos`: sounds, play requests, 2D sounds, volume
 categories), `docs/formats/ltx-config.md` (includes), `docs/behavior/options-screens.md` (the setting
@@ -75,7 +76,7 @@ class id `D_TORCH` [T-D2].
 
 ### 1.2 The model and `torch_definition`
 
-`meshes\equipments\light_night.ogf` (73,740 bytes) is a skeleton model (`LO` section 4.3; type 10;
+`meshes\equipments\light_night.ogf` (73,740 bytes) is a skeleton model (`SK` section 3; type 10;
 chunks 1, 9, 13, 16, 17, 18) [T-M1]. Its four bones, in index order, are `main_bone` (the root),
 `bone_nigth`, `lights_bone` and `cone_bone`, each the child of the one before [T-M2]. Its five child
 meshes, all 1-link progressive meshes [T-M3]:
@@ -220,7 +221,7 @@ becomes [T-B28, T-B29]
   X_item = O · B · X_owner
 
 with B the current model-space matrix of the owner's bone `attach_bone_name`, X_owner the owner's
-transform (`LO` 3.4), and O the offset: rows 0–2 the rotation below of `attach_angle_offset` (o₀, o₁, o₂),
+transform (`OV` 4), and O the offset: rows 0–2 the rotation below of `attach_angle_offset` (o₀, o₁, o₂),
 row 3 = (`attach_position_offset`, 1). With sx = sin o₀, cx = cos o₀, sy = sin o₁, cy = cos o₁,
 sz = sin o₂, cz = cos o₂:
 
@@ -228,7 +229,7 @@ sz = sin o₂, cz = cos o₂:
     O[1] = ( cz·sx·sy + sz·cx,    cy·cz,   sz·sx − cz·cx·sy )
     O[2] = ( −cy·sx,               sy,     cy·cx            )
 
-This is the rotation R of `LO` section 3.4 evaluated at the angles (o₁, o₀, o₂) [T-N2]. For
+This is the rotation R of `OV` section 4 evaluated at the angles (o₁, o₀, o₂) [T-N2]. For
 `device_torch` (0, −3.14, 1.6): O[0] = (−0.0292, 0.9996, −0.0016), O[1] = (0.9996, 0.0292, 0),
 O[2] = (0, −0.0016, −1), translation (0.115, 0, 0.07) [T-N2].
 
@@ -238,7 +239,7 @@ the player's model and is **unestablished** here.
 ## 7. Placement each frame
 
 Each frame a torch that is on is updated; one that is off is not [T-B12]. **G** is the model-space matrix
-of the guide bone (`lights_bone`) of the torch's own model at rest; from the model's bind data (`LO` 4.4)
+of the guide bone (`lights_bone`) of the torch's own model at rest; from the model's bind data (`SK` 4)
 its rows are (−1, 0, 0), (0, 1, 0), (0, 0, −1) and its translation (0.0563, 0.0162, −0.1480) [T-N3].
 
 ### 7.1 Without owner

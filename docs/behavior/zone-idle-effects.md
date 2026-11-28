@@ -23,8 +23,8 @@ Builds on (not repeated):
   default type point, its colour, range, position and active state, the rules by which a stored value
   changes, which lights are drawn and how they light the world).
 - `docs/behavior/glows.md` (P15): the sources of glows (section 2); zones are not among them.
-- `docs/behavior/level-objects.md`: which objects are online at the start (section 2), the object transform
-  *X* (section 3.4).
+- `docs/behavior/offline-simulation.md`: which objects are online at the start (sections 6.5, 9.1);
+  `docs/behavior/object-visual-and-transform.md`: the object transform *X* (section 4).
 - `docs/formats/sav.md`: the record layouts, in particular the Zone block (section 7.4.1) and the zone kinds
   (section 7.4.2).
 - `docs/formats/ltx-config.md`: key lookup with inheritance; reading a missing key is fatal.
@@ -32,7 +32,7 @@ Builds on (not repeated):
   position with the flags looped and 2D and a delay (section 3.2), stop at once (section 4.4).
 - `docs/behavior/sky.md`: the global clock *T* in seconds.
 
-Conventions: matrices in the row-vector convention of level-objects.md (row 3 of *X* is the position **p**).
+Conventions: matrices in the row-vector convention of object-visual-and-transform.md (row 3 of *X* is the position **p**).
 Times in the Zone block are in seconds, all others in milliseconds (ms) unless stated. *C* is the global clock
 of sky.md in whole milliseconds and *T* the same clock in seconds; both are read once per frame from the same
 timer, which runs at real time multiplied by the engine's time factor (1 unless changed); with one device
@@ -112,11 +112,11 @@ every change into idle starts them (section 4.1) and every change out of idle st
 
 ### 3.1 Creation
 
-Zone objects never switch offline (level-objects.md 2.3), so each zone record of the actor's level is
+Zone objects never switch offline (offline-simulation.md 6.5.2), so each zone record of the actor's level is
 created once, when it first comes online, and kept until the level ends. On creation, in this order (Z4):
 
 1. the object's matrix *X* is built from the record's position and angles as for every object
-   (level-objects.md 3.4) (`bin_engine.py` E4);
+   (object-visual-and-transform.md 4) (`bin_engine.py` E4);
 2. the times of section 1.3 are kept and the switching rule is armed when *e*′ ≠ 0 and *d*′ ≠ 0 (section 7);
 3. if `idle_light` is on, a light record is created for the zone (section 4.4);
 4. the idle start (section 4.1) runs;
@@ -299,7 +299,7 @@ changes nothing for its idle effects (Z7). **Disputed in review:** this holds fo
   `anomaly2\bold_idle`), `zone_mine_field` 49 (`Z_MBALD`, effect `static\mine`), `zone_flame_small` 11 (the
   fires, `Z_MBALD`, group `explosions\campfire_05`), `zone_witches_galantine` 9 (`ZS_MBALD`, group
   `anomaly2\electra_idle`), `zone_mincer_weak_noart` 4 (`ZS_MINCE`, group `anomaly2\mincer_idle`). All have one
-  sphere shape. All come online at the start (level-objects.md 2) and start their idle effect.
+  sphere shape. All come online at the start (offline-simulation.md 6.5, 9.1) and start their idle effect.
 - No idle light: every section of the level has `idle_light = off`; the fires' `koster_00` is not read (D4,
   D8).
 - 111 idle sounds play, looped, at the zones' positions: every record but the 49 mine fields

@@ -201,7 +201,7 @@ transmission values 0 … 0.75; no polygon repeats a corner.
 **`levels\l01_escape\level.som`** [D4]: 31 one-sided polygons, all *t* = 0.6, forming a box without a
 floor: bounds (−296.52, −67.47, −164.98) … (−229.65, −18.09, −93.28); every face normal points out of the
 box; 19 roof faces (normalised normal y > 0.8), none facing down; total area 18,036.31 m². The start eye
-position (−246.72630, −23.263261, −134.43387) (`start-position.md`) lies within the bounds. So a sound
+position (−246.72630, −23.263261, −134.43387) (`player-movement.md` section 7.1) lies within the bounds. So a sound
 inside this box heard from outside is multiplied by 0.6 (on top of any level-mesh crossing); a sound
 outside heard from inside is not affected by it.
 

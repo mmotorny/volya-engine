@@ -22,11 +22,11 @@ Builds on (not repeated here):
   weather in effect, its two **current sections** A and B (the hourly sections bracketing the game time)
   and their blend weight *t*; `docs/behavior/level-loading.md` section 2.6 (the first level's weather,
   `default`, the start time 05:30).
-- `docs/behavior/level-objects.md` section 5.4: an object's **sky visibility** *h*.
+- `docs/behavior/object-projected-light.md` sections 5.2 (step 1) and 5.3: an object's **sky visibility** *h*.
 - S6, `docs/behavior/sound-occlusion.md`: the occlusion target *o\**; `docs/formats/level-cform.md` (the
   static collision, `level.cform`); `docs/formats/ogf.md` section 2 (a model's header bounding sphere);
   `docs/behavior/particle-collision.md` section 3.2 (the collision library's ray–triangle tests).
-- `docs/behavior/start-position.md` section 6: the camera's eye position *E*.
+- `docs/behavior/view-projection.md` section 1.1: the camera's eye position *E*.
 - `docs/formats/ltx-config.md`: reading the files (whitespace removed from values; an empty value is "no
   value"; floats; vectors of floats; lists).
 
@@ -275,11 +275,11 @@ load is due on the first frame of the next level.
 ### 4.3 Outdoors
 
 The view is **outdoors** in a frame when the level has a view entity (the object whose camera is shown;
-in normal play the actor) and that object's sky visibility *h* (`docs/behavior/level-objects.md`
-section 5.4: the fraction of free sky rays, followed with the frame-time smoothing given there) is at
+in normal play the actor) and that object's sky visibility *h* (`docs/behavior/object-projected-light.md`
+sections 5.2 and 5.3: the fraction of free sky rays, followed with the frame-time smoothing given there) is at
 least 0.05 [B9]. Without a view entity the view is not outdoors [B9].
 
-- The value read is *h* as last smoothed; reading it applies that section's smoothing step if it has not
+- The value read is *h* as last smoothed; reading it applies those sections' smoothing step if it has not
   run yet in the frame, without casting new rays [B9].
 
 **Update of the view entity's *h*** (the first renderer, which the default user settings select [V1]):
@@ -290,7 +290,7 @@ least 0.05 [B9]. Without a view entity the view is not outdoors [B9].
   actor's own model is not drawn [V3]. This happens while the frame is drawn, after the frame's rule
   (believed from the order of the engine's frame: drawing follows the frame's updates), so the rule
   reads the value from the previous frame's rays, smoothed for this frame.
-- Each update is the step of `level-objects.md` section 5.4: at most once per frame, five of the 26
+- Each update is the step of `object-projected-light.md` sections 5.2 (step 1) and 5.3: at most once per frame, five of the 26
   directions in turn, so all 26 are renewed every 6 frames; the target is the free fraction of the
   directions tested so far (of the 26 latest once all have been tested); at the first update *h* is set
   to that target, afterwards it follows it with the frame-time smoothing [V4, V8, V9]. The object's light
@@ -301,15 +301,15 @@ least 0.05 [B9]. Without a view entity the view is not outdoors [B9].
   (`level.cform`) only, not against objects; the object itself is excluded; a ray is **free** when it hits
   no triangle at a distance 0 < *s* ≤ 50; triangles count from both sides (the collision library's
   two-sided test, `particle-collision.md` section 3.2) [V7].
-- For the actor at the New Game start the model is `actors\hero\stalker_novice` (`start-position.md`
-  section 3.3), whose header sphere has centre (0, 0.94902, 0.02280) and radius 1.33988, so **o** lies
+- For the actor at the New Game start the model is `actors\hero\stalker_novice` (`sav.md`
+  section 10.2), whose header sphere has centre (0, 0.94902, 0.02280) and radius 1.33988, so **o** lies
   1.35098 m above the feet [H2] (believed: the header sphere; that an animated model's sphere may differ
   does not change the result below).
 
 **Values in the first level** (H3 – H6, computed from `level.cform` by this rule):
 
-- **Start of New Game** (the bunker; feet (−246.72630, −24.793261, −134.43387), `start-position.md`
-  section 4.1): none of the 26 rays is free, also with **o** anywhere from 0.3 to 2.1 m above the feet
+- **Start of New Game** (the bunker; feet (−246.72630, −24.793261, −134.43387), `sav.md`
+  section 10.2): none of the 26 rays is free, also with **o** anywhere from 0.3 to 2.1 m above the feet
   [H3]. So *h* = 0 from the first update on, and the view is **not outdoors**: no ambient effect starts
   while the player is in the bunker [H4]; random sounds play as everywhere (section 4.5).
   **Disputed in review:** this holds only from the first ray update on. The object's light data is created
@@ -345,8 +345,8 @@ If the frame has a set and *N*_s < now [B10]:
 
        E + (d · cos a, 10, d · sin a)
 
-   where *E* is the camera's eye position of the frame (the listener of S2; `start-position.md`
-   section 6) [B10]. (The program forms the horizontal unit vector (cos *a*, 0, sin *a*) and normalises
+   where *E* is the camera's eye position of the frame (the listener of S2; `view-projection.md`
+   section 1.1) [B10]. (The program forms the horizontal unit vector (cos *a*, 0, sin *a*) and normalises
    it; the result is the same within float precision [B10].)
 
 So random sounds follow each other at intervals of *P*₀ … *P*₁ − 1 ms of the global clock, measured from

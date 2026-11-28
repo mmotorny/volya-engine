@@ -9,7 +9,7 @@ and size (`xform_anim`, `xform_anim_cyclic`). It is proposed spec 1 of the appro
 It builds on the approved `chunks` (`docs/formats/chunks.md`: chunk headers, lookup by id, lists of
 sub-chunks 0, 1, 2, …), `db-archive`, `ui-layout` (`docs/formats/ui-layout.md`: colours §2, rectangles
 §4.1, statics §5, rotatable pictures §5.4) and `startup` §6.4 (`docs/behavior/startup.md`: the entry
-`asus_logo_01` on the logo pictures), and names the entries used by `level-objects`, `options-screens`
+`asus_logo_01` on the logo pictures), and names the entries used by `hanging-lamps`, `options-screens`
 and the HUD specs of `hud-scope`.
 
 Conventions:
@@ -408,7 +408,7 @@ Exact occurrences in the winning copies of `config\`, `scripts\`, `spawns\all.sp
 - **Spawn and level data**: `koster`, `koster_00`, `light 40 hz`, `light alarm 1`, `light\light alarm_idle`,
   `light\light_galogen_br_01`, `light\light_omni_blue_idle`, `light\light_omni_white_idle`,
   `light\omni_01`, `light_green`, `tv light 1` (among them the hanging lamps' colour animators,
-  `level-objects`; which record kinds name the others was not examined).
+  `hanging-lamps` sections 2.1, 4.3; which record kinds name the others was not examined).
 - **Nowhere**: the other 28 entries have no exact occurrence in this data or the two binaries (a name
   built at run time would not be found this way).
 

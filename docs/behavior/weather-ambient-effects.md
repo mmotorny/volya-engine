@@ -28,7 +28,7 @@ Builds on (not repeated):
   `docs/formats/particles-xr.md` (P1): effect and group records, the effect flag word.
 - `docs/formats/ltx-config.md`: reading the files.
 
-Conventions: matrices in the row-vector convention of `docs/behavior/level-objects.md` (rows 0 – 2 are the axes,
+Conventions: matrices in the row-vector convention of `docs/behavior/object-visual-and-transform.md` (rows 0 – 2 are the axes,
 row 3 the translation). Arithmetic is IEEE single precision (`f32`) unless stated. Positions are world positions of
 the level (metres, +y up). "The effect object" is the particle object the rule makes for one ambient effect.
 *W* is the **wind strength** (section 4). Every fact carries a tag naming its check, in

@@ -30,8 +30,8 @@ Builds on (not repeated here):
   the weather in effect, its two **current sections** A and B (the hourly sections bracketing the game
   time), their blend weight *t*, the blended sun direction L_sun_dir (SS 9.1, 9.2) and the blended far
   plane (SS 9.2); `docs/behavior/level-loading.md` section 2.6 (the first level's weather, `default`).
-- `docs/behavior/level-objects.md` section 5.4: an object's **sky visibility** *h*; section 3.4: an
-  object's transform.
+- `docs/behavior/object-projected-light.md` sections 5.2 (step 1) and 5.3: an object's **sky visibility**
+  *h*; `docs/behavior/object-visual-and-transform.md` section 4: an object's transform.
 - `docs/formats/level-cform.md`: the level's static collision mesh.
 - `docs/formats/ltx-config.md`: reading the files (floats: the longest leading decimal number, so
   `4.5f` reads 4.5; vectors of floats; lines of a section).
@@ -174,18 +174,18 @@ the file's base volume (*b* = 1 [D1]), the effects volume and S6's occlusion.
 ### 4.3 Sky factor
 
 *k* depends on the sky visibility *h* of the **view object** (the object whose camera is shown; in
-normal play the player) (`level-objects.md` section 5.4) [B3]:
+normal play the player) (`object-projected-light.md` sections 5.2, 5.3) [B3]:
 
     k = 1 − 2 · (0.3 − min(h, 0.3))   (= 0.4 + 2 · min(h, 0.3))
 
 so *k* = 1 when at least 30 % of the sky rays are free and falls to 0.4 under a full roof. *k* = 1 when
 there is no view object or the program keeps no sky visibility for it (believed: an object without a
-model) [B3]. Reading *h* applies `level-objects.md` section 5.4's
+model) [B3]. Reading *h* applies `object-projected-light.md` section 5.3's
 once-per-frame smoothing step if it has not run yet this frame, without casting rays [B4]. The rays of
 the view object are cast by the renderer once per rendered frame whether or not the object's own model
 is drawn (also in first-person view), while the device flag 0x400 is set (it is initially [B16]) and a
-further condition of the renderer holds that is not traced (believed: always in normal play) [B4]. *h* starts at 0.5 (*k* = 1) [B4]. Facts on the rays that `level-objects.md`
-section 5.4 marks as believed: they test only the level's static collision mesh (`level-cform.md`), and
+further condition of the renderer holds that is not traced (believed: always in normal play) [B4]. *h* starts at 0.5 (*k* = 1) [B4]. Facts on the rays that `object-projected-light.md`
+section 5.2 marks as believed: they test only the level's static collision mesh (`level-cform.md`), and
 a ray is not free when it meets any triangle of it, from either side, at a distance greater than 0 and
 at most 50 m (triangles whose plane is within a determinant of 10⁻⁵ of the ray's direction are not met)
 [B4]. Which object is the view object in which camera mode is believed (the player in normal play).

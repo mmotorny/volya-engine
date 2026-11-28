@@ -196,7 +196,7 @@ starts the game from `<saves folder>\mysave.sav` (**believed** to behave as the 
 whose command it runs; not measured).
 
 **Which level:** a New Game always starts in the actor's level of `spawns\all.spawn` (`l01_escape`,
-`docs/behavior/start-position.md`). Any other level is reached by loading a save made there. The
+`docs/formats/sav.md` §10.2). Any other level is reached by loading a save made there. The
 no-A-Life form loads a named level directly, but of the 30 shipped `level.spawn` files only `l01_escape`'s
 holds an actor entry [ST-5]; what a player or camera does in another level started this way is
 **unestablished**.
@@ -248,7 +248,7 @@ placed** at a chosen position by these inputs (other than where a New Game or a 
 - **File format** [CAM-2, CAM-4]: a sequence of **keys of 64 bytes**, no header; the file size must be a
   whole multiple of 64, else nothing is played (and the effect is removed). Each key is 16 little-endian
   32-bit floats: a 4 × 4 matrix written row by row, in the row-vector convention of
-  `docs/behavior/start-position.md` (point `p` transformed as `p · M`). The stored matrix is the **view
+  `docs/behavior/view-projection.md` (its conventions; point `p` transformed as `p · M`). The stored matrix is the **view
   matrix**, i.e. the inverse of the camera's world matrix
 
       world = [ r 0 ; u 0 ; d 0 ; e 1 ]      (rows: right r, up u, direction d, eye position e)
@@ -272,7 +272,7 @@ placed** at a chosen position by these inputs (other than where a New Game or a 
 - **Field of view:** a track changes only position and orientation (`docs/behavior/view-projection.md` §3.5);
   the player's field of view stays 67.5° vertical (unless the player is aiming). It cannot be set.
 - Worked example [CAM-6]: eye at the New Game start (−246.72630, −23.263261, −134.43387), yaw 1.3962544,
-  pitch 0.0043165 (angles as in `docs/behavior/start-position.md` §5): d = (0.984797, −0.0043165, 0.173655),
+  pitch 0.0043165 (angles as in `docs/behavior/world-coordinates.md` §§2, 3): d = (0.984797, −0.0043165, 0.173655),
   u = (0.0042509, 0.999991, 0.00074959), r = u × d (the camera's R·(1,0,0) of that document); the key is the `view` matrix above, written 1 or more times; `demo_play
   start_eye,30` with that file as `savedgames\start_eye.xrdemo` holds the view for 30 × keys seconds of
   track time, after the precache (4.2.1). The dirty workspace's generator `steer/run/mkdemo.py` writes such

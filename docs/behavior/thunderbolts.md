@@ -23,15 +23,17 @@ Builds on (not repeated here):
 - `docs/behavior/static-shading.md` (here **SS**): shader and texture resolution (sections 3, 4), the
   shared constant L_sun_color (section 6), the blended weather values and the fog (sections 9.2, 9.3),
   the order of a frame (section 10.3), the fixed states (section 10.1).
-- `docs/behavior/start-position.md` (here **SP**): the camera's eye *E*, right vector **r** and up vector
-  **u′** (section 6), the projection and the far plane (section 7).
-- `docs/formats/level-cform.md`: the level's static collision mesh; `docs/behavior/level-objects.md`:
-  the view object and objects' lighting; `docs/formats/chunks.md`; `docs/formats/ltx-config.md`.
+- `docs/behavior/view-projection.md` (here **VP**): the camera's eye *E*, right vector **r** and up vector
+  **u′** (section 1.1), the projection and the far plane (sections 2, 2.1);
+  `docs/behavior/world-coordinates.md` (here **WC**): world coordinates (section 1).
+- `docs/formats/level-cform.md`: the level's static collision mesh; `docs/behavior/model-shading.md`
+  section 7: objects' lighting; `docs/behavior/object-projected-light.md` section 5.3: the view object;
+  `docs/formats/chunks.md`; `docs/formats/ltx-config.md`.
 
 Conventions: as S8. U(*a*, *b*) is a new draw of S8's shared generator mapped to *a* … *b* (S8
 conventions); "r mod 2" uses a new draw *r* (0 … 32,767) of the same generator. Vectors are rows; a point
 **v** is transformed by a 4 × 4 matrix *M* as (**v**, 1) · *M*. All arithmetic is in 32-bit float.
-Positions are world coordinates (metres, +y up, SP section 1). "Byte of *x*" is trunc(255 · *x*) as in
+Positions are world coordinates (metres, +y up, WC section 1). "Byte of *x*" is trunc(255 · *x*) as in
 sky.md.
 
 **Checks.** Every factual claim carries a tag. The checks are scripts in the dirty workspace,
@@ -254,7 +256,7 @@ A frame's environment update happens before that frame is drawn [B8]. Then:
 - the **fog colour** state (SS section 9.3) is set from the fog colour after the thunder and the rain, as
   clamped bytes [B8];
 - **L_sun_color** (SS section 6) is the sun colour, read once per frame when a pass first uses it, with
-  w = 0 [B8]; so every pass and object lit by it (SS sections 7.3, 8.4; `level-objects.md`) sees the flash;
+  w = 0 [B8]; so every pass and object lit by it (SS sections 7.3, 8.4; `model-shading.md` section 7) sees the flash;
 - **not** affected: the sun sprite, the lens flares and their gradient (sky.md section 7), which take the
   sun colour in their own update, before the flash [B8]; the clouds, ambient and hemi colours (no flash
   is added to them) [B7]; the sun direction. With a renderer other than the first, the sun direction is
@@ -298,8 +300,8 @@ and alpha tests; it does not fade (only the sprites do) [B9, D4].
 ### 6.3 The sprites
 
 Two quads, the top sprite first and then the centre sprite, each with its own shader (section 3) [B9]. For
-centre **C**, half width *h*x and half height *h*y, with the frame's camera right **r** and up **u′** (SP
-section 6) [B9]:
+centre **C**, half width *h*x and half height *h*y, with the frame's camera right **r** and up **u′** (VP
+section 1.1) [B9]:
 
 | Corner | Position | Texture coordinate |
 |---|---|---|
@@ -322,7 +324,7 @@ at full strength after.
 ### 6.4 Visibility
 
 The model and sprites are tested against the depth of everything drawn before (depth write off, so they
-hide nothing) and clipped by the frame's projection and far plane (SP section 7) [B9, D4]. The sky,
+hide nothing) and clipped by the frame's projection and far plane (VP sections 2, 2.1) [B9, D4]. The sky,
 drawn at depth 0.99999 … 1 (sky.md section 5.5), does not hide them.
 
 ## 7. Data of this edition

@@ -12,7 +12,7 @@ Functional specification of S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition
 
 Movement speeds, accelerations, jumping, gravity, postures and controls are the subject of the
 player-movement specification (`player-movement`) and are referred to, not repeated. Coordinates, units
-(metres) and the +y up axis are those of the start-position specification (`start-position`, section 1).
+(metres) and the +y up axis are those of the world-coordinates specification (`world-coordinates`, section 1).
 The original resolves the player's motion with a general rigid-body simulation (a public physics library
 with contact constraints); this document gives the body, the contact properties and the extra rules the
 game adds, with their numbers, and states which overall outcomes (step height, steepest climbable slope)
@@ -454,7 +454,7 @@ specification's section 6.5 refers to.
   player.
 
 **Start position.** On the vertical line through the actor's start position (−246.72630, −24.793261,
-−134.43387) (`start-position`, section 4.1) the mesh has seven triangles, all above the stored y; none lies
+−134.43387) (`sav`, section 10.2) the mesh has seven triangles, all above the stored y; none lies
 below it. The lowest is triangle **424,895** (vertices 250,888, 247,104, 247,153), material id 12
 (`materials\flooring_tile`, index 11, solid), crossed about **0.00013 m above** the stored y (0.0001322 when the vertical line is intersected with the
 triangle's plane in double precision from the stored floats; single-precision evaluation gives about
@@ -519,10 +519,10 @@ adjustments of section 5.4).
   `__support\userdocs\user.ltx`.
 - Data examined: all 30 `levels\*\level.cform`, the 30 `levels\*\level` files (chunk 8 only), `gamemtl.xr`,
   `config\creatures\actor.ltx`, `config\system.ltx`, `spawns\all.spawn` (start position, via the approved
-  start-position specification).
+  `sav` specification, section 10.2).
 - Analysis: static analysis of the binaries (disassembly and decompilation with Ghidra) to establish the
   reading of `level.cform` and `gamemtl.xr`, the load-time material mapping, the contact generation and
   contact parameters, the triangle front-side test, the actor's collision body and its sizing from the box
   configuration, the box selection and posture-change test, and the body's contact, ground, step and drive
   rules with their constants. All file facts were checked with an independent throwaway parser written from
-  this text, over every shipped level; the start-position facts with a ray cast through the decoded mesh.
+  this text, over every shipped level; the facts on the start position with a ray cast through the decoded mesh.

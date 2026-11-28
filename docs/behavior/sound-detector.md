@@ -228,7 +228,7 @@ records (S15 section 1), 118 tick: entry 1 for the 96 `ZS_MBALD` zones, entry 2 
 for the 18 `Z_RADIO`; the 60 `Z_MBALD` zones (flames and mines) never tick, as neither their class id is in
 the table nor are they visible [D5]. Every first-level zone has one sphere centred at its own origin, so its
 shape sphere's centre is its position **p**; the 118 radii are 1.086 … 7.71 m [D6]. From the position of the
-actor's record (start-position.md section 2) the nearest ticking zone is a `zone_mincer_weak_noart` 88.10 m
+actor's record (`docs/formats/sav.md` section 10.2) the nearest ticking zone is a `zone_mincer_weak_noart` 88.10 m
 away, so no zone is in range at the start of a New Game [D6].
 
 ### 7.3 Sound files

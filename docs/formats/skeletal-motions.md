@@ -1,25 +1,26 @@
 # Skeletal motions and the pose at a moment
 
 Format-and-behaviour specification, for S.T.A.L.K.E.R.: Shadow of Chernobyl (Russian edition), of the
-motions of animated skeleton models (visual type 3 of `docs/behavior/level-objects.md` 4.1): where a
+motions of animated skeleton models (visual type 3 of `docs/formats/skeleton-ogf.md` 1): where a
 model's motions come from (its motion-file list, chunk 19, or its own chunks 14 and 15; the `.omf`
 files), the motion parameters (chunk 15) and keys (chunk 14), how a motion's tracks are matched to the
 model's bones (chunks 13 and 16), and the evaluation of one motion at a time *t* (*t* = 0 is the first
 frame) into every bone's current model-space matrix *T*, which gives the render matrices of
-level-objects 4.8. Playback over time (advancing *t*, speed, what happens at the end of a motion,
+model-shading 2. Playback over time (advancing *t*, speed, what happens at the end of a motion,
 fading in and out), blending several motions on one bone, and which motion an object plays are not part
 of it (section 7). What could not be established is marked **unestablished**.
 
 Builds on (not repeated here):
 
-- `docs/behavior/level-objects.md`: visual types and chunk sets (4.1), skeleton models (4.3), bones,
-  bind matrices *B* and their convention (4.4), child meshes and vertex formats (4.5, 4.6), skinning
-  with render matrices *K* = *B*⁻¹ · *T* (4.8), model-file lookup and case-insensitive paths (3.1).
+- `docs/formats/skeleton-ogf.md`: visual types and chunk sets (1), skeleton models (3), bones,
+  bind matrices *B* and their convention (4), child meshes and vertex formats (5, 6).
+- `docs/behavior/model-shading.md`: skinning with render matrices *K* = *B*⁻¹ · *T* (2).
+- `docs/behavior/object-visual-and-transform.md`: model-file lookup and case-insensitive paths (1).
 - `docs/formats/ogf.md`: the visual header (chunk 1). `docs/formats/chunks.md`: chunks, nesting,
   lookup by id. `docs/formats/ltx-config.md` section 10: the path aliases `$level$` and
   `$game_meshes$`.
 
-Conventions as in level-objects: little-endian; `u8`/`u16`/`u32`, `s8`/`s16`, `f32`; `float3` =
+Conventions as in skeleton-ogf: little-endian; `u8`/`u16`/`u32`, `s8`/`s16`, `f32`; `float3` =
 3 × `f32`; `stringZ` zero-terminated Windows-1251; matrices in the row-vector convention (a point **p**
 is transformed as [**p** 1] · *M*; *M*[*r*][*c*], rows and columns from 0; row 3 is the translation).
 floor(*x*) is the largest integer ≤ *x*; clamp(*x*, *a*, *b*) limits *x* to *a* … *b*; *a* mod *n* is
@@ -151,7 +152,7 @@ keys, 1,849,418 translation keys and 262,883 checksums in all. The length of eve
 ### 4.1 Matching tracks to bones
 
 Track *j* of every motion of a set belongs to the bone entry of chunk 15 whose track index is *j*, and
-through its bone name to the model bone (level-objects 4.4, chunk 13) of that exact name; tracks are
+through its bone name to the model bone (skeleton-ogf 4, chunk 13) of that exact name; tracks are
 stored and found by bone name, never by bone position [M2c]. Partition membership plays no part in the
 matching.
 
@@ -231,8 +232,8 @@ The bone's local matrix *L*, from **q** = (*x*, *y*, *z*, *w*) and **p** = (*p*�
 | 3 | *p*₀ | *p*₁ | *p*₂ | 1 |
 
 The bone's current matrix is *T* = *L* · *T*(parent) (the bone's own matrix first, as for the bind
-matrices of level-objects 4.4); for the root bone *T* = *L* [M19b]. The render matrix of level-objects
-4.8 is then *K* = *B*⁻¹ · *T*, and the vertices are skinned as described there.
+matrices of skeleton-ogf 4); for the root bone *T* = *L* [M19b]. The render matrix of model-shading
+2 is then *K* = *B*⁻¹ · *T*, and the vertices are skinned as described there.
 
 Data check of this convention: for every sampled motion of `actors\neytral\stalker_neytral_balon_1`
 (41 motions of `stalker_animation`) and `actors\trader\trader` (65 motions), skinning the model's
@@ -290,7 +291,7 @@ Over all 156 motion sets: 9,232 motions with 679,906 keys (sum of *N*) [M28b].
 
 ### 6.2 Models of `l01_escape`
 
-The type-3 models named in level-objects 7.1 and 7.2 and their motions [M27]:
+The type-3 models named in object-visual-and-transform 5.1 and skeleton-ogf 7.2 and their motions [M27]:
 `actors\trader\trader` lists `actors\trader_animation`; `actors\novice\green_stalker_2` and
 `green_stalker_10` list `actors\stalker_animation`, `actors\critical_hit_grup_3`;
 `actors\soldier\soldier_antigas` lists `actors\stalker_animation`, `actors\soldiers_animation`,
@@ -308,7 +309,7 @@ Positions below are row 3 of *T* (model space, before the object transform).
   2434353) [M29].
   At *t* = 0: `bip01_pelvis` (0, 0.5446, −0.1096), `bip01_head` (−0.0311, 1.1592, 0.0958); the sum of
   all 55 bone positions (−3.9849, 49.9574, 11.7492); the box of all skinned vertices (*K* of section
-  5.4, level-objects 4.8, without the quantization of level-objects 4.7) (−0.3665, −0.0007, −0.2796) …
+  5.4, model-shading 2, without the quantization of model-shading 1) (−0.3665, −0.0007, −0.2796) …
   (0.2698, 1.3697, 0.5612). At *t* = 1.25: head (−0.0309, 1.1632, 0.0897), sum (−3.9936, 50.0255,
   11.6602), box (−0.3630, 0.0016, −0.2812) … (0.2696, 1.3740, 0.5612) [M23].
 - **`physics\vehicles\mi24\veh_mi24_u_01`** (29 bones): motions `idle` (479 keys) and `die` (150).

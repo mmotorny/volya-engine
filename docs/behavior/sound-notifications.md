@@ -25,7 +25,7 @@ Builds on (not repeated):
 - `docs/behavior/player-state.md`: the starting inventory and the PDA's state at creation (section 3.1:
   original owner id 0, the player), slots (section 3.3: the PDA in slot 7).
 - `docs/behavior/hud-scope.md`: the HUD's layout and configuration data (sections 1.2, 1.5) and its spec 12.
-- `docs/behavior/level-objects.md`: the records of `spawns\all.spawn` and their class ids.
+- `docs/behavior/offline-simulation.md` section 9.1: the records of `spawns\all.spawn` and their class ids.
 - `docs/formats/ltx-config.md`: key lookup with inheritance; reading a missing key is fatal.
 
 Conventions: a key's value "names" the file `sounds\<value>.ogg` (S1). LTX values are read after

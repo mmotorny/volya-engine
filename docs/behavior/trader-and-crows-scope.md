@@ -12,8 +12,9 @@ engine spec (1.1, 3.1); the trader appears only as the worked example of what th
 What could not be established is marked **unestablished**; what is inferred rather than read from the data
 or the program is marked **believed**.
 
-Builds on (not repeated): `docs/formats/sav.md` (record layouts), `docs/behavior/level-objects.md`
-(presence at the start, transform, models, skinning at rest), `docs/formats/skeletal-motions.md` (motion
+Builds on (not repeated): `docs/formats/sav.md` (record layouts), `docs/behavior/offline-simulation.md`
+sections 6.5 and 9.1 (presence at the start), `docs/behavior/object-visual-and-transform.md` (transform),
+`docs/formats/skeleton-ogf.md` (models), `docs/behavior/model-shading.md` (skinning at rest), `docs/formats/skeletal-motions.md` (motion
 files, motion names, partitions, the pose at a time *t*), `docs/behavior/motion-playback.md`,
 `docs/behavior/offline-simulation.md`, `docs/behavior/object-visibility.md`,
 `docs/behavior/script-loading.md`, `docs/behavior/script-environment.md`,
@@ -49,7 +50,7 @@ hint text, and control by scripts through the scripted action queue) and the tal
 have, but none of their movement, sight, hearing, touch or footstep parts [T11]. It reads `Health` and
 `max_item_mass` from its section [T12]. The words "smart cover" occur in no file of the game data and not
 in `bin\xrGame.dll` [T4f]. The trader's spawn starts no motion [T8c]; until a script sets one he is
-believed to stay at the bind pose (level-objects 4.8), which is what our engine shows.
+believed to stay at the bind pose (model-shading 2), which is what our engine shows.
 
 **The program's side** (static analysis of `bin\xrGame.dll`). The script object of the trader has
 `set_trader_global_anim`, `set_trader_head_anim`, `set_trader_sound`, `external_sound_start` and
@@ -143,7 +144,7 @@ frame (section 5).
 visual `monsters\crow\crow` [C1, C1b]. On `l01_escape` all have state flags 0xFFFFFFBA and health 1, at
 heights −17.43 … 18.34 m [C1c]; the nearest is 59.0 m from the eye of the fidelity view `outdoor`
 (−180, 5, −120) and 36.7 m from the player's record [C1d]. All 55 are online at the start
-(level-objects 2.6) and never move offline (offline-simulation 5.1).
+(offline-simulation 9.1) and never move offline (offline-simulation 5.1).
 
 **The configuration** `config\creatures\m_crow.ltx` `[m_crow]`: `speed = 6.0`, `angular_speed = 0.1`,
 `goal_change_delta = 5.0`, `min_height = 35`, `goal_variability = 10.0, 15.0, 200.0`,
@@ -198,8 +199,8 @@ cannot be matched crow for crow.
 
 | Need | Approved coverage | Missing |
 |---|---|---|
-| Presence at the start | level-objects 2: the trader and 55 crows online [A1] | — |
-| Drawing at rest | level-objects 3 – 5 (transform, skinned models, shading); light-shadows-projection: crows cast no shadow [A1h] | — |
+| Presence at the start | offline-simulation 6.5, 9.1: the trader and 55 crows online [A1] | — |
+| Drawing at rest | object-visual-and-transform 4 (transform), skeleton-ogf and model-shading (skinned models, shading); light-shadows-projection: crows cast no shadow [A1h] | — |
 | Record layouts | sav.md 7.4: crow (Creature block), trader (Object, Visual, Trader-like) [A1d] | — |
 | A motion's pose at time *t* | skeletal-motions 1 – 5, with the trader's `idle` and the crow's `norm_fly_fwd` as worked examples [A1b] | — |
 | Motion playback | motion-playback (TC1): cycles, time, ends, flags, partitions, notifications, blending, fx motions [A1g] | which motions objects play and what they do when notified (TC2, TC4 – TC7) |
@@ -218,8 +219,8 @@ No approved spec covers the motion channels, the head turning, crows or the logi
 | TC1 | Motion playback (`motion-playback.md`) | playing a cycle on all partitions or one; advancing *t* with the motion's speed; what flags bits 1 – 3 do at a motion's end; end notifications; blending a new cycle in and the old out (accrue, falloff, power); cycles of several channels on one model; fx motions; verified on the trader's and the crow's motions | skeletal-motions | no | L; splits, if one review round cannot check it, into cycles (time, end, flags, partitions, notifications) and blending with fx motions |
 | TC2 | Scripted motion channels (`scripted-motion-channels.md`) | the global and head motion channels and their sound on objects of the trader class, the only class that has them (1.1): what `set_trader_global_anim`, `set_trader_head_anim`, `set_trader_sound`, `external_sound_start` and `external_sound_stop` do, and that they do nothing on any other object; the events 30 – 32 and when each is raised; the head motion ended with the global one; the per-frame check and its skip while the object is under script control; what shows before a motion is set. Data: the motion file and sounds the calls name. Worked example: the trader's start chain (1.1) | TC1; sound-positional.md; `script-api-scope` R, T, O for the names and the callbacks; `characters-scope` CH-24 for script control (only the boundary: when the check is skipped) | no; its only caller is `mob_trader` [T13d], the worked example | S |
 | TC3 | — (withdrawn) | the engine side of the calls the monster schemes make: every call has an owner (3.1), so no spec of its own | — | — | — |
-| TC4 | Head bone turning (`head-bone-turning.md`) | the callback that objects of the trader class install at spawn on the bone `bip01_head`: which object it turns toward, the horizontal angle, its limits and rate, how it combines with the pose of the motion channels, when it runs (also under script control or not). Data: the bone name, the model `actors\trader\trader`. Worked example: the trader at the view `bunker-start` | TC1; level-objects (skinning); skeletal-motions (bones); player-state.md (the player's position, believed the target) | no | S |
-| TC5 | Crow flight (`crow-flight.md`) | 1.2 in full except death and sounds: spawn, states glide and flap, motion groups, goal choice, steering, speed, the cadence of flight steps and the scheduled update's interval, the random numbers | TC1 (cycles); level-objects; object-visibility; view-projection.md (the camera position) | no | M |
+| TC4 | Head bone turning (`head-bone-turning.md`) | the callback that objects of the trader class install at spawn on the bone `bip01_head`: which object it turns toward, the horizontal angle, its limits and rate, how it combines with the pose of the motion channels, when it runs (also under script control or not). Data: the bone name, the model `actors\trader\trader`. Worked example: the trader at the view `bunker-start` | TC1; model-shading (skinning); skeletal-motions (bones); player-state.md (the player's position, believed the target) | no | S |
+| TC5 | Crow flight (`crow-flight.md`) | 1.2 in full except death and sounds: spawn, states glide and flap, motion groups, goal choice, steering, speed, the cadence of flight steps and the scheduled update's interval, the random numbers | TC1 (cycles); object-visual-and-transform (transform), offline-simulation 9.1 (presence); object-visibility; view-projection.md (the camera position) | no | M |
 | TC6 | Crow sounds (`crow-sounds.md`) | the idle sound timer and choice, placement at the crow | TC5; sound-positional.md; ownership to be agreed with level-sound-scope S24 | no | S |
 | TC7 | Crow death (`crow-death.md`) | what kills a crow, the death, death-idle and dead states with their motions, the physics shell and fall, the body afterwards, the `hit` fx motion | TC5; a physics spec (none approved or proposed); player-hits.md and the weapons | no | M |
 
@@ -251,7 +252,7 @@ until those specs establish them [T13b, T13c, T13e, A2, A2b]:
 | `get_enemy`, `get_monster_hit_info`, `skip_transfer_enemy` | `mob_camp`, `mob_combat` | X | CH-15 |
 | `apply_force`, `get_physics_shell` | `mob_kicker` | Y | `physics-scope` |
 | the binder (`object_binder`, `bind_object`) | `bind_monster` | L, A | L, CH-26 |
-| identity, place and kind (`id`, `name`, `position`, `direction`, `level_vertex_id`, `alive`, `clsid`) | most | M and others | M, `level-objects`, CH-5 |
+| identity, place and kind (`id`, `name`, `position`, `direction`, `level_vertex_id`, `alive`, `clsid`) | most | M and others | M, `object-visual-and-transform`, `offline-simulation`, CH-5 |
 
 The trader is taken under script control by no monster scheme and queues no action [T13d], but the trader
 class has script control and the action queue like monsters and stalkers [T11]; CH-24 owns them for it

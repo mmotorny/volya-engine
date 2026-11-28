@@ -18,7 +18,7 @@ Builds on (not repeated here):
   level (section 2.3); `$level$` is the loaded level's directory (section 2.2).
 - `docs/behavior/sky.md` section 1: the game time of day at the start, 05:30:00.
 - `docs/behavior/title-menu.md` section 2: opening the main menu pauses the game.
-- `docs/behavior/start-position.md` via `sky.md` section 1: the start eye (−246.72630, −23.263261,
+- `docs/behavior/player-movement.md` section 7.1: the start eye (−246.72630, −23.263261,
   −134.43387), used only in the verification facts.
 
 Conventions: little-endian; `u32` unsigned 32-bit, `f32` IEEE single, `float3` = 3 × `f32` (x, y, z);
