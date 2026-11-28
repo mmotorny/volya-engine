@@ -158,7 +158,7 @@ export const SECTIONS = [
       },
       {
         id: "level-touch-use",
-        name: "Looking at the trader's door within reach: Use shown",
+        name: "Something with a hint or a character within reach (a door, the trader, a box, an item): Use shown",
         level: { usable: true },
         devices: TOUCH,
       },
@@ -190,7 +190,7 @@ export const SECTIONS = [
       },
       {
         id: "level-experimental-use",
-        name: "Looking at the trader's door within reach: Use shown",
+        name: "Something with a hint or a character within reach (a door, the trader, a box, an item): Use shown",
         level: { mode: "experimental", usable: true },
         devices: TOUCH,
       },

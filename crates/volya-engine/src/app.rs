@@ -46,7 +46,7 @@ use crate::loading_screen::{
 };
 use crate::menu_screens::{Frame, MenuFrame, MenuScreens, MenuState};
 use crate::pda_window::{self, PdaState, PdaWindow};
-use crate::quick_info::QuickInfo;
+use crate::quick_info::{HintLine, QuickInfo};
 use crate::render::present::Presentation;
 use crate::render::world::Filtering;
 use crate::save_load::FieldFont;
@@ -933,9 +933,12 @@ pub struct App {
     window: ConsoleWindow,
     /// The main menu was active after the previous update.
     menu_was_active: bool,
-    /// The HUD's hint static (`hud-scope` 13, TODO(#180)), read when first shown
-    /// and again for another layout.
+    /// The HUD's hint line's element (hud-pickup-hint.md 2.1), read when
+    /// first shown and again for another layout.
     quick_info: Option<QuickInfo>,
+    /// The hint line's state (hud-pickup-hint.md 2.2), one for the whole
+    /// run.
+    hint_line: HintLine,
     /// The game's scripts, once the platform started them
     /// ([`App::start_scripts`]).
     scripts: Option<GameScripts>,
@@ -1107,6 +1110,10 @@ pub enum AppState {
         /// The talk screen while it is open.
         #[serde(skip_serializing_if = "Option::is_none")]
         talk: Option<Box<TalkScreenState>>,
+        /// The HUD's hint line's text while it is shown
+        /// (hud-pickup-hint.md 2.2).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hint_line: Option<String>,
     },
 }
 
@@ -1143,6 +1150,7 @@ impl App {
             window: ConsoleWindow::default(),
             menu_was_active: false,
             quick_info: None,
+            hint_line: HintLine::default(),
             scripts: None,
             applied: console.generation(),
             console,
@@ -2868,24 +2876,32 @@ impl App {
                 ..
             }) => {
                 let mut scene = level.scene(resolution);
-                // `hud-scope` 13 (TODO(#180)): the HUD's hint while the player
-                // has one, under the intro and the loading image. Not
-                // while the inventory or the PDA shows (our choice: whether
-                // the HUD hides it then is unestablished; #740).
-                // talk-window-input.md 1.2 item 1: hidden with the talk
-                // screen.
+                // hud-pickup-hint.md 2: the HUD's hint line, under the
+                // intro and the loading image. Not while the inventory or
+                // the PDA shows (our choice: whether the HUD hides it then
+                // is unestablished; #740). talk-window-input.md 1.2 item
+                // 1: hidden with the talk screen.
                 let windows = inventory.as_ref().is_some_and(|i| i.is_open())
                     || pda.as_ref().is_some_and(|p| p.is_open())
                     || talk.as_ref().is_some_and(|t| t.is_open());
-                if let Some((id, start)) = level.hint().filter(|_| !windows) {
-                    if !self.quick_info.as_ref().is_some_and(|q| q.fits(resolution)) {
-                        let animations = level.level_lights().animations();
-                        self.quick_info = Some(QuickInfo::load(&ctx, resolution, animations)?);
+                if !windows {
+                    // 2.2: drawn as it stands, then updated from the
+                    // player's hint (a change shows from the next frame).
+                    if self.hint_line.shown {
+                        if !self.quick_info.as_ref().is_some_and(|q| q.fits(resolution)) {
+                            let animations = level.level_lights().animations();
+                            self.quick_info = Some(QuickInfo::load(&ctx, resolution, animations)?);
+                        }
+                        let text = crate::data::encode(&self.hint_line.text);
+                        let start = self.hint_line.start_ms.unwrap_or(ctx.clock_ms);
+                        if let Some(q) = &self.quick_info {
+                            q.draw(&mut ctx, &mut scene, &text, start)?;
+                        }
                     }
-                    let text = ctx.data.text(id);
-                    if let Some(q) = &self.quick_info {
-                        q.draw(&mut ctx, &mut scene, &text, start)?;
-                    }
+                    let strings = &ctx.data.strings;
+                    let hint = level.hint().map(|h| h.resolve(|t| strings.get(t)));
+                    let object = level.crosshair().id();
+                    (self.hint_line).update(hint, object, ctx.clock_ms, |k| strings.get(k));
                 }
                 let mut scene = compose(scene, intro, overlay.as_ref(), &mut ctx)?;
                 // inventory-screen.md 3.1: over the rendered level.
@@ -3277,6 +3293,7 @@ impl App {
                 talk: (talk.as_ref())
                     .filter(|t| t.is_open())
                     .map(|t| Box::new(t.state())),
+                hint_line: (self.hint_line.shown).then(|| self.hint_line.text.clone()),
             },
         }
     }

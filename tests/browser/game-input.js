@@ -1748,7 +1748,12 @@ export const tests = {
     // 2.1); a tap starts a talk, the controls turn to the cursor's, and
     // their Menu (the key bound to `quit`) ends it (talk-window-input.md
     // 3.2).
-    assert(!s.level.player.hint && s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(traderView)} from ${JSON.stringify(startView)}, steps ${JSON.stringify(steps)}`);
+    assert(s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(traderView)} from ${JSON.stringify(startView)}, steps ${JSON.stringify(steps)}`);
+    // His binder's hint text with his talk enabled, and the HUD's line
+    // showing it (hud-pickup-hint.md 1.4, 4.1).
+    s = await until((s) => s.hint_line, "the hint line for the trader");
+    assertEqual(s.level.player.hint, "character_use", "the trader's hint");
+    assert(/^Говорить \(.+\)$/.test(s.hint_line), `the hint line: ${JSON.stringify(s.hint_line)}`);
     for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
     assert(!use.hidden, "Use shown for the trader");
     // His talk is off until his scheme reaches mob_trader@new_start_intro3

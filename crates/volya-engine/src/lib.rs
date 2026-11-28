@@ -47,6 +47,8 @@ pub mod onsets;
 pub mod options;
 pub mod particle_drawing;
 pub mod pda_window;
+pub mod pick_up_icon;
+pub mod player_hint;
 pub mod present;
 pub mod projected_light;
 pub mod quick_info;

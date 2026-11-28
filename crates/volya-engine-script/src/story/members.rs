@@ -479,20 +479,22 @@ fn member(
         // 8.
         "set_tip_text" | "set_tip_text_default" => {
             let id = handle(maker, args, 0, name)?;
+            // hud-pickup-hint.md 1.4: the text as given, the empty one
+            // included; the default stores none (TODO(#1163): P 8 says
+            // it empties the text).
             let tip = if op == "set_tip_text" {
-                text(args, 1, name)?
+                Some(text(args, 1, name)?)
             } else {
-                Vec::new()
+                None
             };
             // On a handle with no object: nothing (the diagnostic swallowed).
             if ctx.objects.borrow().get(id).is_none() {
                 return Ok(Vec::new());
             }
-            if tip.is_empty() {
-                story.tip_texts.remove(&id);
-            } else {
-                story.tip_texts.insert(id, tip);
-            }
+            match tip {
+                Some(tip) => story.tip_texts.insert(id, tip),
+                None => story.tip_texts.remove(&id),
+            };
             Ok(Vec::new())
         }
         // 9.

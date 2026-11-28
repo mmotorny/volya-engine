@@ -373,7 +373,8 @@ export const tests = {
     const ran = flat(p, start);
     assert(ran > 0.5 && ran < 1.5, `stopped ${ran.toFixed(2)} m from where the run started (the door's face is about 1.1 m away)`);
     assertEqual(s.level.player.hint, "tip_door_locked", "the player's hint");
-    // The HUD's hint static draws it (`hud-scope` 13).
+    // The HUD's hint line draws it (hud-pickup-hint.md 2, 4.2).
+    assertEqual(s.hint_line, "Дверь заперта", "the hint line");
     const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
     const glyphs = frame.sprites.filter((g) => g.layer === "hud quick info");
     assert(glyphs.length >= 10, `${glyphs.length} glyphs of the hint`);

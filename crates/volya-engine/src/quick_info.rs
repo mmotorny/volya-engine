@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The HUD's hint static `quick_info` (docs/behavior/hud-scope.md 13,
-//! `hud-pickup-hint`, whose spec is TODO(#180)): `maingame.xml`'s element, shown exactly while the player has a
-//! hint, its colour animation started again whenever the picked object
-//! changes (docs/formats/colour-animations.md 4).
+//! The HUD's hint line, the static `quick_info`
+//! (docs/behavior/hud-pickup-hint.md 2, cited by section):
+//! `maingame.xml`'s element (2.1), updated from the player's hint after
+//! the HUD is drawn (2.2), its colour animation started again whenever
+//! the crosshair record's object changes (2.3;
+//! docs/formats/colour-animations.md 4).
 
 use std::io;
 
@@ -116,6 +118,52 @@ impl QuickInfo {
     }
 }
 
+/// The line's state (2.2): shown or hidden, its text, its colour start
+/// and the object remembered from its last update, which is one value for
+/// the whole run of the game (2.2: never reset by a new HUD, a level
+/// change or a load).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HintLine {
+    pub shown: bool,
+    /// The text, as the string table gives it.
+    pub text: String,
+    /// The colour start on the interface clock, ms; none before the
+    /// line's first update.
+    pub start_ms: Option<u64>,
+    remembered: Option<u16>,
+}
+
+impl HintLine {
+    /// The update at the end of the HUD's drawing (2.2) from the player's
+    /// hint `hint` (as [`PlayerHint::resolve`] gives it; none: none) and the
+    /// crosshair record's object `object`, at interface clock `now_ms`;
+    /// `lookup` the string table's (`TF` 1.4). The text is compared
+    /// ignoring ASCII letter case (our reading of 2.2 step 2).
+    ///
+    /// [`PlayerHint::resolve`]: crate::player_hint::PlayerHint::resolve
+    pub fn update<'a>(
+        &mut self,
+        hint: Option<&'a str>,
+        object: Option<u16>,
+        now_ms: u64,
+        lookup: impl Fn(&'a str) -> &'a str,
+    ) {
+        // CA 4.2: the first update sets the colour start.
+        self.start_ms.get_or_insert(now_ms);
+        self.shown = hint.is_some();
+        if let Some(h) = hint
+            && !h.eq_ignore_ascii_case(&self.text)
+        {
+            self.text = lookup(h).to_owned();
+        }
+        if object != self.remembered {
+            self.text = hint.map_or("", &lookup).to_owned();
+            self.start_ms = Some(now_ms);
+            self.remembered = object;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,8 +196,8 @@ mod tests {
         assert!(q.fits(Resolution::new(1024, 768)));
     }
 
-    /// `hud-scope` 13 (TODO(#180)): the text fades in over a second from when the door came
-    /// under the crosshair, and holds.
+    /// 2.1: the text fades in over a second from the line's colour start,
+    /// and holds.
     #[test]
     fn fades_in_once_from_its_start() {
         let q = quick_info();
@@ -160,5 +208,50 @@ mod tests {
         assert_eq!(at(980), Color::rgba(225, 225, 250, 255));
         assert_eq!(at(1000), Color::rgba(225, 225, 250, 255));
         assert_eq!(at(60_000), Color::rgba(225, 225, 250, 255));
+    }
+
+    fn lookup(key: &str) -> &str {
+        match key {
+            "character_use" => "Talk (F)",
+            "tip_door_locked" => "Locked",
+            k => k,
+        }
+    }
+
+    #[test]
+    fn the_line_shows_the_hint_and_restarts_its_fade_on_another_object() {
+        let mut l = HintLine::default();
+        l.update(None, None, 100, lookup);
+        assert_eq!(
+            (l.shown, l.text.as_str(), l.start_ms),
+            (false, "", Some(100))
+        );
+        // A stalker within reach: shown, faded in from now.
+        l.update(Some("character_use"), Some(3), 200, lookup);
+        assert_eq!(
+            (l.shown, l.text.as_str(), l.start_ms),
+            (true, "Talk (F)", Some(200))
+        );
+        // Another stalker, the same hint: the fade starts again.
+        l.update(Some("character_use"), Some(4), 300, lookup);
+        assert_eq!(l.start_ms, Some(300));
+        // The same object, another hint: the text changes, the fade not.
+        l.update(Some("Locked"), Some(4), 400, lookup);
+        assert_eq!((l.text.as_str(), l.start_ms), ("Locked", Some(300)));
+        // Compared ignoring case: kept.
+        l.update(Some("LOCKED"), Some(4), 450, lookup);
+        assert_eq!(l.text, "Locked");
+        // An empty hint shows the line with no text.
+        l.update(Some(""), Some(5), 500, lookup);
+        assert_eq!((l.shown, l.text.as_str()), (true, ""));
+        // None: hidden, the text emptied as the object changes.
+        l.update(None, None, 600, lookup);
+        assert_eq!(
+            (l.shown, l.text.as_str(), l.start_ms),
+            (false, "", Some(600))
+        );
+        // The same none again: no restart.
+        l.update(None, None, 700, lookup);
+        assert_eq!(l.start_ms, Some(600));
     }
 }

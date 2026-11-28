@@ -86,6 +86,7 @@ use crate::level_visibility::{Item, LevelVisibility, Seen, portal_fade_into};
 use crate::loading_screen::Stage;
 use crate::objects::{self, LevelObjects, ObjectsReport};
 use crate::particle_drawing::{self, ParticleShader};
+use crate::player_hint::{self, HintConfig, HintKind, PlayerHint};
 use crate::render::billboards::BillboardGroup;
 use crate::render::sky::{SkySection, SkyTextures};
 use crate::render::world::{DetailWindow, Surface};
@@ -392,9 +393,15 @@ pub struct LevelScreen {
     crosshair: CrosshairRecord,
     /// `[inventory] take_dist` (use-action.md 2.2).
     take_dist: f32,
-    /// The usable parts' hint texts the scripts set (script API P 8), by
-    /// object id.
+    /// The usable parts' hint texts (hud-pickup-hint.md 1.4), by object
+    /// id: the scripts' (script API P 8) and the inventory boxes'.
     tip_texts: BTreeMap<u16, String>,
+    /// What the player's hint reads from the configuration
+    /// (hud-pickup-hint.md 1.3).
+    hint_config: HintConfig,
+    /// The player's hint (hud-pickup-hint.md 1), chosen after the
+    /// crosshair record.
+    player_hint: Option<PlayerHint>,
     /// What the dialogs and trade asked of the talk and the trader since
     /// last taken ([`LevelScreen::take_dialog_events`]).
     dialog_events: Vec<DialogEvent>,
@@ -899,8 +906,8 @@ pub struct PlayerReport {
     /// How the latest trip to end on its own ended (`arrived`, `stuck`)
     /// and its distance from its destination then, metres.
     pub trip_end: Option<(&'static str, f32)>,
-    /// The player's hint id, from the object under the crosshair
-    /// (use-action.md 2.2).
+    /// The player's hint (hud-pickup-hint.md 1.3) as the level holds it:
+    /// rule 1's hint text before its lookup, else the built-in key.
     pub hint: Option<String>,
 }
 
@@ -1671,6 +1678,9 @@ pub struct NewGameLoad {
     doors: Option<LevelDoors>,
     /// `[inventory] take_dist` (use-action.md 2.2), read with the objects.
     take_dist: Option<f32>,
+    /// What the player's hint reads from the configuration
+    /// (hud-pickup-hint.md 1.3), read with the objects.
+    hint_config: Option<HintConfig>,
     /// The characters' talks (docs/behavior/talk.md), made with the
     /// objects.
     talk: Option<LevelTalk>,
@@ -2319,6 +2329,7 @@ impl NewGameLoad {
                 self.talk = Some(LevelTalk::default());
                 let take_dist = data.system.read("inventory", "take_dist")?;
                 self.take_dist = Some(volya_engine_formats::ltx::value::float(take_dist));
+                self.hint_config = Some(HintConfig::read(&data.system));
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
                 self.weather = Some(weather);
@@ -2726,6 +2737,7 @@ impl NewGameLoad {
         let detectors = earlier(self.detectors, "detectors")?;
         let mut doors = earlier(self.doors, "objects")?;
         let take_dist = earlier(self.take_dist, "objects")?;
+        let hint_config = earlier(self.hint_config, "objects")?;
         let talk = earlier(self.talk, "objects")?;
         let physics = earlier(self.physics, "physics world")?;
         if self.dynamic_props.len() != spawned.instances.len() {
@@ -2818,6 +2830,8 @@ impl NewGameLoad {
             crosshair: CrosshairRecord::default(),
             take_dist,
             tip_texts: BTreeMap::new(),
+            hint_config,
+            player_hint: None,
             dialog_events: Vec::new(),
             footsteps: Some(footsteps),
             sky_visibility: SkyVisibility::default(),
@@ -3455,8 +3469,8 @@ impl LevelScreen {
     }
 
     /// The usable parts' hint texts the scripts hold (script API P 8, in
-    /// the scripts' Windows-1251), for the player's hint (use-action.md
-    /// 2.2), when they changed.
+    /// the scripts' Windows-1251; hud-pickup-hint.md 1.4), for the
+    /// player's hint, when they changed.
     pub fn set_tip_texts(&mut self, texts: &BTreeMap<u16, Vec<u8>>) {
         use volya_engine_formats::cp1251;
         let same = texts.len() == self.tip_texts.len()
@@ -3474,14 +3488,39 @@ impl LevelScreen {
         &self.crosshair
     }
 
-    /// The player's hint id and the engine clock its object came under the
-    /// crosshair (`hud-scope` 13): the usable part's hint text of the
-    /// object under the crosshair (use-action.md 2.2), as the scripts set
-    /// it (script API P 8); none while it is empty (our reading).
-    pub fn hint(&self) -> Option<(&str, u64)> {
-        let o = self.crosshair.object?;
-        let tip = self.tip_texts.get(&o.id)?;
-        (!tip.is_empty()).then_some((tip.as_str(), o.since))
+    /// The player's hint (hud-pickup-hint.md 1), as the player's update
+    /// last chose it.
+    pub fn hint(&self) -> Option<&PlayerHint> {
+        self.player_hint.as_ref()
+    }
+
+    /// The player's hint for the crosshair record's object
+    /// (hud-pickup-hint.md 1.3), in single play (1.2; the player is in
+    /// no holder here, TODO(#1057)). A living kind's health is its
+    /// record's (a trader's record has none: alive, as the talk takes
+    /// it).
+    fn choose_hint(&self) -> Option<PlayerHint> {
+        let id = self.crosshair.id();
+        let kind = id.map(|id| {
+            let Some(&k) = self.instances.get(&id) else {
+                return HintKind::Other;
+            };
+            let i = &self.world.objects.instances[k];
+            let shared = self.simulation.borrow();
+            let record = (shared.simulation.as_ref())
+                .and_then(|s| s.object(id))
+                .map(|o| &o.record);
+            let section = record.map_or("", |r| r.header.section.as_str());
+            let health = record
+                .and_then(|r| r.object.creature())
+                .map_or(1.0, |c| c.health);
+            self.hint_config
+                .kind(i.kind, &i.class_id, section, &i.visual, health)
+        });
+        let tip = id
+            .and_then(|id| self.tip_texts.get(&id))
+            .map(String::as_str);
+        player_hint::choose(kind, tip)
     }
 
     /// Whether the use action has something to act on that the player
@@ -3559,6 +3598,8 @@ impl LevelScreen {
         let character =
             |id: u16| (instances.get(&id)).is_some_and(|&k| is_character(world.instances[k].kind));
         self.crosshair.update(&pick, self.take_dist, now, character);
+        // hud-pickup-hint.md 1.2: right after the record.
+        self.player_hint = self.choose_hint();
     }
 
     pub fn detectors(&self) -> &PlayerDetectors {
@@ -5252,7 +5293,7 @@ impl LevelScreen {
                     };
                     (how, d)
                 }),
-                hint: self.hint().map(|(id, _)| id.to_owned()),
+                hint: self.hint().map(|h| h.source().to_owned()),
             },
             character: self.character.as_ref().map(CharacterReport::of),
             objects: self.objects_report(),
@@ -5460,6 +5501,8 @@ impl LevelScreen {
             crosshair: CrosshairRecord::default(),
             take_dist: 2.0,
             tip_texts: BTreeMap::new(),
+            hint_config: HintConfig::default(),
+            player_hint: None,
             dialog_events: Vec::new(),
             footsteps: None,
             sky_visibility: SkyVisibility::default(),

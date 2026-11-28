@@ -710,6 +710,17 @@ pub fn spawn_client_object(
     characters: &mut Characters,
     object: ClientObject,
 ) -> Result<(), Error> {
+    // hud-pickup-hint.md 1.4: an object made starts with no hint text; an
+    // inventory box sets `inventory_box_use` as it comes online (our
+    // order: before its binder's spawn).
+    {
+        let mut story = scripts.story().borrow_mut();
+        story.tip_texts.remove(&object.id);
+        if object.record.class_id.as_str() == "O_INVBOX" {
+            let key = crate::player_hint::INVENTORY_BOX_USE.as_bytes().to_vec();
+            story.tip_texts.insert(object.id, key);
+        }
+    }
     if !binding_runs(system, &object) {
         return Ok(());
     }

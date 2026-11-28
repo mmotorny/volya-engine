@@ -230,8 +230,9 @@ pub struct RecordObject {
 }
 
 /// The crosshair record (2.2): the object under the crosshair, which
-/// exists only closer than `[inventory] take_dist`. Its parts as an
-/// inventory box, an item and a holder have no reader here yet.
+/// exists only closer than `[inventory] take_dist`. The player's hint
+/// reads its object's kind as an inventory box, an item and a holder
+/// (hud-pickup-hint.md 1.3, [`crate::player_hint`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CrosshairRecord {
     pub object: Option<RecordObject>,

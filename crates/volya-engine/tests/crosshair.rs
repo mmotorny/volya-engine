@@ -5,7 +5,8 @@
 //! (BYOA; docs/behavior/use-action.md 2.1, 2.2): the trader, a character,
 //! picked by his bone shapes in his current pose from in front of him and
 //! recorded within `take_dist`, not from farther or looking away. The
-//! door's pick is the trader door's test (`new_game_scripts`). Skips when
+//! door's pick is the trader door's test (`new_game_scripts`). The
+//! player's hint follows the record (hud-pickup-hint.md 1.3). Skips when
 //! `VOLYA_GOG_INSTALLER` is unset.
 
 #![cfg(not(target_arch = "wasm32"))]
@@ -18,6 +19,7 @@ use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{StdVfs, Vfs};
 use volya_engine::data::GameData;
 use volya_engine::level::LevelScreen;
+use volya_engine::player_hint::PlayerHint;
 use volya_engine_formats::ui::Resolution;
 
 fn with_game(test: impl FnOnce(&dyn Vfs, &GameData)) {
@@ -76,6 +78,9 @@ fn the_crosshair_picks_the_trader() {
             .expect("the trader under the crosshair");
         assert_eq!((o.id, o.character, o.since), (id, true, since));
         assert!(screen.usable());
+        // hud-pickup-hint.md 1.3 rule 2: alive with no hint text (no
+        // scripts here).
+        assert_eq!(screen.hint(), Some(&PlayerHint::Key("character_use")));
         // Still under it a frame later: the same clock.
         screen.set_camera(eye, angles);
         frame(&mut screen);
@@ -90,6 +95,7 @@ fn the_crosshair_picks_the_trader() {
         );
         frame(&mut screen);
         assert_eq!(screen.crosshair().id(), None);
+        assert_eq!(screen.hint(), None);
         // From 3 m: beyond take_dist (2 m).
         let (eye, angles) = at(3.0);
         screen.set_camera(eye, angles);

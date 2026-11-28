@@ -178,8 +178,8 @@ pub struct Story {
     pub news: Vec<NewsItem>,
     /// News items waiting for their due time on the frame clock, ms.
     pub queued_news: Vec<(u32, NewsItem)>,
-    /// The usable parts' hint texts (8), by object id; none for an empty
-    /// one.
+    /// The usable parts' hint texts (8), by object id; none for no text
+    /// (hud-pickup-hint.md 1.4: an empty text is kept).
     pub tip_texts: BTreeMap<u16, Vec<u8>>,
     /// Whether the single-player interface's talk window is shown (7.2).
     pub talk_window_shown: bool,

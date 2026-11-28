@@ -723,10 +723,18 @@ pub fn tips() -> Result<(), String> {
         || "set_tip_text".into(),
     )?;
     check_lua(&mut t, "8 default", "rifle:set_tip_text_default()")?;
-    let story = t.story.borrow();
     ensure(
-        !story.tip_texts.contains_key(&RIFLE) && story.tip_texts.contains_key(&TRADER),
-        || "set_tip_text_default empties it".into(),
+        {
+            let story = t.story.borrow();
+            !story.tip_texts.contains_key(&RIFLE) && story.tip_texts.contains_key(&TRADER)
+        },
+        || "set_tip_text_default stores none".into(),
+    )?;
+    // hud-pickup-hint.md 1.4: an empty text is kept, not none.
+    check_lua(&mut t, "8 empty", r#"trader:set_tip_text("")"#)?;
+    ensure(
+        t.story.borrow().tip_texts.get(&TRADER).map(Vec::as_slice) == Some(&b""[..]),
+        || "set_tip_text of an empty text keeps it".into(),
     )
 }
 
