@@ -109,6 +109,7 @@ fn data(id: u16, section: &str) -> SpawnData {
         level_vertex: 0,
         game_vertex: 0,
         health: None,
+        server: None,
     }
 }
 
@@ -220,8 +221,8 @@ pub fn binding() -> Result<(), String> {
         &mut t.s,
         "3",
         r#"
-eq(binders.taken(), "bind 1, reload bound, reinit, net_spawn number, bind 2, reload child, "
-  .. "reinit, net_spawn number, plain 6", "the binding, then the binder's calls")
+eq(binders.taken(), "bind 1, reload bound, reinit, net_spawn nil, bind 2, reload child, "
+  .. "reinit, net_spawn nil, plain 6", "the binding, then the binder's calls")
 eq(obj(2):binded_object().mark, 2, "an inherited key binds")
 for id = 3, 5 do eq(obj(id):binded_object(), nil, "no binder for " .. id) end
 eq(type(obj(6):binded_object()), "userdata", "the engine's own binder")
@@ -287,8 +288,8 @@ pub fn spawning() -> Result<(), String> {
         &mut t.s,
         "5.1",
         r#"
-eq(binders.taken(), "bind 10, reload bound, reinit, net_spawn number, "
-  .. "bind 11, reload bound, reinit, load reader, net_spawn number", "spawning's calls")
+eq(binders.taken(), "bind 10, reload bound, reinit, net_spawn nil, "
+  .. "bind 11, reload bound, reinit, load reader, net_spawn nil", "spawning's calls")
 binders.spawn_result = false
 "#,
     )?;
@@ -316,8 +317,8 @@ binders.spawn_result = false
         &mut t.s,
         "5.1 failed",
         r#"
-eq(binders.taken(), "bind 12, reload bound, reinit, net_spawn number, net_destroy 12, "
-  .. "bind 13, reload bound, reinit, net_spawn number", "the failed spawning's calls")
+eq(binders.taken(), "bind 12, reload bound, reinit, net_spawn nil, net_destroy 12, "
+  .. "bind 13, reload bound, reinit, net_spawn nil", "the failed spawning's calls")
 "#,
     )
 }

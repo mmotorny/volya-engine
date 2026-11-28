@@ -214,6 +214,7 @@ fn sound_objects_of_the_games_files() {
         level_vertex: 0,
         game_vertex: 0,
         health: None,
+        server: None,
     };
     // An object without a binder, the sounds' owner.
     (s.spawn_engine_object(ObjectClass::Named("CPhysicObject"), player)).unwrap();

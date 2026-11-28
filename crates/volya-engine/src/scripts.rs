@@ -177,7 +177,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// over it): every object the scripts still see is destroyed, its binder
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
 /// reading), the game's story forgotten, then the level's call list
-/// emptied, none of it called (spec O 6.5), and the default trade
+/// emptied, none of it called (spec O 6.5), the server objects the
+/// objects spawned from released (script API J), the default trade
 /// parameters dropped (script API R 5.2), the game clock gone (script
 /// API H) and the creatures' sound state forgotten (script API T). A
 /// script error is fatal.
@@ -207,6 +208,7 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     scripts.scripts().clear_level_calls()?;
     // Script API K: `alife()` is nil until the next level's simulation.
     scripts.simulation().borrow_mut().end();
+    scripts.scripts().release_server_objects()?;
     scripts.scripts().destroy_default_trade()
 }
 
@@ -632,7 +634,11 @@ pub fn spawn_client_object(
     if !unbound && !binding_runs(system, &object) {
         return Ok(());
     }
-    let data = SpawnData::from_record(object.id, &object.record, system).map_err(io_fatal)?;
+    let mut data = SpawnData::from_record(object.id, &object.record, system).map_err(io_fatal)?;
+    // Script API J: the simulation object it spawns from, `net_Spawn`'s
+    // and the binder's `data`.
+    let server = scripts.scripts().server_object_for(system, &object.record);
+    data.server = Some(server.map_err(|f| override_fatal(scripts, f))?);
     let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
     // The character's voice prefix (script API T 6.5).
@@ -1104,6 +1110,7 @@ mod tests {
             level_vertex: 0,
             game_vertex: 0,
             health: None,
+            server: None,
         };
         GameObject::new(class, &data, 0)
     }

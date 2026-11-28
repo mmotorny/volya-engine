@@ -14,7 +14,7 @@
 //! What scripts change is the simulation itself, held by
 //! [`AlifeSimulator`] while a game runs, and the events the engine acts
 //! on ([`AlifeSimulator::take_events`]). The simulation objects scripts
-//! get are engine objects holding a [`SimulationObject`], which refers to
+//! get are spec J's objects of their kinds ([`SimulationObject`]), which refer to
 //! the simulation's own object by id. See docs/architecture/scripts.md,
 //! Simulation registry.
 
@@ -45,11 +45,6 @@ use crate::{Error, ErrorKind, Value};
 
 pub use movement::{BrainState, PatrolPathManager, SmartTerrainTask};
 
-/// The engine class of the simulation objects `alife_simulator` gives.
-// TODO(#1104): spec J's class of the object's kind (its script object's
-// once the simulation creates its objects through the factory, #950).
-pub const OBJECT_CLASS: &str = "cpure_server_object";
-
 /// The six member-less classes (13), each with its base (the first listed
 /// one: `ipure_alife_load_save_object`'s second base adds no member).
 pub const MEMBERLESS_CLASSES: [(&str, Option<&str>); 6] = [
@@ -73,11 +68,9 @@ pub const INTERACTIVE: u32 = 0x08;
 /// `remove_all_restrictions`'s type that empties the in-restrictions (8).
 pub const IN_RESTRICTIONS: u32 = 4;
 
-/// A simulation object as scripts hold it: its id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SimulationObject {
-    pub id: u16,
-}
+/// A simulation object as scripts hold it: spec J's, standing for the
+/// simulation's object by id ([`SimulationObject::view`]).
+pub use crate::simulation_objects::SimulationObject;
 
 /// The part of the one `alife_simulator` object.
 #[derive(Clone, Copy, Debug)]
@@ -293,7 +286,7 @@ pub(crate) fn vector(o: &Objects, args: &[Value], i: usize, what: &str) -> Resul
 /// A simulation object argument's id, if it is one.
 pub(crate) fn object_id(o: &Objects, args: &[Value], i: usize) -> Option<u16> {
     match o.get::<SimulationObject>(arg(args, i)) {
-        Some(Operand::Other(s)) => Some(s.id),
+        Some(Operand::Other(s)) => Some(s.id()),
         _ => None,
     }
 }
@@ -303,10 +296,15 @@ pub(crate) fn new_vector(o: &Objects, v: [f32; 3]) -> Value {
 }
 
 /// The simulation object `id` as scripts get it, or nil when the
-/// simulation has none.
-fn object_value(o: &Objects, sim: &Simulation, id: Option<u16>) -> Value {
-    match id.filter(|&id| sim.object(id).is_some()) {
-        Some(id) => o.new_object(OBJECT_CLASS, SimulationObject { id }),
+/// simulation has none: an object of spec J's class of its kind, whose
+/// state is the simulation's (TODO(#950): its script object's).
+fn object_value(ctx: &Context, o: &Objects, sim: &Simulation, id: Option<u16>) -> Value {
+    match id.and_then(|id| sim.object(id)) {
+        Some(x) => {
+            let view =
+                SimulationObject::view(x.id, &x.record, Rc::clone(&ctx.state), &ctx.system());
+            o.new_object(view.class, view)
+        }
         None => Value::Nil,
     }
 }
@@ -389,7 +387,7 @@ fn member(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
             let actor = sim
                 .has_actor()
                 .then_some(volya_engine_core::simulation::ACTOR_ID);
-            one(object_value(o, sim, actor))
+            one(object_value(ctx, o, sim, actor))
         }),
         "story_object" => {
             let story_id = number(args, 0, name)?.trunc() as i64 as u32 as i32;
@@ -398,7 +396,7 @@ fn member(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
                 let id = (story_id != -1)
                     .then(|| sim.by_story_id(story_id))
                     .flatten();
-                one(object_value(o, sim, id))
+                one(object_value(ctx, o, sim, id))
             })
         }
         "spawn_id" => {
@@ -499,7 +497,7 @@ fn find_object(ctx: &Context, o: &Objects, args: &[Value]) -> Results {
                 .map(|x| x.id),
             (None, id) => id,
         };
-        one(object_value(o, sim, found))
+        one(object_value(ctx, o, sim, found))
     })
 }
 
@@ -578,7 +576,7 @@ fn create(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
         state.events.push(Event::SpawnedOnline { id, parent });
     }
     let sim = state.simulation.as_ref().expect("running");
-    one(object_value(o, sim, Some(id)))
+    one(object_value(ctx, o, sim, Some(id)))
 }
 
 /// `create(spawn_id)` (7.2).
@@ -619,7 +617,7 @@ fn create_from_spawn(ctx: &Context, o: &Objects, spawn_id: u16) -> Results {
     record.header.id = id;
     sim.register_created(record, Some(u32::from(spawn_id)), &system)
         .map_err(|e| ctx.failed_check(what, &e.to_string(), &[]))?;
-    one(object_value(o, sim, Some(id)))
+    one(object_value(ctx, o, sim, Some(id)))
 }
 
 /// Whether a game vertex is on the simulation's current level.

@@ -1223,3 +1223,61 @@ mod simulation {
         section(checks::has_info);
     }
 }
+
+/// The simulation objects' checks, one test per section of
+/// docs/behavior/script-api-simulation-objects.md (all of them run in
+/// [`selftest`] too, on every target).
+mod simulation_objects {
+    use crate::selftest::simulation_objects as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn classes() {
+        section(checks::class_list);
+    }
+
+    #[test]
+    fn constructing_and_init() {
+        section(checks::constructing);
+    }
+
+    #[test]
+    fn properties() {
+        section(checks::properties);
+    }
+
+    #[test]
+    fn cse_abstract() {
+        section(checks::abstract_methods);
+    }
+
+    #[test]
+    fn state_flags() {
+        section(checks::state_flags);
+    }
+
+    #[test]
+    fn kinds() {
+        section(checks::kinds);
+    }
+
+    #[test]
+    fn dispatch() {
+        section(checks::dispatch);
+    }
+
+    #[test]
+    fn engine_calls() {
+        section(checks::engine_calls);
+    }
+
+    #[test]
+    fn spawn_data() {
+        section(checks::spawn_data);
+    }
+}

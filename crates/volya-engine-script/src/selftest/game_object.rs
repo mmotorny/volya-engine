@@ -87,6 +87,7 @@ pub(super) fn data(id: u16, name: &str, section: &str, class: &str) -> SpawnData
         level_vertex: 0,
         game_vertex: 0,
         health: None,
+        server: None,
     }
 }
 
@@ -924,7 +925,7 @@ return sw, plain
         "10",
         &format!(
             r#"
-eq(type(spawned_with), "number", "net_Spawn's override gets the data")
+eq(spawned_with, nil, "net_Spawn's override gets the data's simulation object (none here)")
 eq(rawequal(used_by, obj({PLAYER})), true, "use's override gets the user")
 eq(exported, 3, "net_Export's override")
 eq(loaded, nil, "Load is never called")

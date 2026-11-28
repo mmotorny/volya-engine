@@ -164,6 +164,7 @@ fn shipped_uses_of_the_story_state() {
         level_vertex: 0,
         game_vertex: 0,
         health: Some(1.0),
+        server: None,
     };
     let actor = s.spawn_engine_object(ObjectClass::Player, player).unwrap();
     story.borrow_mut().info_portions = Some(Rc::new(RefCell::new(InfoPortions::new(

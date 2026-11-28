@@ -384,6 +384,7 @@ fn data(id: u16, name: &str, section: &str, class: &str) -> SpawnData {
         level_vertex: 0,
         game_vertex: 0,
         health: None,
+        server: None,
     }
 }
 

@@ -293,6 +293,25 @@ impl EngineClass {
         self
     }
 
+    /// A method that reads the engine parts of object arguments or gives
+    /// objects as results ([`Objects`]), `call` being both the member and
+    /// the default implementation, as for [`EngineClass::overridable`].
+    pub fn overridable_with_objects<T: Any>(
+        mut self,
+        name: &str,
+        call: impl Fn(&mut T, &Objects, &[Value]) -> Result<Vec<Value>, String> + 'static,
+    ) -> Self {
+        let call: PartFn =
+            Rc::new(move |part, objects, args| call(downcast_mut(part)?, objects, args));
+        self.methods.push(Method {
+            name: name.to_owned(),
+            call: Rc::clone(&call),
+            default: Some(call),
+            object: false,
+        });
+        self
+    }
+
     /// A property whose value may be an object ([`Objects`]); scripts can
     /// assign it if `set` is given.
     #[allow(clippy::type_complexity)]
@@ -882,8 +901,10 @@ impl Lua {
         }
     }
 
-    /// The default implementation of `method` of `part`'s engine class.
-    fn run_default(
+    /// The default implementation of `method` of `part`'s engine class
+    /// (6.1), without looking for an override: what the engine runs for a
+    /// method it doesn't dispatch.
+    pub(crate) fn run_default(
         &mut self,
         part: EnginePart,
         method: &str,

@@ -88,6 +88,7 @@ fn data(id: u16) -> SpawnData {
         level_vertex: 0,
         game_vertex: 0,
         health: None,
+        server: None,
     }
 }
 

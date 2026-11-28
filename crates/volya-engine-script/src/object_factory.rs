@@ -524,7 +524,18 @@ impl Scripts {
             message: e.to_string(),
         })?;
         let text = cp1251::encode(class).unwrap_or_else(|| class.as_bytes().to_vec());
-        self.create(class_id(&text), Side::Server, Some(section))
+        let mut created = self.create(class_id(&text), Side::Server, Some(section))?;
+        // Script API J 2.2: a simulation object is initialised, and its
+        // `init()` result is the object to use.
+        if let CreatedObject::Script(part) = created.object
+            && self.with_simulation_object(part, |_| ()).is_some()
+        {
+            let object = self
+                .initialize_server_object(part)
+                .map_err(|failure| failure.error)?;
+            created.object = CreatedObject::Script(object);
+        }
+        Ok(created)
     }
 
     fn create(&mut self, id: u64, side: Side, section: Option<&str>) -> Result<Created, Error> {

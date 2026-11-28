@@ -591,6 +591,7 @@ fn shipped_uses_of_game_object_basics() {
         level_vertex: 0,
         game_vertex: 0,
         health: Some(1.0),
+        server: None,
     };
     s.spawn_engine_object(ObjectClass::Player, player).unwrap();
     let id = u16::try_from(door_index).unwrap();

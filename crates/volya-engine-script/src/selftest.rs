@@ -26,6 +26,7 @@ pub mod object_factory;
 pub mod physics;
 pub mod services;
 pub mod simulation;
+pub mod simulation_objects;
 pub mod sound;
 pub mod story;
 pub mod time;
@@ -93,6 +94,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = simulation::check() {
+        fail(e);
+    }
+    if let Err(e) = simulation_objects::check() {
         fail(e);
     }
     if failures.is_empty() {

@@ -272,6 +272,9 @@ pub struct SpawnData {
     pub game_vertex: u16,
     /// An entity's health at spawn.
     pub health: Option<f32>,
+    /// The simulation object it spawns from (spec J), which `net_Spawn`
+    /// and the binder's `net_spawn` get as their `data`; nil without one.
+    pub server: Option<EnginePart>,
 }
 
 /// The game's bytes of `text` (Windows-1251).
@@ -298,6 +301,7 @@ impl SpawnData {
             level_vertex: block.level_graph_node,
             game_vertex: block.game_graph_vertex,
             health: record.object.creature().map(|c| c.health),
+            server: None,
         })
     }
 }
@@ -657,6 +661,9 @@ pub struct GameObjects {
     /// Spawn data awaiting `net_Spawn`, by token.
     pending: HashMap<u32, (SpawnData, Option<u16>)>,
     next_token: u32,
+    /// The token of the spawning in progress, by the client object
+    /// spawning ([`Scripts::spawn`]).
+    spawning: HashMap<EnginePart, u32>,
     /// The engine's state for objects about to spawn, by id.
     prepared: HashMap<u16, EngineState>,
 }
@@ -735,6 +742,11 @@ impl GameObjects {
     /// step 1).
     pub fn prepare(&mut self, id: u16, state: EngineState) {
         self.prepared.insert(id, state);
+    }
+
+    /// The token of the spawning of client object `client` in progress.
+    pub(crate) fn spawning(&self, client: EnginePart) -> Option<u32> {
+        self.spawning.get(&client).copied()
     }
 
     fn pend(&mut self, data: SpawnData) -> u32 {
@@ -953,8 +965,9 @@ impl Scripts {
     /// calls `net_Spawn`, a script class's override or the engine's own,
     /// and takes its result as success. The engine's own makes the engine
     /// object (3) with its handle and, for non-empty custom data, its
-    /// `spawn_ini()` configuration. `data` reaches scripts as a token
-    /// standing for spec J's server object (TODO(#1029)).
+    /// `spawn_ini()` configuration. `data`'s simulation object
+    /// ([`SpawnData::server`]) is `net_Spawn`'s argument; the engine's own
+    /// spawns from `data` whatever argument it is given.
     ///
     /// Then the binder's part of spawning (spec L 5.1,
     /// [`object_binder`]): the binding and the attached binder's calls,
@@ -999,26 +1012,31 @@ impl Scripts {
         bind: bool,
     ) -> Result<bool, OverrideFailure> {
         let objects = self.game_objects()?;
-        let token = objects.borrow_mut().pend(data);
-        let data = Value::Number(f64::from(token));
+        let server = data.server.map_or(Value::Nil, Value::Object);
+        let token = {
+            let mut o = objects.borrow_mut();
+            let token = o.pend(data);
+            o.spawning.insert(client, token);
+            token
+        };
         let result = self.dispatch(
             client,
             "net_Spawn",
-            std::slice::from_ref(&data),
+            std::slice::from_ref(&server),
             Conversion::Value,
         );
-        let spawned = objects
-            .borrow_mut()
-            .pending
-            .remove(&token)
-            .and_then(|(_, id)| id);
+        let spawned = {
+            let mut o = objects.borrow_mut();
+            o.spawning.remove(&client);
+            o.pending.remove(&token).and_then(|(_, id)| id)
+        };
         let result = result?;
         let mut ok = !matches!(result, Value::Nil | Value::Boolean(false));
         let Some(id) = spawned else {
             return Ok(ok);
         };
         self.finish_spawn(id)?;
-        let bound = !bind || self.spawn_binder(id, data, reader, None)?;
+        let bound = !bind || self.spawn_binder(id, server, reader, None)?;
         let class = objects.borrow().get(id).map(|o| o.class);
         if class != Some(ObjectClass::Named("CPhysicObject")) {
             // TODO(#1019): gap 1, the simplest reading: the other client
@@ -1047,7 +1065,7 @@ impl Scripts {
     /// spawning (spec L 5.1), whose result it ignores (TODO(#1019): gap 1,
     /// the simplest reading: these kinds' spawning reaches the general one;
     /// whether a false result fails it is their spec's). The binder's
-    /// `net_spawn` gets the spawn data's token.
+    /// `net_spawn` gets the spawn data's simulation object.
     pub fn spawn_engine_object(
         &mut self,
         class: ObjectClass,
@@ -1067,12 +1085,13 @@ impl Scripts {
         binding: Option<&[u8]>,
     ) -> Result<EnginePart, OverrideFailure> {
         let objects = self.game_objects()?;
-        let (token, id) = {
+        let server = data.server.map_or(Value::Nil, Value::Object);
+        let id = {
             let mut o = objects.borrow_mut();
             let token = o.pend(data);
             let id = o.spawn_pending(token, class, &self.factory, None);
             o.pending.remove(&token);
-            (token, id)
+            id
         };
         let Some(id) = id else {
             return Err(Error {
@@ -1082,7 +1101,7 @@ impl Scripts {
             .into());
         };
         let handle = self.finish_spawn(id)?;
-        self.spawn_binder(id, Value::Number(f64::from(token)), None, binding)?;
+        self.spawn_binder(id, server, None, binding)?;
         Ok(handle)
     }
 

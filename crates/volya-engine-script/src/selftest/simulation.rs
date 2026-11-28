@@ -382,6 +382,7 @@ fn state_with(game: &str, running: bool) -> Result<State, String> {
     s.register_story(Rc::clone(&story)).map_err(message)?;
     let alife = Rc::new(RefCell::new(AlifeSimulator::new()));
     s.register_simulation(Rc::clone(&alife)).map_err(message)?;
+    s.register_simulation_objects().map_err(message)?;
     s.load_globals().map_err(message)?;
     let parse = |t: &str| xml::parse(t.as_bytes()).map_err(|e| e.to_string());
     let declarations = Declarations::from_documents(
@@ -492,6 +493,11 @@ eq(type(a:object(1)), "userdata", "object(1)")
 eq(type(a:object(1, true)), "userdata", "object(1, flag)")
 eq(a:object(99), nil, "object(99)")
 eq(type(a:object("box_3")), "userdata", "object(name)")
+-- Spec J's object of its kind, over the simulation's state.
+local b = a:object("box_3")
+eq(b:name(), "box_3", "J's name()")
+eq(b.id, a:object("box_3").id, "J's id")
+eq(type(b.can_switch_online), "function", "J's cse_alife_object members")
 eq(a:object("box"), nil, "object(other name)")
 eq(a:valid_object_id(65535), false, "valid 65535")
 eq(a:valid_object_id(12345), true, "valid 12345")

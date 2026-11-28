@@ -402,6 +402,7 @@ fn shipped_uses_of_script_api_y() {
         level_vertex: 0,
         game_vertex: 0,
         health: Some(1.0),
+        server: None,
     };
     s.spawn_engine_object(ObjectClass::Player, player).unwrap();
     let (index, door) = door_record(&trees.tree, &system);

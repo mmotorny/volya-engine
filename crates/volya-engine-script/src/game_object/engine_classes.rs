@@ -244,12 +244,16 @@ fn game_object_base(ctx: &Context) -> EngineClass {
         })
         .overridable("net_Spawn", move |c: &mut ClientObject, args| {
             spawn.stopped()?;
-            let Some(Value::Number(token)) = args.first() else {
-                // Our wording: what else `data` can be is spec J's.
-                return Err("net_Spawn: spawn data expected".into());
+            // The engine spawns from the data of the spawning in progress;
+            // `data`, its simulation object, is the scripts'. Outside a
+            // spawning there is none (our choice: false).
+            let _ = args;
+            let token = spawn.objects.borrow().spawning(c.part);
+            let Some(token) = token else {
+                return Ok(vec![Value::Boolean(false)]);
             };
             let spawned = spawn.objects.borrow_mut().spawn_pending(
-                *token as u32,
+                token,
                 ObjectClass::Named(c.class),
                 &spawn.factory,
                 Some(c.part),

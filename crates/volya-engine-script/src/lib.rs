@@ -35,6 +35,7 @@ pub mod object_factory;
 pub mod selftest;
 pub mod services;
 pub mod simulation;
+pub mod simulation_objects;
 pub mod sound;
 pub mod story;
 pub mod time;
