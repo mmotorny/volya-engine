@@ -6,7 +6,11 @@
 //! its talk flag and partner (its side of a talk), its talk-enabled and
 //! trade-enabled flags, the partner its trade keeps, and for stalkers and
 //! traders the start dialog and default start dialog; and the offer of a
-//! talk (`use` 6.2 steps 2 and 3, R 4.2).
+//! talk (`use` 6.2 steps 2 and 3, R 4.2). As the character's own state
+//! (docs/behavior/character-talk-state.md, CH-7): made with each online
+//! object, so enabled and not talking each time a character comes online
+//! (2.1, 3), never saved (7), and the start dialogs taken at coming online
+//! ([`Talk::come_online`], 6.1).
 
 use crate::game_object::{CREATURE_CLASSES, GameObject, GameObjects, ObjectClass};
 
@@ -54,6 +58,18 @@ impl Talk {
         self.talking = true;
         self.partner = Some(partner);
         self.trade_partner = Some(partner);
+    }
+
+    /// A stalker or trader coming online (CH-7 6.1, `talk` 6) with its
+    /// character information's start dialog `start_dialog` (CH-7 6.2):
+    /// when its start dialog is empty (always, for a new online object)
+    /// both its start dialog and its default start dialog become it, an id
+    /// no dialog file defines included (CH-7 6.3: not looked up here).
+    pub fn come_online(&mut self, start_dialog: &[u8]) {
+        if self.start_dialog.is_empty() {
+            self.start_dialog = start_dialog.to_vec();
+            self.default_start_dialog = start_dialog.to_vec();
+        }
     }
 
     /// Stops the character's side (`stop_talk`, 4.1): the talk flag

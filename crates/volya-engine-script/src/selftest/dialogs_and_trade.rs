@@ -62,11 +62,11 @@ pub fn check() -> Result<(), String> {
     }
 }
 
-const PLAYER: u16 = 0;
+pub(super) const PLAYER: u16 = 0;
 const RIFLE: u16 = 20;
-const STALKER: u16 = 30;
-const DOG: u16 = 40;
-const TRADER: u16 = 60;
+pub(super) const STALKER: u16 = 30;
+pub(super) const DOG: u16 = 40;
+pub(super) const TRADER: u16 = 60;
 
 const PORTIONS: &str = r#"<game_information_portions>
   <info_portion id="talked"/>
@@ -127,14 +127,14 @@ end
 
 /// A test state: the scripts, the dialogs and trade, the story and the
 /// objects.
-struct State {
-    s: Scripts,
+pub(super) struct State {
+    pub(super) s: Scripts,
     dialogs: Rc<RefCell<DialogsAndTrade>>,
     story: Rc<RefCell<Story>>,
-    objects: Rc<RefCell<GameObjects>>,
+    pub(super) objects: Rc<RefCell<GameObjects>>,
 }
 
-fn data(id: u16, name: &str, class: &str) -> SpawnData {
+pub(super) fn data(id: u16, name: &str, class: &str) -> SpawnData {
     SpawnData {
         id,
         name: name.as_bytes().to_vec(),
@@ -161,7 +161,7 @@ fn message(e: Error) -> String {
 /// A state with everything up to the dialogs and trade registered, `_G`
 /// loaded, a global `obj(id)` giving handles, the player, a rifle, a
 /// stalker, a dog and a trader, and the portions.
-fn state() -> Result<State, String> {
+pub(super) fn state() -> Result<State, String> {
     let tree = Tree(
         [
             ("gamedata/scripts/_g.script", ""),
@@ -250,7 +250,7 @@ fn state() -> Result<State, String> {
 const PRELUDE: &str =
     "local actor, rifle, stalker, dog, trader = obj(0), obj(20), obj(30), obj(40), obj(60)\n";
 
-fn check_lua(t: &mut State, name: &str, body: &str) -> Result<(), String> {
+pub(super) fn check_lua(t: &mut State, name: &str, body: &str) -> Result<(), String> {
     run(&mut t.s, name, &format!("{PRELUDE}{body}"))
 }
 

@@ -41,7 +41,7 @@ use volya_engine_formats::model::{self, Mat4};
 use volya_engine_formats::object::ObjectRecord;
 
 use crate::classes::{Conversion, EnginePart, OverrideFailure};
-use crate::dialogs::talk::Talk;
+use crate::dialogs::talk::{Talk, has_start_dialog};
 use crate::dialogs::trade::TradeParameters;
 use crate::files::{FileSystem, IniFile, config_from_text};
 use crate::loader::Scripts;
@@ -658,14 +658,18 @@ pub struct GameObjects {
 }
 
 /// What the engine gives an object as it spawns beyond its spawn data
-/// ([`GameObjects::prepare`]): its visual (4), its physics part (5.4) and
-/// its restrictor's shape (6.2), the last two kept only where its kinds
-/// have the part.
+/// ([`GameObjects::prepare`]): its visual (4), its physics part (5.4),
+/// its restrictor's shape (6.2) and its character information's start
+/// dialog (docs/behavior/character-talk-state.md 6.2), the last three kept
+/// only where its kinds have the part (the start dialog: stalkers and
+/// traders, 6.1).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EngineState {
     pub visual: Option<Visual>,
     pub physics: Option<Physics>,
     pub restrictor: Option<Restrictor>,
+    /// Empty for an object without one.
+    pub start_dialog: Vec<u8>,
 }
 
 impl GameObjects {
@@ -756,6 +760,11 @@ impl GameObjects {
             }
             if object.restrictor.is_some() {
                 object.restrictor = state.restrictor.or(object.restrictor);
+            }
+            if has_start_dialog(object.class)
+                && let Some(owner) = object.owner.as_mut()
+            {
+                owner.talk.come_online(&state.start_dialog);
             }
         }
         let id = object.id;

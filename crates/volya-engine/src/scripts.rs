@@ -12,9 +12,11 @@ use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
 
+use crate::characters::Characters;
 use crate::core::character::hits::{Hit, HitType};
 use crate::core::config::{self, Config};
 use crate::core::simulation::ACTOR_ID;
+use crate::core::vfs::Vfs;
 use crate::core::zones;
 use crate::data::GameData;
 use crate::level::LevelScreen;
@@ -184,9 +186,11 @@ pub struct ClientSpawning<'a> {
 pub fn client_spawning(
     scripts: &mut GameScripts,
     loading: &mut Loading,
-    system: &Config,
+    tree: &dyn Vfs,
+    data: &GameData,
     now: u64,
 ) -> Result<(), Error> {
+    let mut characters = Characters::new(tree, data);
     let spawning = loading.client_objects().map_err(io_fatal)?;
     {
         let mut o = scripts.objects().borrow_mut();
@@ -195,7 +199,7 @@ pub fn client_spawning(
         o.game_time = spawning.game_time;
     }
     for object in spawning.objects {
-        spawn_client_object(scripts, system, object)?;
+        spawn_client_object(scripts, &data.system, &mut characters, object)?;
     }
     Ok(())
 }
@@ -209,7 +213,8 @@ pub fn client_spawning(
 pub fn level_frame(
     scripts: &mut GameScripts,
     level: &mut LevelScreen,
-    system: &Config,
+    tree: &dyn Vfs,
+    data: &GameData,
     now: u64,
 ) -> Result<(), Error> {
     {
@@ -228,7 +233,8 @@ pub fn level_frame(
     }
     for &id in &changes.online {
         if let Some(object) = level.client_object(id) {
-            spawn_client_object(scripts, system, object)?;
+            let mut characters = Characters::new(tree, data);
+            spawn_client_object(scripts, &data.system, &mut characters, object)?;
         }
     }
     if let Some(target) = level.take_used()
@@ -248,22 +254,20 @@ pub fn level_frame(
 /// section's class id; a script entry's object spawns through its
 /// `net_Spawn`, an engine entry's as the engine's own kind (the player's
 /// for `O_ACTOR` in the single-player game type). Its visual, physics part
-/// and restrictor shape are given as it is made. A spawning that fails is
-/// the scripts' to report (L 5.1); a script error is fatal.
+/// and restrictor shape, and a character's start dialog (CH-7 6.1), are
+/// given as it is made ([`engine_state`]). A spawning that fails is the
+/// scripts' to report (L 5.1); a script error is fatal.
 pub fn spawn_client_object(
     scripts: &mut GameScripts,
     system: &Config,
+    characters: &mut Characters,
     object: ClientObject,
 ) -> Result<(), Error> {
     if !binding_runs(system, &object) {
         return Ok(());
     }
     let data = SpawnData::from_record(object.id, object.record, system).map_err(io_fatal)?;
-    let state = EngineState {
-        visual: object.model.map(|(m, names)| visual_of(m, names)),
-        physics: object.physics,
-        restrictor: restrictor_of(object.record),
-    };
+    let state = engine_state(characters, &object).map_err(io_fatal)?;
     scripts.objects().borrow_mut().prepare(object.id, state);
     let created = scripts.scripts().create_client_object(data.class_id)?;
     let spawned = match created.object {
@@ -281,6 +285,21 @@ pub fn spawn_client_object(
         }
     };
     spawned.map_err(|f| override_fatal(scripts, f))
+}
+
+/// What the engine gives `object` as it spawns in the scripts (spec M 3):
+/// its visual, physics part and restrictor shape, and its character
+/// information's start dialog (docs/behavior/character-talk-state.md 6.2),
+/// which a stalker or trader takes as its start dialog and default start
+/// dialog (6.1).
+pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::Result<EngineState> {
+    let start_dialog = characters.start_dialog(object.record)?;
+    Ok(EngineState {
+        visual: object.model.map(|(m, names)| visual_of(m, names)),
+        physics: object.physics,
+        restrictor: restrictor_of(object.record),
+        start_dialog: cp1251::encode(&start_dialog).unwrap_or_else(|| start_dialog.into_bytes()),
+    })
 }
 
 /// Whether `object` spawns in the scripts: one without a binding function

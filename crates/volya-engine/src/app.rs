@@ -1146,7 +1146,7 @@ impl App {
         if let (Some(Phase::Level { level, .. }), Some(scripts)) =
             (&mut self.phase, &mut self.scripts)
             && let Err(e) =
-                crate::scripts::level_frame(scripts, level, &self.data.system, self.clock)
+                crate::scripts::level_frame(scripts, level, tree, &self.data, self.clock)
         {
             self.failed.get_or_insert(e.message);
         }
@@ -1728,7 +1728,7 @@ impl App {
                             && ran == Some(Stage::ClientSpawning)
                             && let Some(scripts) = self.scripts.as_mut()
                             && let Err(e) =
-                                crate::scripts::client_spawning(scripts, loading, &data.system, now)
+                                crate::scripts::client_spawning(scripts, loading, tree, data, now)
                         {
                             self.failed.get_or_insert(e.message);
                             return;

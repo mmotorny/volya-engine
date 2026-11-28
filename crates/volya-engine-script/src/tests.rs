@@ -921,3 +921,36 @@ mod dialogs_and_trade {
         section(checks::worked_example);
     }
 }
+
+/// The characters' talk state's checks, one test per section of
+/// docs/behavior/character-talk-state.md (all of them run in [`selftest`]
+/// too, on every target).
+mod character_talk_state {
+    use crate::selftest::character_talk_state as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn which_objects_can_talk() {
+        section(checks::which_objects_can_talk);
+    }
+
+    #[test]
+    fn the_talk_enabled_flag() {
+        section(checks::talk_enabled_flag);
+    }
+
+    #[test]
+    fn the_characters_side() {
+        section(checks::side);
+    }
+
+    #[test]
+    fn the_start_dialog() {
+        section(checks::start_dialog);
+    }
+}

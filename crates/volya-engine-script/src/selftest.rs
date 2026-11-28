@@ -12,6 +12,7 @@
 
 use crate::{ErrorKind, Lua, Value};
 
+pub mod character_talk_state;
 pub mod classes;
 pub mod dialogs;
 pub mod dialogs_and_trade;
@@ -77,6 +78,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = dialogs_and_trade::check() {
+        fail(e);
+    }
+    if let Err(e) = character_talk_state::check() {
         fail(e);
     }
     if failures.is_empty() {

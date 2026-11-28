@@ -21,7 +21,7 @@ use std::collections::hash_map::Entry;
 use std::io;
 
 use crate::core::character;
-use crate::core::character_identity::Descriptions;
+use crate::core::character_identity::{Descriptions, trader_like};
 use crate::core::config::{self, Config, PathAliases};
 use crate::core::vfs::{self, Vfs};
 use crate::data::GameData;
@@ -29,7 +29,7 @@ use volya_engine_formats::character_descriptions::{
     self as format, PROFILE, Profile, Registry, SPECIFIC_CHARACTER, SpecificCharacter,
 };
 use volya_engine_formats::cp1251;
-use volya_engine_formats::object::TraderLike;
+use volya_engine_formats::object::{ObjectRecord, TraderLike};
 use volya_engine_formats::xml::{self, Document};
 
 /// The registered ids of both lists (3.1).
@@ -216,6 +216,19 @@ impl<'a> Characters<'a> {
             self.specific_characters.insert(index, read?);
         }
         Ok(&self.specific_characters[&index])
+    }
+
+    /// The character information's start dialog of `record` as it comes
+    /// online (docs/behavior/character-talk-state.md 6.2, talk.md 6): its
+    /// specific character's `start_dialog` (CH-2 5), stored without being
+    /// looked up (6.3); empty for a record without a Trader-like block or
+    /// a specific character. A specific character no list registers is an
+    /// error (CH-1 3.2).
+    pub fn start_dialog(&mut self, record: &ObjectRecord) -> io::Result<String> {
+        match trader_like(record).map(|t| t.specific_character.as_str()) {
+            Some(id) if !id.is_empty() => Ok(self.specific_character(id)?.start_dialog.clone()),
+            _ => Ok(String::new()),
+        }
     }
 
     /// The player's Trader-like block's specific character
