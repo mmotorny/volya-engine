@@ -90,6 +90,21 @@ test_suite(
     ],
 )
 
+# The suites too slow for every change, run nightly on main
+# (docs/architecture/build.md, Nightly): `bazel run //tools/xtask --
+# nightly`, or `bazel test //:nightly`.
+test_suite(
+    name = "nightly",
+    tags = ["manual"],
+    tests = [
+        ":gamedata",
+        "//tests/browser:game_input_chrome",
+        "//tests/browser:game_level_chrome",
+        "//tests/browser:game_memory_chrome",
+        "//tests/browser:game_startup_chrome",
+    ],
+)
+
 # The static checks: `bazel test //:checks`. Each is tagged `check` and
 # `manual` (//build:checks_static, :default_only): nothing that builds the
 # engine or runs a browser.

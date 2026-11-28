@@ -13,6 +13,7 @@ mod e2e;
 mod frames;
 mod machine;
 mod measure;
+mod nightly;
 mod parity;
 mod spec_lint;
 #[allow(dead_code)] // Its build and plan are wincapture-action's.
@@ -52,6 +53,10 @@ Tasks:
               Builds the test app at the git revision REV (default HEAD) and
               from the working tree and compares their frames of the parity
               suite's views in headless Chrome.
+  nightly [BAZEL_ARG...]
+              Once memory pressure is normal, run //:nightly (bazel test
+              --keep_going, then BAZEL_ARGs, e.g. --nocache_test_results) and
+              list each failing test with its log.
   deploy      Check, build and publish to GitHub Pages (gh-pages branch).
   spec-lint   Flag decompiler output, code, mangled names and binary addresses in
               clean-room spec drafts.
@@ -102,6 +107,7 @@ fn main() -> ExitCode {
             .map_err(|e| format!("seconds: {e}"))
             .and_then(|s| e2e::record_for(Path::new(path), Duration::from_secs_f64(s))),
         ["parity", against @ ..] => parity::run(against),
+        ["nightly", bazel_args @ ..] => nightly::run(bazel_args),
         ["deploy"] => deploy::run_deploy(),
         ["spec-lint", paths @ ..] => spec_lint::run(paths),
         ["suites"] => suites(None),
