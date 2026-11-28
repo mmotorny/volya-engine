@@ -342,9 +342,6 @@ pub fn client_spawning(
     })?;
     scripts.story().borrow_mut().info_portions = spawning.info_portions;
     scripts.scripts().exec("=fake_player", FAKE_PLAYER)?;
-    scripts
-        .scripts()
-        .exec("=fake_buy_supplies", FAKE_BUY_SUPPLIES)?;
     for object in spawning.objects {
         spawn_client_object(scripts, &data.system, &mut characters, object)?;
     }
@@ -961,14 +958,6 @@ end
 function __volya_fake_player_binding(obj)
   obj:bind_object(__volya_fake_player_binder(obj))
 end
-"#;
-
-/// FAKE(#1148): script API S's `buy_supplies(ini, section)` (5.6), which
-/// the shipped `trade_manager.update` calls on the trader from his binder's
-/// update, restocks nothing: the owner's items and the server's creation of
-/// items aren't implemented (#1110).
-const FAKE_BUY_SUPPLIES: &[u8] = br#"
-function game_object.buy_supplies(self, ini, section) end
 "#;
 
 /// The binding function of [`FAKE_PLAYER`] (TODO(#1120)).
