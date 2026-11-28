@@ -8,8 +8,12 @@
 //! boxes from their shells for the pick and the route planner (the player's
 //! body meets the shells in the physics world, physics-contacts.md 7), and the
 //! player's hint from the one the crosshair picks (5.1), with when it came
-//! under it (5.3).
+//! under it (5.3). The hint text is the picked object's usable part's
+//! (use-action.md 2.2, 10.1), which the scripts set (script API P 8,
+//! `set_tip_text`); the door scheme's own hint stands in while no script
+//! text is set (TODO(#875): the scheme run from the scripts sets it).
 
+use std::collections::BTreeMap;
 use std::io;
 
 use serde::Serialize;
@@ -22,6 +26,7 @@ use crate::core::vfs::Vfs;
 use crate::data::GameData;
 use crate::level_physics::LevelPhysics;
 use crate::objects::LevelObject;
+use volya_engine_formats::cp1251;
 use volya_engine_formats::ltx::{self, value};
 use volya_engine_formats::object::Object;
 
@@ -42,6 +47,9 @@ pub struct LevelDoors {
     picked: Option<(usize, u64)>,
     /// The sounds played since last taken (2.5).
     sounds: Vec<DoorSound>,
+    /// The usable parts' hint texts the scripts set (script API P 8), by
+    /// object id.
+    tip_texts: BTreeMap<u16, String>,
 }
 
 /// The doors as the engine interface reports them.
@@ -103,6 +111,7 @@ impl LevelDoors {
             take_dist,
             picked: None,
             sounds: Vec::new(),
+            tip_texts: BTreeMap::new(),
         })
     }
 
@@ -181,10 +190,29 @@ impl LevelDoors {
     }
 
     /// The player's hint id and the engine clock its object came under the
-    /// crosshair (5.1, 5.3): a picked door's hint.
+    /// crosshair (5.1, 5.3): the picked object's usable part's hint text
+    /// (use-action.md 2.2), the scripts' when set (script API P 8), else
+    /// the door scheme's stand-in (TODO(#875)).
     pub fn hint(&self) -> Option<(&str, u64)> {
         let (i, at) = self.picked?;
-        Some((self.doors[i].tip()?, at))
+        let tip = match self.tip_texts.get(&self.objects[i]) {
+            Some(text) => text.as_str(),
+            None => self.doors[i].tip()?,
+        };
+        Some((tip, at))
+    }
+
+    /// The usable parts' hint texts the scripts hold (script API P 8, in
+    /// the scripts' Windows-1251), when they changed.
+    pub fn set_tip_texts(&mut self, texts: &BTreeMap<u16, Vec<u8>>) {
+        let same = texts.len() == self.tip_texts.len()
+            && (texts.iter().zip(&self.tip_texts))
+                .all(|((a, t), (b, u))| a == b && cp1251::decode(t) == *u);
+        if !same {
+            self.tip_texts = (texts.iter())
+                .map(|(&id, t)| (id, cp1251::decode(t)))
+                .collect();
+        }
     }
 
     /// The use action on the door the crosshair picks, if any (2.5): the
@@ -215,5 +243,49 @@ impl LevelDoors {
                 tip: d.tip().map(str::to_owned),
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LOGIC: &[u8] = b"[ph_door@locked]\nlocked = true\n";
+    const DOOR: u16 = 7;
+
+    /// A level with the locked door `DOOR`, started and picked at clock 5.
+    fn picked_door() -> LevelDoors {
+        let config = ltx::parse(LOGIC).unwrap();
+        let section = DoorSection::read(config.section("ph_door@locked").unwrap());
+        let mut door = Door::new("door".into(), section, Vec::new());
+        door.update();
+        LevelDoors {
+            doors: vec![door],
+            objects: vec![DOOR],
+            take_dist: 2.0,
+            picked: Some((0, 5)),
+            ..LevelDoors::default()
+        }
+    }
+
+    #[test]
+    fn the_scripts_tip_text_is_the_hint() {
+        let mut doors = picked_door();
+        // Without a script text: the door scheme's stand-in.
+        assert_eq!(doors.hint(), Some(("tip_door_locked", 5)));
+        // Script API P 8: set_tip_text stores the usable part's hint text.
+        let mut texts = BTreeMap::new();
+        texts.insert(DOOR, b"tip_door_open".to_vec());
+        texts.insert(DOOR + 1, b"character_use".to_vec());
+        doors.set_tip_texts(&texts);
+        assert_eq!(doors.hint(), Some(("tip_door_open", 5)));
+        // set_tip_text_default empties it.
+        texts.remove(&DOOR);
+        doors.set_tip_texts(&texts);
+        assert_eq!(doors.hint(), Some(("tip_door_locked", 5)));
+        // Nothing picked: no hint.
+        doors.set_tip_texts(&BTreeMap::from([(DOOR, b"x".to_vec())]));
+        doors.picked = None;
+        assert_eq!(doors.hint(), None);
     }
 }

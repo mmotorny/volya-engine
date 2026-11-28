@@ -3283,6 +3283,12 @@ impl LevelScreen {
         &self.doors
     }
 
+    /// The usable parts' hint texts the scripts set (script API P 8), for
+    /// the player's hint (use-action.md 2.2).
+    pub fn set_tip_texts(&mut self, texts: &BTreeMap<u16, Vec<u8>>) {
+        self.doors.set_tip_texts(texts);
+    }
+
     /// The sounds the doors played since last taken (trader-door.md 2.5;
     /// the app plays them on the level's sounds).
     pub fn take_door_sounds(&mut self) -> Vec<crate::core::door::DoorSound> {

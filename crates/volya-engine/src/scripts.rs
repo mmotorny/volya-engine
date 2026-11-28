@@ -391,8 +391,9 @@ fn scheduled_updates(scripts: &mut GameScripts, now: u32) -> Result<(), Error> {
 /// ask of the scripts (`IP` 3.3, 3.4); the player's task update (5.1:
 /// every level frame, our choice where its rate is unestablished); the
 /// story's frame (queued news, sequences); then its callbacks raised on
-/// the player's object (spec O).
-fn story_frame(scripts: &mut GameScripts, level: &LevelScreen) -> Result<(), Error> {
+/// the player's object (spec O); and the use tips the scripts set, for the
+/// HUD's hint (P 8, use-action.md 2.2).
+fn story_frame(scripts: &mut GameScripts, level: &mut LevelScreen) -> Result<(), Error> {
     {
         let mut story = scripts.story().borrow_mut();
         let registry = level.story_registry();
@@ -412,9 +413,9 @@ fn story_frame(scripts: &mut GameScripts, level: &LevelScreen) -> Result<(), Err
     // window's lines (TODO(#993)); the PDA's changed mark (TODO(#179));
     // news (TODO(#176)); the difficulty applied to the player
     // (TODO(#652)); sequences (TODO(#1062)); `article_info`, whose group
-    // and name are the articles' (TODO(#1088)). The use tips the story
-    // keeps have no reader yet (the HUD hint, TODO(#180)).
+    // and name are the articles' (TODO(#1088)).
     let _unreceived = s.raise_story_callbacks()?;
+    level.set_tip_texts(&scripts.story().borrow().tip_texts);
     Ok(())
 }
 
