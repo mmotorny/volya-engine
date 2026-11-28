@@ -847,7 +847,7 @@ fn add_member(
             }
         }
         // The update data is part of the state the engine holds; reading
-        // and writing it through scripts' packets is spec I's (TODO(#213)).
+        // and writing it through spec I's packets is TODO(#1246).
         "UPDATE_Read" | "UPDATE_Write" => c.method_with_default(
             name,
             |_: &mut SimulationObject, _| Ok(Vec::new()),

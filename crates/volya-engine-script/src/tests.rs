@@ -141,6 +141,84 @@ mod services {
     }
 }
 
+/// The data streams' checks, one test per section of
+/// docs/behavior/script-api-data-streams.md (all of them run in
+/// [`selftest`] too, on every target).
+mod data_streams {
+    use crate::selftest::data_streams as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn which_form_runs() {
+        section(checks::forms);
+    }
+
+    #[test]
+    fn argument_conversions() {
+        section(checks::conversions);
+    }
+
+    #[test]
+    fn results() {
+        section(checks::results);
+    }
+
+    #[test]
+    fn the_packet() {
+        section(checks::packet);
+    }
+
+    #[test]
+    fn writes() {
+        section(checks::writes);
+    }
+
+    #[test]
+    fn reads() {
+        section(checks::reads);
+    }
+
+    #[test]
+    fn positions_and_chunks() {
+        section(checks::positions);
+    }
+
+    #[test]
+    fn quantised_values_and_angles() {
+        section(checks::quantised_values);
+    }
+
+    #[test]
+    fn directions() {
+        section(checks::directions);
+    }
+
+    #[test]
+    fn the_reader() {
+        section(checks::reader);
+    }
+
+    #[test]
+    fn client_id() {
+        section(checks::client_id);
+    }
+
+    #[test]
+    fn engine_streams() {
+        section(checks::engine_streams);
+    }
+}
+
 /// Configuration and files' checks, one test per section of
 /// docs/behavior/script-api-configuration-and-files.md (all of them run in
 /// [`selftest`] too, on every target).

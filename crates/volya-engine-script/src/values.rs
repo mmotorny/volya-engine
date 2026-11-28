@@ -23,7 +23,7 @@ use crate::{Error, Lua, Value};
 // --- Arithmetic (2.5) -------------------------------------------------------
 
 /// A subnormal as the zero of its sign (flush-to-zero, denormals-are-zero).
-fn flush(x: f32) -> f32 {
+pub(crate) fn flush(x: f32) -> f32 {
     if x.is_subnormal() {
         0.0f32.copysign(x)
     } else {
@@ -60,7 +60,7 @@ impl Sse {
 }
 
 /// An SSE comparison `a < b` (denormals as zero; false with a NaN).
-fn lt(a: f32, b: f32) -> bool {
+pub(crate) fn lt(a: f32, b: f32) -> bool {
     flush(a) < flush(b)
 }
 
@@ -112,7 +112,7 @@ impl X {
         X(f64::from(x))
     }
 
-    fn sqrt(self) -> X {
+    pub(crate) fn sqrt(self) -> X {
         X(round24(self.0.sqrt()))
     }
 
@@ -175,7 +175,7 @@ pub fn to_flags16(n: f64) -> u16 {
 }
 
 /// `n` truncated toward zero, if that lies in [−2³¹, 2³¹).
-fn to_int32(n: f64) -> Option<i32> {
+pub(crate) fn to_int32(n: f64) -> Option<i32> {
     let t = n.trunc();
     (-2_147_483_648.0..2_147_483_648.0)
         .contains(&t)
@@ -516,7 +516,7 @@ fn number(args: &[Value], i: usize) -> f32 {
 
 // --- vector (3) ---------------------------------------------------------------
 
-const VECTOR: &str = "vector";
+pub(crate) const VECTOR: &str = "vector";
 
 fn f(n: f64) -> f32 {
     to_f32(n)

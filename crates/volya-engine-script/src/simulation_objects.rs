@@ -475,8 +475,9 @@ impl Scripts {
     /// The engine reads the spawn packet of `part` (5.1): its `STATE_Read`
     /// with the packet at the object state and its data size (3.2). The
     /// engine's own implementation takes `record` as the object's state.
-    /// `packet` is the packet as scripts read it, spec I's
-    /// (TODO(#213): until data streams exist, the caller's value, nil).
+    /// `packet` is the packet as scripts read it, the caller's value (spec
+    /// I's engine packet, [`Scripts::new_packet`]; TODO(#1219): the
+    /// engine's own implementation reads it to the script part).
     pub fn read_state(
         &mut self,
         part: EnginePart,
@@ -497,8 +498,8 @@ impl Scripts {
     }
 
     /// The engine sets the state of `part` without its `STATE_Read`: the
-    /// state the engine holds for an object it made itself, or (until spec
-    /// I's packets let scripts read theirs, TODO(#213)) for a scripted one,
+    /// state the engine holds for an object it made itself, or (until the
+    /// engine hands scripts spec I's packets, TODO(#1219)) for a scripted one,
     /// whose scripts' own state additions are then not read.
     pub fn set_simulation_state(
         &mut self,
@@ -811,7 +812,7 @@ impl Scripts {
     /// 10.2, spec L 5.1): the one [`Scripts::create_simulation_objects`]
     /// made, or one made now as it makes them; its state the simulation's
     /// object's when spec K's simulation holds it, else set to `record`
-    /// each time (without its scripts' `STATE_Read`, TODO(#213)).
+    /// each time (without its scripts' `STATE_Read`, TODO(#1219)).
     pub fn server_object_for(
         &mut self,
         system: &Config,

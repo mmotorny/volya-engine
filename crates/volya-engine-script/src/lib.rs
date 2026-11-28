@@ -8,7 +8,7 @@
 //! behind a thin safe API; [`loader`] loads the game's script files,
 //! [`classes`] gives scripts classes deriving from engine classes,
 //! [`object_factory`] keeps the class ids and creates objects by them,
-//! [`services`], [`values`], [`files`], [`game_object`], [`story`],
+//! [`services`], [`values`], [`files`], [`data_streams`], [`game_object`], [`story`],
 //! [`dialogs`], [`sound`], [`simulation`], [`window_files`] and
 //! [`effects_and_weather`]
 //! register the engine's names of the script API, and [`entry_points`]
@@ -26,6 +26,7 @@
 
 pub mod action_planner;
 pub mod classes;
+pub mod data_streams;
 pub mod dialogs;
 pub mod effects_and_weather;
 pub mod entry_points;
@@ -429,7 +430,7 @@ pub(crate) fn call_kept_within(key: &str, args: &[Value]) -> Result<Vec<Value>, 
 }
 
 /// A number as Lua writes it (`%.14g`, spec 2.5).
-fn number_text(n: f64) -> String {
+pub(crate) fn number_text(n: f64) -> String {
     let sign = if n.is_sign_negative() && !n.is_nan() {
         "-"
     } else {

@@ -3,7 +3,7 @@
 
 //! The runtime's behaviour, the script loader, script classes, the
 //! object factory, the engine services, the value types, configuration
-//! and files, game objects, object binders, object event callbacks, the
+//! and files, the data streams, game objects, object binders, object event callbacks, the
 //! story state, the engine's entry points, the dialog files' functions, the
 //! dialogs and trade, time, the sound, the simulation registry, the
 //! scripted actions, the window description files, movement, sight
@@ -18,6 +18,7 @@ use crate::{ErrorKind, Lua, Value};
 pub mod action_planner;
 pub mod character_talk_state;
 pub mod classes;
+pub mod data_streams;
 pub mod dialogs;
 pub mod dialogs_and_trade;
 pub mod effects_and_weather;
@@ -70,6 +71,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = files::check() {
+        fail(e);
+    }
+    if let Err(e) = data_streams::check() {
         fail(e);
     }
     if let Err(e) = game_object::check() {

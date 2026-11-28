@@ -171,13 +171,14 @@ impl Startup {
         Ok((scripts, common, call))
     }
 
-    /// The engine interface of the specs implemented (B, F, H, M, N, P, R,
+    /// The engine interface of the specs implemented (B, F, I, H, M, N, P, R,
     /// T, Y, K, J, V, G3, S, U, Q, W; A, C and E [`Scripts::new`]
     /// registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
             .register_configuration_and_files(Rc::clone(&self.files), Rc::clone(&self.services))?;
+        scripts.register_data_streams(Rc::clone(&self.services))?;
         scripts.register_game_object_basics(
             Rc::clone(&self.objects),
             Rc::clone(&self.services),
