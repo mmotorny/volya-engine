@@ -290,12 +290,14 @@ flag is stored and read back only (as in public, where only triangle-mesh collid
    - For each box, of its other two axes a = (k + 1) mod 3 and b = (k + 2) mod 3, M is the one with the larger
      `|n · axis|` (b when equal) and S the other [C25].
    - A candidate (face j of a box, sign σ, the line through P along unit u): face centre
-     `F = p + σ (s[j] / 2) axis_j`; `t = (axis_j · P − axis_j · F) / (axis_j · u)`; `Q = P − t u`; accepted
+     `F = p + σ (s[j] / 2) axis_j`, with p, s and the axes the face's box's, except that candidates 5 and 6
+     take p from box 2's centre p₂ (`F = p₂ + σ (s₁[k₁] / 2)` box 1's axis k₁) [C27];
+     `t = (axis_j · P − axis_j · F) / (axis_j · u)`; `Q = P − t u`; accepted
      when for the box's other two axes c, e: `|axis_c · Q − axis_c · F| ≤ s[c] / 2` and likewise for e [C7].
    - The candidates in order: (1) box 2, face S₂, σ = +1 if `S₂ · (p₂ − A) > 0` else −1, line through A along
      box 1's axis k₁; (2) box 2, face k₂, σ = +1, same line; (3) box 2, face k₂, σ = −1, same line; (4) box 1,
      face S₁, σ = +1 if `S₁ · (p₁ − B) > 0` else −1, line through B along box 2's axis k₂; (5) box 1, face k₁,
-     σ = +1; (6) box 1, face k₁, σ = −1 [C8, C26].
+     σ = +1, face centre from p₂; (6) box 1, face k₁, σ = −1, face centre from p₂ [C8, C26, C27].
    - An accepted candidate is written as the next contact at Q with depth
      `d − |(n · M) ((Q − P) · M)|`, M of the box whose face it is, P the line's point; it counts only when
      that depth is above 0; an accepted candidate of depth ≤ 0 is written into the next free slot and
@@ -314,7 +316,11 @@ flag is stored and read back only (as in public, where only triangle-mesh collid
 
 The library computes in scalar single-precision SSE (17,395 such instructions, 1,466 packed moves and
 logic, 2 double-precision SSE, 3,021 x87) [F1]. All square roots (43), sines (8), cosines (8) and arc
-tangents (7) are x87 instructions; no SSE square root or reciprocal estimate is used [F1]. Per part [F1]:
+tangents (7) are x87 instructions; no SSE square root or reciprocal estimate is used [F1]. The x87 also
+computes the reciprocal square roots and the products of the 4-vector normalisations (`dNormalize4`,
+`dxStepBody`'s renormalisation), of the fast path of section 3.5's normalisation, the box–box separation
+tests, some collider distances and joint getters (as `dJointGetSliderPosition`); these x87 results are not
+flushed (section 7.2) [F1c]. Per part [F1]:
 
 - the SOR row loop: SSE only (3 x87 instructions: a sign change and a store);
 - the exact and QuickStep steppers: SSE, with x87 for the square roots and the sine and cosine of the
@@ -350,6 +356,9 @@ and denormals-are-zero; **believed** every processor the game runs on today). Co
 denormal inputs and results of the SSE arithmetic are 0; the x87 square roots, quotients and products round
 to single precision as SSE would (no extended intermediate precision), and x87 does not flush denormals;
 the transcendental instructions are not affected by the precision setting.
+**Disputed in review:** "round to single precision as SSE would" holds only in the normal range: the x87's
+exponent range is wider, so an x87 result below the normal range is rounded twice, to 24 bits and then to the
+denormal grid when stored (`docs/behavior/physics-harness-3.md`, its definition of x87).
 
 ## 8. Dependencies, global state and repeatability
 
