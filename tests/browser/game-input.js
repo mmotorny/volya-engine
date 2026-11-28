@@ -1754,17 +1754,19 @@ export const tests = {
     // their Menu (the key bound to `quit`) ends it (talk-window-input.md
     // 3.2).
     assert(s.level.talk.picked !== null, `the trader picked: ${JSON.stringify(s.level.talk)} at ${JSON.stringify(traderView)} from ${JSON.stringify(startView)}, steps ${JSON.stringify(steps)}`);
-    // His binder's hint text with his talk enabled, and the HUD's line
-    // showing it (hud-pickup-hint.md 1.4, 4.1).
-    s = await until((s) => s.hint_line, "the hint line for the trader");
-    assertEqual(s.level.player.hint, "character_use", "the trader's hint");
-    assert(/^Говорить \(.+\)$/.test(s.hint_line), `the hint line: ${JSON.stringify(s.hint_line)}`);
     for (let i = 0; i < 50 && use.hidden; i++) await sleep(20);
     assert(!use.hidden, "Use shown for the trader");
     // His talk is off until his scheme reaches mob_trader@new_start_intro3
     // (esc_trader.ltx, trader-and-crows-scope.md 1.1), about 30 s after his
-    // logic starts (measured 35 s after this loop began, #1171): Use, while
-    // his moving body is under the crosshair, until it opens.
+    // logic starts (measured 35 s after this loop began, #1171). His
+    // binder's hint text (hud-pickup-hint.md 1.4) is "" with his talk off,
+    // a line with no visible text, and character_use with it on, the
+    // HUD's line showing it (4.1) while his moving body is under the
+    // crosshair (#1181).
+    assert(["", "character_use"].includes(s.level.player.hint), `the trader's hint: ${JSON.stringify(s.level.player.hint)}`);
+    s = await until((s) => s.level.player.hint === "character_use" && s.hint_line, "the hint line for the trader", 90000);
+    assert(/^Говорить \(.+\)$/.test(s.hint_line), `the hint line: ${JSON.stringify(s.hint_line)}`);
+    // Use, while his body is under the crosshair, until his talk opens.
     const deadline = performance.now() + 90000;
     for (;;) {
       await until((s) => s.level.talk.picked !== null, "the trader under the crosshair to use", 10000);

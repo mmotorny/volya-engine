@@ -29,6 +29,7 @@ use volya_engine::core::simulation::NO_ID;
 use volya_engine::core::vfs::db::DbVfs;
 use volya_engine::core::vfs::{StdVfs, Vfs, VfsFile};
 use volya_engine::data::GameData;
+use volya_engine::player_hint::PlayerHint;
 use volya_engine::script::Value;
 use volya_engine::script::entry_points::EngineCall;
 use volya_engine::script::loader::Trees;
@@ -46,6 +47,30 @@ impl Trees for GameTrees {
         f(&self.tree, self.root);
         Ok(())
     }
+}
+
+/// Puts the camera 1.5 m from the trader, towards the player's start,
+/// looking at his body's centre; his id.
+fn aim_at_trader(app: &mut App) -> u16 {
+    let level = app.level_mut().unwrap();
+    let world = std::sync::Arc::clone(level.world());
+    let instance = (world.objects.instances.iter())
+        .find(|i| i.name == "escape_trader")
+        .expect("the trader drawn");
+    let (sphere, trader_id) = (instance.sphere, instance.id);
+    let start = level.player().state().position;
+    let (dx, dz) = (start[0] - sphere[0], start[2] - sphere[2]);
+    let k = 1.5 / (dx * dx + dz * dz).sqrt();
+    let h = (level.player().config).eye_height(level.player().body().box_index());
+    let eye = [sphere[0] + dx * k, start[1] + h, sphere[2] + dz * k];
+    let to = [sphere[0] - eye[0], sphere[1] - eye[1], sphere[2] - eye[2]];
+    let angles = Angles {
+        yaw: to[0].atan2(to[2]),
+        pitch: -(to[1] / (to[0] * to[0] + to[2] * to[2]).sqrt()).atan(),
+        roll: 0.0,
+    };
+    level.set_camera(eye, angles);
+    trader_id
 }
 
 fn press(input: &mut Input, key: Key) {
@@ -315,6 +340,23 @@ end
     };
     let start = trader(&mut app);
     assert_eq!(start, ("mob_trader@new_start_wait".to_owned(), false));
+    // #1181: with his talk off his binder's hint text is empty
+    // (hud-pickup-hint.md 1.4): rule 1 gives an empty hint, a line with
+    // no visible text.
+    let trader_id = aim_at_trader(&mut app);
+    step(&mut app, &mut input);
+    step(&mut app, &mut input);
+    let picked = app.level().unwrap().state().talk.picked;
+    assert_eq!(
+        picked,
+        Some(trader_id),
+        "the trader under the crosshair at the start"
+    );
+    assert_eq!(
+        app.level().unwrap().hint(),
+        Some(&PlayerHint::Text(String::new())),
+        "the trader's hint with his talk off"
+    );
     let mut chain = vec![start];
     frame.set(33.0);
     let mut ms = 0.0;
@@ -351,28 +393,18 @@ end
 
     // #1171: with his talk on, the touch Use aimed at him starts it, as
     // his use key does (use-action.md 1.2, 6.2; our design, #874).
-    let level = app.level_mut().unwrap();
-    let world = std::sync::Arc::clone(level.world());
-    let instance = (world.objects.instances.iter())
-        .find(|i| i.name == "escape_trader")
-        .expect("the trader drawn");
-    let (sphere, trader_id) = (instance.sphere, instance.id);
-    let start = level.player().state().position;
-    let (dx, dz) = (start[0] - sphere[0], start[2] - sphere[2]);
-    let k = 1.5 / (dx * dx + dz * dz).sqrt();
-    let h = (level.player().config).eye_height(level.player().body().box_index());
-    let eye = [sphere[0] + dx * k, start[1] + h, sphere[2] + dz * k];
-    let to = [sphere[0] - eye[0], sphere[1] - eye[1], sphere[2] - eye[2]];
-    let angles = Angles {
-        yaw: to[0].atan2(to[2]),
-        pitch: -(to[1] / (to[0] * to[0] + to[2] * to[2]).sqrt()).atan(),
-        roll: 0.0,
-    };
-    level.set_camera(eye, angles);
+    let trader_id = aim_at_trader(&mut app);
     step(&mut app, &mut input);
     step(&mut app, &mut input);
     let picked = app.level().unwrap().state().talk.picked;
     assert_eq!(picked, Some(trader_id), "the trader under the crosshair");
+    // #1181: his binder's hint text with his talk on (hud-pickup-hint.md
+    // 1.3 rule 1, 1.4).
+    assert_eq!(
+        app.level().unwrap().hint(),
+        Some(&PlayerHint::Text("character_use".to_owned())),
+        "the trader's hint with his talk on"
+    );
     for pressed in [true, false] {
         input.handle(Event::TouchButton {
             button: TouchButton::Use,
