@@ -1,29 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The shipped library's arithmetic that the black-box comparison
-//! established (docs/behavior/physics-harness.md 3 – 5, 7; section 2 is
-//! `comparison/ode_load_time.rs`, a process of its own), through the
+//! The shipped library's arithmetic that the black-box comparison's first
+//! round established (docs/behavior/physics-harness.md 3 – 5, 7; section 2
+//! is `comparison/ode_load_time.rs`, a process of its own), through the
 //! library's own functions: each rule's result recomputed here in plain
 //! single precision from synthetic inputs, bit for bit, and the rule it
-//! replaced shown to round differently on some of them.
+//! replaced shown to round differently on some of them. The second round's
+//! are `harness_rules_2`.
 
 use super::{DMass, DxBody, DxWorld, Real, STEPPING};
 use std::ffi::{c_int, c_void};
 
 #[repr(C)]
-struct DxGeom {
+pub(super) struct DxGeom {
     _private: [u8; 0],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct ContactGeom {
-    pos: [Real; 4],
-    normal: [Real; 4],
-    depth: Real,
-    g1: *mut DxGeom,
-    g2: *mut DxGeom,
+pub(super) struct ContactGeom {
+    pub(super) pos: [Real; 4],
+    pub(super) normal: [Real; 4],
+    pub(super) depth: Real,
+    pub(super) g1: *mut DxGeom,
+    pub(super) g2: *mut DxGeom,
 }
 
 unsafe extern "C" {
@@ -62,19 +63,19 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
-fn lock() -> std::sync::MutexGuard<'static, ()> {
+pub(super) fn lock() -> std::sync::MutexGuard<'static, ()> {
     STEPPING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Synthetic inputs: a fixed xorshift sequence, uniform in [lo, hi).
-struct Inputs(u64);
+pub(super) struct Inputs(u64);
 
 impl Inputs {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self(0x9E37_79B9_7F4A_7C15)
     }
 
-    fn next(&mut self, lo: f32, hi: f32) -> f32 {
+    pub(super) fn next(&mut self, lo: f32, hi: f32) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -82,12 +83,12 @@ impl Inputs {
         lo + (hi - lo) * unit
     }
 
-    fn vec3(&mut self, lo: f32, hi: f32) -> [f32; 3] {
+    pub(super) fn vec3(&mut self, lo: f32, hi: f32) -> [f32; 3] {
         [self.next(lo, hi), self.next(lo, hi), self.next(lo, hi)]
     }
 }
 
-fn bits<const N: usize>(v: [f32; N]) -> [u32; N] {
+pub(super) fn bits<const N: usize>(v: [f32; N]) -> [u32; N] {
     v.map(f32::to_bits)
 }
 
@@ -96,7 +97,7 @@ fn f(bits: u32) -> f32 {
 }
 
 /// Section 3: `dNormalize3_slow`'s five steps.
-fn normalise_slow(a: [f32; 3], divide: bool) -> [f32; 3] {
+pub(super) fn normalise_slow(a: [f32; 3], divide: bool) -> [f32; 3] {
     let m = a.map(f32::abs);
     let k = if m[1] > m[0] {
         if m[2] > m[1] { 2 } else { 1 }

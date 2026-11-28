@@ -71,24 +71,55 @@ pub fn atan2(y: f32, x: f32) -> f32 {
         };
         if x < 0.0 { PI.sub(a) } else { a }
     };
-    let r = to_float(a);
+    let r = round_once(extended(a));
     if neg { -r } else { r }
 }
 
+/// sin(x) times m as the shipped library computes it where its sine stays in
+/// the x87 register (docs/behavior/physics-harness-2.md 2.2): `fsin`'s
+/// extended result, not stored as a float, times the float m, rounded once
+/// to a float: the multiplication at the game's 24-bit x87 precision
+/// (docs/behavior/physics-library.md 7), which the comparison reproduces.
+pub fn sin_times(x: f32, m: f32) -> f32 {
+    match trig_extended(x, false) {
+        Ok(s) => round_once(s.mul_f64(f64::from(m))),
+        Err(s) => s * m,
+    }
+}
+
+/// sin(x) over d, the same way (physics-harness-2.md 2.6): the extended
+/// sine divided by the float d, rounded once to a float.
+pub fn sin_over(x: f32, d: f32) -> f32 {
+    match trig_extended(x, false) {
+        Ok(s) if d != 0.0 && d.is_finite() => round_once(Dd::div(s, Dd::from(f64::from(d)))),
+        Ok(s) => round_once(s) / d,
+        Err(s) => s / d,
+    }
+}
+
 fn trig(x: f32, cosine: bool) -> f32 {
+    match trig_extended(x, cosine) {
+        Ok(v) => round_once(v),
+        Err(r) => r,
+    }
+}
+
+/// The instruction's extended result, exactly; or, for the operands the
+/// instruction returns as they are or as NaNs, that float.
+fn trig_extended(x: f32, cosine: bool) -> Result<Dd, f32> {
     if x.is_nan() {
-        return f32::from_bits(x.to_bits() | 0x0040_0000);
+        return Err(f32::from_bits(x.to_bits() | 0x0040_0000));
     }
     if x.is_infinite() {
-        return f32::from_bits(INDEFINITE);
+        return Err(f32::from_bits(INDEFINITE));
     }
     if x == 0.0 {
         // sin(±0) = ±0, cos(±0) = 1.
-        return if cosine { 1.0 } else { x };
+        return Err(if cosine { 1.0 } else { x });
     }
     if x.abs() >= 9.223_372e18 {
         // 2^63: out of the instruction's range.
-        return x;
+        return Err(x);
     }
     let (k, r) = reduce(x);
     let (s, c) = (sin_series(r), cos_series(r));
@@ -99,7 +130,7 @@ fn trig(x: f32, cosine: bool) -> f32 {
         2 => s.neg(),
         _ => c.neg(),
     };
-    to_float(v)
+    Ok(extended(v))
 }
 
 /// x = k·π₆₆/2 + r exactly, |r| ≤ π₆₆/4 (k the nearest multiple).
@@ -190,11 +221,11 @@ fn atan_series(u: Dd) -> Dd {
     sum
 }
 
-/// Rounds v to a 64-bit significand, then to a float, to nearest even
-/// both times (the extended result, then the store).
-fn to_float(v: Dd) -> f32 {
+/// v rounded to a 64-bit significand, to nearest even (the extended
+/// format's result), exactly.
+fn extended(v: Dd) -> Dd {
     if v.hi == 0.0 {
-        return v.hi as f32;
+        return v;
     }
     let neg = v.hi < 0.0;
     let (h, l) = if neg { (-v.hi, -v.lo) } else { (v.hi, v.lo) };
@@ -240,19 +271,41 @@ fn to_float(v: Dd) -> f32 {
         q >>= 1;
         d += 1;
     }
-    // The extended value q·2^e2, then the float.
+    // The extended value q·2^e2 (e2 well within a double's exponents for
+    // the values here): its top 53 bits and the rest.
     let e2 = d + eh - 100;
-    let t = (e2 + 63 - 23).max(-149);
-    let shift = (t - e2) as u32;
-    let f = if shift >= 127 {
-        0.0
+    let r = Dd::new(
+        ((q >> 11) << 11) as f64 * pow2(e2),
+        (q & 0x7FF) as f64 * pow2(e2),
+    );
+    if neg { r.neg() } else { r }
+}
+
+/// v rounded once to a float, to nearest even (a store of the extended
+/// value, or an operation's result at 24-bit precision).
+fn round_once(v: Dd) -> f32 {
+    let f = v.hi as f32;
+    let fd = f64::from(f);
+    if v.lo == 0.0 || !v.hi.is_finite() || fd == v.hi {
+        // Exact, or hi a float and lo far below half of its unit.
+        return f;
+    }
+    // hi lies between f and its neighbour on hi's side; only when it is
+    // their midpoint does lo decide.
+    let away = fd.abs() < v.hi.abs();
+    let other = f32::from_bits(if away {
+        f.to_bits() + 1
     } else {
-        let (q2, rem) = (q >> shift, q & ((1 << shift) - 1));
-        let half = 1i128 << (shift - 1);
-        let q2 = q2 + i128::from(rem > half || (rem == half && q2 & 1 == 1));
-        (q2 as f64 * pow2(t)) as f32
-    };
-    if neg { -f } else { f }
+        f.to_bits() - 1
+    });
+    if (v.hi - fd).abs() != (f64::from(other) - v.hi).abs() {
+        return f;
+    }
+    if (v.lo > 0.0) == (v.hi > fd) {
+        other
+    } else {
+        f
+    }
 }
 
 fn pow2(e: i32) -> f64 {
@@ -367,6 +420,18 @@ pub extern "C" fn volya_x87_atan2f(y: f32, x: f32) -> f32 {
     atan2(y, x)
 }
 
+/// sin(x) · m, the sine unrounded (config.h; [`sin_times`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn volya_x87_sinf_times(x: f32, m: f32) -> f32 {
+    sin_times(x, m)
+}
+
+/// sin(x) / d, the sine unrounded (config.h; [`sin_over`]).
+#[unsafe(no_mangle)]
+pub extern "C" fn volya_x87_sinf_over(x: f32, d: f32) -> f32 {
+    sin_over(x, d)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +481,50 @@ mod tests {
         assert_eq!(atan2(1e-30, 1e10), 1e-40);
         assert_eq!(sin(f32::INFINITY).to_bits(), INDEFINITE);
         assert_eq!(sin(1e19), 1e19);
+    }
+
+    #[test]
+    fn the_unrounded_sine_is_rounded_once_with_its_operand() {
+        let mut s: u32 = 777;
+        let mut next = || {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            s as f32 / u32::MAX as f32
+        };
+        let (mut off, mut times_differ, mut over_differ) = (0, 0, 0);
+        let n = 100_000;
+        for _ in 0..n {
+            let x = (next() - 0.5) * 8.0;
+            let m = 0.05 + next() * 3.0;
+            // A factor of one leaves the stored sine.
+            assert_eq!(sin_times(x, 1.0).to_bits(), sin(x).to_bits(), "{x}");
+            let (xd, md) = (f64::from(x), f64::from(m));
+            off += usize::from(sin_times(x, m) != reference(xd.sin() * md));
+            off += usize::from(sin_over(x, m) != reference(xd.sin() / md));
+            times_differ += usize::from(sin_times(x, m) != sin(x) * m);
+            over_differ += usize::from(sin_over(x, m) != sin(x) / m);
+        }
+        // Double rounding in the reference, rarely.
+        assert!(off * 10_000 < n, "{off}");
+        // Rounding the sine first is another rule.
+        assert!(
+            times_differ * 20 > n && over_differ * 20 > n,
+            "{times_differ} {over_differ}"
+        );
+        assert_eq!(sin_times(0.0, 2.0), 0.0);
+        assert_eq!(sin_times(-0.0, 2.0).to_bits(), 0x8000_0000);
+        assert!(sin_over(f32::NAN, 2.0).is_nan());
+    }
+
+    #[test]
+    fn rounding_once_breaks_ties_by_the_low_part() {
+        // 1 + 2^-24, the midpoint of 1 and its successor: a little above,
+        // below, and exactly (to even).
+        let mid = 1.0 + 2f64.powi(-24);
+        let up = f32::from_bits(0x3F80_0001);
+        assert_eq!(round_once(Dd::new(mid, 1e-30)), up);
+        assert_eq!(round_once(Dd::new(mid, -1e-30)), 1.0);
+        assert_eq!(round_once(Dd::new(mid, 0.0)), 1.0);
+        assert_eq!(round_once(Dd::new(-mid, -1e-30)), -up);
     }
 
     #[test]

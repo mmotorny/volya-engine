@@ -60,6 +60,11 @@ float volya_x87_sinf (float x);
 float volya_x87_cosf (float x);
 float volya_x87_atan2f (float y, float x);
 int volya_ode_rand (void);
+/* Where the shipped library keeps a sine in the x87 register: the sine
+** times, or over, a float, rounded once (docs/behavior/physics-harness-2.md
+** 2.2, 2.6). */
+float volya_x87_sinf_times (float x, float m);
+float volya_x87_sinf_over (float x, float d);
 #define sinf volya_x87_sinf
 #define cosf volya_x87_cosf
 #define atan2f volya_x87_atan2f

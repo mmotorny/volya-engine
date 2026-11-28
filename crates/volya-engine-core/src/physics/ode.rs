@@ -20,6 +20,8 @@
 pub mod harness;
 #[cfg(test)]
 mod harness_rules;
+#[cfg(test)]
+mod harness_rules_2;
 pub mod msvc_rand;
 pub mod x87;
 
