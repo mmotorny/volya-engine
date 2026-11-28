@@ -109,7 +109,7 @@ fn calls_of(tokens: &[Token], name: &str) -> usize {
         .count()
 }
 
-/// The trader door's record in `spawns\all.spawn` (trader-door.md 1), with
+/// The trader door's record in `spawns\all.spawn` (physics-shells.md 10), with
 /// its object index.
 fn door_record(tree: &dyn Vfs, system: &Config) -> (u32, ObjectRecord) {
     let file = read(tree, "gamedata/spawns/all.spawn").unwrap();

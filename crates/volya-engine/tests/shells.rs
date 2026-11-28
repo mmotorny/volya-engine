@@ -181,16 +181,18 @@ fn the_bunkers_shells_and_the_trader_door() {
     assert_eq!((hinge(param::F_MAX), hinge(param::VEL)), (0.0, 0.0));
     // 10, item 4: the exact solver requested.
     assert!(solver.marked_exact(shell.group()));
-    // The player meets the leaf's box (trader-door.md 1, 3).
+    // The player meets the leaf's box (physics-shells.md 10, physics-contacts.md 7).
     let boxes = level.doors().boxes();
-    assert_eq!(boxes.len(), 1);
+    assert_eq!(boxes.len(), 4);
     for (got, want) in boxes[0].half_size.into_iter().zip([0.6902, 1.3225, 0.1254]) {
         assert!((got - want).abs() < 1e-3, "{:?}", boxes[0].half_size);
     }
     let start = boxes[0].centre;
     drop(physics);
 
-    // The scheme's start wakes it (physics-resting.md 2); held closed after.
+    // The door scheme's locked section's motor (script API Y 11 step 4;
+    // the scheme is the scripts', which this level runs without) wakes it
+    // (physics-resting.md 2) and holds it closed.
     let mut input = Input::new();
     let mut now = 0;
     let mut frames = |level: &mut LevelScreen, n: u32| {
@@ -201,6 +203,9 @@ fn the_bunkers_shells_and_the_trader_door() {
             input.end_frame();
         }
     };
+    (level.physics_mut())
+        .set_max_force_and_velocity(door.id, "door", 10_000.0, 1.0)
+        .unwrap();
     frames(&mut level, 120);
     let timers = level.take_physics_timers();
     let physics = level.physics();

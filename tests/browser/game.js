@@ -272,7 +272,7 @@ export async function until(test, what, ms = 5000) {
   throw new Error(`timed out waiting for ${what}; state ${JSON.stringify(s).slice(0, 400)}`);
 }
 
-/** The sound a use of the trader's locked door plays (trader-door.md 2.5). */
+/** The sound a use of the trader's locked door plays (use-action.md 11.1). */
 export const DOOR_SOUND = "device\\door_servomotor";
 
 /** Its emitter (`sound_state`) once it plays, or, with `playing` false, once it has ended. */

@@ -167,7 +167,7 @@ fn string_in(bytes: &[u8], text: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|w| w == needle)
 }
 
-/// The trader door's record (trader-door.md 1) and its object index.
+/// The trader door's record (physics-shells.md 10) and its object index.
 fn door_record(tree: &dyn Vfs, system: &Config) -> (u32, ObjectRecord) {
     let file = read(tree, "gamedata/spawns/all.spawn").unwrap();
     let mut door = None;

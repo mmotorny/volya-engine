@@ -100,7 +100,7 @@ pub const STEP_HEIGHT_LIMIT: f32 = 0.5;
 pub const OBSTACLE_LEAD: f32 = 0.05;
 pub const OBSTACLE_RISE: f32 = 0.01;
 /// The constant of the normal-direction softening (5.4): 0.5 for the
-/// level, 5 for a movable body (docs/behavior/trader-door.md 3.3).
+/// level, 5 for a movable body (docs/behavior/player-body-contacts.md 2.2).
 pub const LEVEL_SOFTENING: f32 = 0.5;
 pub const BODY_SOFTENING: f32 = 5.0;
 /// The world's error-reduction parameter `E` and constraint-force mixing
@@ -152,7 +152,7 @@ impl Shapes {
     }
 }
 
-/// A box of a movable body (docs/behavior/trader-door.md 3.1) in world
+/// A box of a movable body (docs/behavior/physics-contacts.md 7 item 1) in world
 /// space, as its shell holds it: what the crosshair picks and the route
 /// planner walls off (the player's body meets the shell itself, through the
 /// physics world's contacts).
@@ -308,7 +308,7 @@ pub struct StepInput {
 pub struct Reaction {
     /// The change the solving made to the velocity (physics-contacts.md 7).
     pub velocity: Vec3,
-    /// A contact set the step's "blocked" flag (trader-door.md 3.1, 3.3).
+    /// A contact set the step's "blocked" flag (player-body-contacts.md 6, 9).
     pub blocked: bool,
     /// The touch flag (`assist` 2.1).
     pub touch: bool,
@@ -576,7 +576,7 @@ impl PlayerBody {
     /// The world step's reaction on the body (physics-contacts.md 5, 7):
     /// the change its contacts with movable bodies made to the velocity,
     /// which moves the body for the step too; whether they set the
-    /// "blocked" flag (trader-door.md 3.1, 3.3), which the next step's
+    /// "blocked" flag (player-body-contacts.md 6, 9), which the next step's
     /// replacement reads (6.3); the touch flag and the contacts handled as
     /// made, for the next step-assistance decision (`assist` 2, 3).
     pub fn react(&mut self, reaction: Reaction) {
@@ -1219,8 +1219,8 @@ pub struct MovableContact {
 }
 
 /// The player's contact rules for a contact of its `shape` with a movable
-/// body (level-cform.md 5.4 and 6.3 with docs/behavior/trader-door.md 3.3's
-/// differences): `normal` points towards the player's shape, `point` is the
+/// body (level-cform.md 5.4 and 6.3 with docs/behavior/player-body-contacts.md
+/// 2.2's differences): `normal` points towards the player's shape, `point` is the
 /// contact's position, `first` says the player's shape is the pair's first
 /// (the library's normal is `normal` then, else its opposite; the softening
 /// takes the replaced one once replaced, the level's order, our reading),

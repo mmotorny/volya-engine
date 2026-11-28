@@ -95,7 +95,13 @@ fn the_leaf_meets_the_players_body() {
         input: Input::new(),
         now: 0,
     };
-    // The scheme's start wakes the leaf and its motor holds it.
+    // The door scheme's locked section holds the leaf closed (script API Y
+    // 11 step 4: the motor 10000 / 1, waking it); the scheme is the
+    // scripts', which this level runs without, so the test sets it.
+    run.level
+        .physics_mut()
+        .set_max_force_and_velocity(door, "door", 10_000.0, 1.0)
+        .unwrap();
     run.frames(3);
     assert_eq!(run.contacts(), 0, "nothing near at the start");
     let p = run.level.player();

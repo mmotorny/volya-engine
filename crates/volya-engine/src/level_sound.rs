@@ -7,8 +7,7 @@
 //! sound-level-music.md), the rain and thunder (S8, sound-rain-thunder.md),
 //! what occludes them (S6, sound-occlusion.md) and the material pairs'
 //! sounds (S9, material-pairs.md; the player's footsteps play them,
-//! crate::footsteps) and the doors' scheme's sounds (trader-door.md 2.5),
-//! on the positional sound system (S2).
+//! crate::footsteps), on the positional sound system (S2).
 //!
 //! [`LevelSoundData`] is read while the level loads; [`LevelSounds`] are
 //! the sounds created from it in the sound system once the level runs;
@@ -25,7 +24,6 @@ use std::sync::Arc;
 
 use crate::core::config::{self, LEVEL, PathAliases};
 use crate::core::detector::DetectorSection;
-use crate::core::door::DoorSound;
 use crate::core::sound::Fatal;
 use crate::core::sound::ambient::{self, AmbientParticles, AmbientSet, AmbientState, SetData};
 use crate::core::sound::music::{self, LevelMusic, TrackParams};
@@ -93,9 +91,6 @@ pub struct LevelSoundData {
     /// The player's body sounds and shock effects (S17 2, 5.1), read with
     /// the player's configuration.
     pub body: Option<(BodySoundNames, ShockEffector)>,
-    /// The sounds the doors' scheme plays (trader-door.md 2.5), read with
-    /// the doors.
-    pub doors: Vec<String>,
 }
 
 /// A zone's sound names, by the index of S15 2.1's keys.
@@ -163,7 +158,6 @@ impl LevelSoundData {
             detectors: Vec::new(),
             zones: Vec::new(),
             body: None,
-            doors: Vec::new(),
         })
     }
 
@@ -197,8 +191,6 @@ pub struct LevelSounds {
     pub zones: Vec<[Option<SoundId>; 8]>,
     /// The player's body sounds (S17).
     pub body: Option<BodySounds>,
-    /// The doors' sounds (trader-door.md 2.5), by name.
-    pub doors: HashMap<String, SoundId>,
 }
 
 /// Creates a zone's sounds in the effects category (S15 2.1): each key a
@@ -286,15 +278,6 @@ impl LevelSounds {
             }
             None => None,
         };
-        // The doors' sounds, in the effects category (believed: the
-        // scripts' sound sets are effects).
-        let mut doors = HashMap::new();
-        for name in &data.doors {
-            doors.insert(
-                name.clone(),
-                system.create(tree, aliases, name, crate::core::audio::Category::Effects)?,
-            );
-        }
         let occlusion = system.occlusion_mut();
         occlusion.scale = data.occlusion_scale;
         if let Some(mesh) = &data.occlusion_mesh {
@@ -315,16 +298,7 @@ impl LevelSounds {
             dir: data.dir.clone(),
             zones,
             body,
-            doors,
         })
-    }
-
-    /// A door's sound (trader-door.md 2.5), played at its position: not
-    /// looped, not 2D, delay 0 (the spec states only the position).
-    pub fn door(&self, system: &mut SoundSystem, sound: &DoorSound) {
-        if let Some(&id) = self.doors.get(sound.sound) {
-            system.play_at(id, sound.position, PlayFlags::default());
-        }
     }
 
     /// Carries out a torch's sound command (torch.md 14), its sounds created
@@ -463,9 +437,6 @@ impl LevelSounds {
         }
         if let Some(body) = self.body.take() {
             body.discard(system);
-        }
-        for &id in self.doors.values() {
-            system.discard(id);
         }
         system.occlusion_mut().level = None;
     }

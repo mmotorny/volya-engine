@@ -488,7 +488,7 @@ impl LevelPhysics {
         Some((s.id, *j))
     }
 
-    /// A joint's motor on its axis (`door` 2.3: `set_max_force_and_velocity`
+    /// A joint's motor on its axis (script API Y 5.3: `set_max_force_and_velocity`
     /// on a hinge): it wakes the shell (physics-resting.md 2), then sets the hinge's
     /// maximum force and velocity. Nothing without the joint.
     pub fn set_max_force_and_velocity(
@@ -539,6 +539,19 @@ impl LevelPhysics {
     pub fn hinge_angle(&self, object: u16, bone: &str) -> Option<f32> {
         let (_, joint) = self.joint(object, bone)?;
         self.world.solver().hinge_angle(joint)
+    }
+
+    /// The motor of the hinge of object `object`'s shell made from bone
+    /// `bone` (physics-joints.md 2.3): its maximum force and target
+    /// velocity.
+    pub fn hinge_motor(&self, object: u16, bone: &str) -> Option<[f32; 2]> {
+        use crate::core::physics::ode::shell::param;
+        let (_, joint) = self.joint(object, bone)?;
+        let solver = self.world.solver();
+        Some([
+            solver.hinge_param(joint, param::F_MAX)?,
+            solver.hinge_param(joint, param::VEL)?,
+        ])
     }
 
     /// The boxes of object `object`'s shell where its bodies hold them

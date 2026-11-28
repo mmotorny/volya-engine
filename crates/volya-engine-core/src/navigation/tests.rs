@@ -171,7 +171,7 @@ fn goes_around_a_wall() {
     assert!(r.cost < 12.0 / 3.57, "{}", r.cost);
 }
 
-/// A movable body's box (a locked door's leaf, trader-door.md) is a wall.
+/// A movable body's box (a locked door's leaf, player-body-contacts.md 9) is a wall.
 #[test]
 fn goes_around_a_movable_body() {
     let world = open_floor().world();

@@ -516,7 +516,7 @@ pub struct LevelScreen {
     /// (player-hits.md 3).
     difficulty: Option<String>,
     /// The doors under the door scheme and the player's hint
-    /// (docs/behavior/trader-door.md).
+    /// ([`LevelDoors`]).
     doors: LevelDoors,
     /// The physics world (physics-world.md), made under
     /// `st_client_spawning`, shared with script API Y's members
@@ -557,7 +557,7 @@ pub struct LevelState {
     pub torch: Option<TorchReport>,
     /// The player's detectors (sound-detector.md).
     pub detectors: Vec<DetectorReport>,
-    /// The doors under the door scheme (trader-door.md).
+    /// The doors under the door scheme ([`LevelDoors`]).
     pub doors: Vec<DoorReport>,
     /// The physics world (physics-world.md).
     pub physics: PhysicsReport,
@@ -880,7 +880,7 @@ pub struct PlayerReport {
     /// and its distance from its destination then, metres.
     pub trip_end: Option<(&'static str, f32)>,
     /// The player's hint id, from the object under the crosshair
-    /// (trader-door.md 5.1).
+    /// (use-action.md 2.2).
     pub hint: Option<String>,
 }
 
@@ -1608,7 +1608,7 @@ pub struct NewGameLoad {
     detectors: Option<Vec<DetectorSection>>,
     /// The length of each hit type's sound list (sound-player-body.md 2).
     hit_sound_lists: [usize; TYPE_COUNT],
-    /// The doors under the door scheme (trader-door.md), found with the
+    /// The doors under the door scheme ([`LevelDoors`]), found with the
     /// objects.
     doors: Option<LevelDoors>,
     /// The console's physics values as the load runs.
@@ -2226,14 +2226,17 @@ impl NewGameLoad {
                     .map(|z| z.section.sounds.clone())
                     .collect();
                 // physics-shells.md 1, 7: the shells as the client creates
-                // its objects; the doors with them (trader-door.md 2.4),
-                // the sounds their sections play the level's (2.5).
+                // its objects; the doors with them (physics-shells.md 10).
                 let materials = earlier(self.collision.as_ref(), "level.cform")?.materials();
-                earlier(self.physics.as_ref(), "physics world")?
-                    .borrow_mut()
-                    .load_shells(tree, data, &dir, &self.level_objects, materials)?;
-                let doors = LevelDoors::load(tree, data, &self.level_objects)?;
-                sound.doors = doors.sound_names();
+                let physics = earlier(self.physics.as_ref(), "physics world")?;
+                (physics.borrow_mut()).load_shells(
+                    tree,
+                    data,
+                    &dir,
+                    &self.level_objects,
+                    materials,
+                )?;
+                let doors = LevelDoors::load(tree, data, &self.level_objects, &physics.borrow())?;
                 self.doors = Some(doors);
                 sound.check(tree, &data.aliases)?;
                 self.sound = Some(sound);
@@ -2652,7 +2655,7 @@ impl NewGameLoad {
             let mut physics = physics.borrow_mut();
             physics.set_level(collision.clone());
             physics.add_player(player.config.body.mass)?;
-            doors.sync(&mut physics)?;
+            doors.sync(&physics);
         }
         let eye = player.view().eye;
         let (a, b, t) = weather.bracket(clock.time_of_day());
@@ -2925,11 +2928,6 @@ impl LevelScreen {
         // The climbing states' clock is the footsteps' step clock
         // (climbing.md, conventions): the global clock.
         self.player.set_step_clock(self.global_ms as u32);
-        // trader-door.md 2.1, 2.2: the doors' update, the first starting
-        // their scheme, then their per-step calls in this frame's physics
-        // steps (the order within the frame is our choice); 5.1: the
-        // player's update picks the object under the crosshair.
-        self.doors.update();
         // physics-world.md 2.1, 2.2: the physics world's steps on the
         // movement's display frame time, each with the movement step it
         // meets (the player's body is one of its objects,
@@ -2938,19 +2936,15 @@ impl LevelScreen {
         self.player
             .frame_with(&self.collision, now, &request, &mut physics.steps(now));
         physics.end_frame();
-        self.doors.physics_steps(self.player.steps(), &physics);
-        // 2.3: the motors set reach the hinges (physics-shells.md 10).
-        let synced = self.doors.sync(&mut physics);
+        // The leaves where their shells hold them, for the pick.
+        self.doors.sync(&physics);
         drop(physics);
-        if let Err(e) = synced {
-            self.record_fatal(e.to_string());
-        }
+        // use-action.md 2.2: the player's update picks the object under
+        // the crosshair; the use action on it is the scripts' (script API
+        // M 6.3; the door scheme's use callback, use-action.md 4.1).
         let view = self.player.view();
         self.doors.pick(view.eye, view.direction, now);
-        // The use action on the picked door (2.5), for the scripts too
-        // (script API M 6.3).
         if self.controls.use_pressed(input) {
-            self.doors.use_picked();
             self.used = self.doors.picked_object().or(self.used);
         }
         self.fall_hit();
@@ -3076,12 +3070,9 @@ impl LevelScreen {
         );
         self.update_view();
         self.lights_frame(elapsed as f32 / 1000.0, true);
-        // trader-door.md 5.1: the leaves where their shells now hold them,
-        // for the next frame's pick.
-        let synced = self.doors.sync(&mut self.physics.borrow_mut());
-        if let Err(e) = synced {
-            self.record_fatal(e.to_string());
-        }
+        // The leaves where their shells now hold them, for the next
+        // frame's pick.
+        self.doors.sync(&self.physics.borrow());
     }
 
     /// The player's transform (sound-weather-ambient.md 4.3): at its feet,
@@ -3247,6 +3238,12 @@ impl LevelScreen {
         self.physics.borrow()
     }
 
+    /// The physics world, to change (tests: what the scripts' members
+    /// would ask of it).
+    pub fn physics_mut(&self) -> std::cell::RefMut<'_, LevelPhysics> {
+        self.physics.borrow_mut()
+    }
+
     /// The physics timers since last taken (physics-world.md 6).
     pub fn take_physics_timers(&mut self) -> Timers {
         self.physics.borrow_mut().take_timers()
@@ -3308,9 +3305,7 @@ impl LevelScreen {
         self.torches.take_sounds()
     }
 
-    /// The player's detectors.
-    /// The doors under the door scheme and the player's hint
-    /// (trader-door.md).
+    /// The doors under the door scheme and the player's hint.
     pub fn doors(&self) -> &LevelDoors {
         &self.doors
     }
@@ -3319,12 +3314,6 @@ impl LevelScreen {
     /// the player's hint (use-action.md 2.2).
     pub fn set_tip_texts(&mut self, texts: &BTreeMap<u16, Vec<u8>>) {
         self.doors.set_tip_texts(texts);
-    }
-
-    /// The sounds the doors played since last taken (trader-door.md 2.5;
-    /// the app plays them on the level's sounds).
-    pub fn take_door_sounds(&mut self) -> Vec<crate::core::door::DoorSound> {
-        self.doors.take_sounds()
     }
 
     pub fn detectors(&self) -> &PlayerDetectors {
@@ -4717,7 +4706,7 @@ impl LevelScreen {
             lights: self.lights.report(),
             torch: self.torches.report(&self.lights.lights, &self.lights.glows),
             detectors: self.detectors.report(&self.zones),
-            doors: self.doors.report(),
+            doors: self.doors.report(&self.physics.borrow()),
             physics: self.physics.borrow().report(),
         }
     }

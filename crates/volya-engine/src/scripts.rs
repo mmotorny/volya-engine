@@ -220,7 +220,7 @@ pub fn load_ended(scripts: &GameScripts) {
 /// 3, 4, 5.4, 6.2): its record, its visual loaded with the level (with its
 /// owner's names), its shell's physics part and the shell as script API
 /// Y's members see it; whether it is a door under the door scheme
-/// (trader-door.md 1).
+/// ([`crate::level_doors`]).
 pub struct ClientObject<'a> {
     pub id: u16,
     pub record: ObjectRecord,
@@ -286,6 +286,7 @@ pub fn client_spawning(
         p.current_holder = None;
     }
     scripts.story().borrow_mut().info_portions = spawning.info_portions;
+    scripts.scripts().exec("=fake_player", FAKE_PLAYER)?;
     for object in spawning.objects {
         spawn_client_object(scripts, &data.system, &mut characters, object)?;
     }
@@ -658,7 +659,10 @@ pub fn spawn_client_object(
                 }
                 _ => ObjectClass::Unnamed(entry_id),
             };
-            let spawned = scripts.scripts().spawn_engine_object(class, data);
+            // TODO(#1120): the player bound by the fake of its binding.
+            let binding = (class == ObjectClass::Player).then_some(FAKE_PLAYER_BINDING);
+            let spawned =
+                (scripts.scripts()).spawn_engine_object_with_binding(class, data, binding);
             spawned.map(|_| ())
         }
     };
@@ -681,15 +685,16 @@ pub fn engine_state(characters: &mut Characters, object: &ClientObject) -> io::R
 }
 
 /// Whether `object` spawns in the scripts: one without a binding function
-/// (spec L 3.1; an empty value finds none), or a door under the door
-/// scheme, whose binder (`bind_physic_object.init`, L 8) runs on the
-/// script interface implemented so far. TODO(#1077): every object, once
-/// the interface the other binders call is implemented.
+/// (spec L 3.1; an empty value finds none), a door under the door scheme,
+/// whose binder (`bind_physic_object.init`, L 8) runs on the script
+/// interface implemented so far, or the player, under the fake of its
+/// binding (TODO(#1120)). TODO(#1077): every object, once the interface the
+/// other binders call is implemented.
 fn binding_runs(system: &Config, object: &ClientObject) -> bool {
     let section = object.record.header.section.as_str();
     match system.get(section, "script_binding") {
         None | Some(None) => true,
-        Some(Some(name)) => name.trim().is_empty() || object.door,
+        Some(Some(name)) => name.trim().is_empty() || object.door || object.id == ACTOR_ID,
     }
 }
 
@@ -824,6 +829,33 @@ impl LevelQueries for ScriptLevel {
         path.points.get(point as usize).map(|p| p.position)
     }
 }
+
+/// The fake of the player's binding (TODO(#1120)): `bind_stalker.actor_init`
+/// can't run yet (#1077), so the player's object is bound by
+/// [`FAKE_PLAYER_BINDING`] instead, whose binder only registers the player
+/// with the shipped `db.add_actor` as it spawns and `db.del_actor` as it is
+/// destroyed, as the shipped binder does: so `db.actor` exists, which the
+/// physics-object binder waits for to start an object's logic (script API L
+/// 8; the door scheme).
+const FAKE_PLAYER: &[u8] = br#"
+class "__volya_fake_player_binder" (object_binder)
+function __volya_fake_player_binder:__init(obj) super(obj) end
+function __volya_fake_player_binder:net_spawn(data)
+  if not object_binder.net_spawn(self, data) then return false end
+  db.add_actor(self.object)
+  return true
+end
+function __volya_fake_player_binder:net_destroy()
+  db.del_actor(self.object)
+  object_binder.net_destroy(self)
+end
+function __volya_fake_player_binding(obj)
+  obj:bind_object(__volya_fake_player_binder(obj))
+end
+"#;
+
+/// The binding function of [`FAKE_PLAYER`] (TODO(#1120)).
+const FAKE_PLAYER_BINDING: &[u8] = b"__volya_fake_player_binding";
 
 /// The visual of `model` as the place members read it (M 4): its header
 /// sphere's centre and its bones at their bind matrices, the root first.

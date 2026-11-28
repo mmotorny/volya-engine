@@ -5,8 +5,8 @@
 //! (docs/behavior/physics-contacts.md 5, 7): class 0x4 | 0x10, its four
 //! shapes (bottom sphere, torso cylinder, head sphere, outer sphere;
 //! level-cform.md 5.1) meeting the movable bodies, the outer sphere's
-//! contacts only setting "blocked" (trader-door.md 3.1), the others under
-//! the player's rules (trader-door.md 3.3) made joints of the player's body
+//! contacts only setting "blocked" (player-body-contacts.md 6), the others
+//! under the player's rules (player-body-contacts.md 2.2) made joints of the player's body
 //! and the movable one; every contact with a movable body reaching the rules
 //! sets the touch flag (step-assistance-movable-bodies.md 2.1); the torso
 //! cylinder's by the game's cylinder–box and cylinder–sphere colliders
@@ -198,7 +198,7 @@ impl Grouped for OdeCharacter {
         out.extend_from_slice(&self.geoms);
     }
 
-    /// The outer sphere's callback (trader-door.md 3.1): no contact, the
+    /// The outer sphere's callback (player-body-contacts.md 6): no contact, the
     /// step "blocked".
     fn geometry_contact(&mut self, geom: usize, _: bool, d: &mut Draft) {
         if geom == OUTER {
@@ -207,7 +207,7 @@ impl Grouped for OdeCharacter {
         }
     }
 
-    /// The player's rules (trader-door.md 3.3; physics-contacts.md 5: the
+    /// The player's rules (player-body-contacts.md 2.2; physics-contacts.md 5: the
     /// normal points towards the player's shape when it is the first
     /// geometry), every contact of its shapes, made or not, reaching them.
     fn object_contact(&mut self, geom: usize, first: bool, d: &mut Draft) {

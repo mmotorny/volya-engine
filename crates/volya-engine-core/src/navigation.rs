@@ -271,7 +271,7 @@ struct Link {
 struct Grid {
     body: Body,
     /// The triangles of the movable bodies' boxes in the player's way
-    /// (docs/behavior/trader-door.md 3), walls like the ladders' boxes.
+    /// (docs/behavior/player-body-contacts.md 9), walls like the ladders' boxes.
     walls: Vec<[Vec3; 3]>,
     /// The vertical span columns are probed over.
     y: [f32; 2],

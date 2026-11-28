@@ -624,7 +624,7 @@ pub fn input_capture() -> bool {
 /// while the Night vision button shows and 512 while night vision is
 /// active (#363); 1024 while the PDA window is open over the running level
 /// (the touch PDA button shows over it, #730); 2048 while an object under
-/// the crosshair has a hint (the touch Use button shows, #874).
+/// the crosshair has a hint (the touch Use button shows).
 #[wasm_bindgen]
 pub fn level_controls() -> u32 {
     let keys =

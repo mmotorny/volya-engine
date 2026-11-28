@@ -22,7 +22,6 @@ pub mod detector;
 pub mod diagnostics;
 pub mod dialogs;
 pub mod display;
-pub mod door;
 pub mod file_cache;
 pub mod footsteps;
 pub mod glows;

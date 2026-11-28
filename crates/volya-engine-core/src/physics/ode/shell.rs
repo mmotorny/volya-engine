@@ -281,7 +281,7 @@ impl OdeSolver {
         s
     }
 
-    /// Sets a hinge's motor on its axis (`door` 2.3): its maximum force
+    /// Sets a hinge's motor on its axis (script API Y 5.3): its maximum force
     /// and target velocity.
     pub fn set_hinge_motor(&mut self, joint: JointId, force: f32, velocity: f32) {
         if self.joints.contains_key(&joint) {

@@ -527,7 +527,7 @@ pub struct LevelControls {
     /// vision is active.
     pub night_vision: Option<bool>,
     /// The touch Use button shows: an object under the crosshair has a
-    /// hint (trader-door.md 5.1; #874).
+    /// hint (use-action.md 2.2).
     pub usable: bool,
 }
 
@@ -672,7 +672,7 @@ pub struct App {
     window: ConsoleWindow,
     /// The main menu was active after the previous update.
     menu_was_active: bool,
-    /// The HUD's hint static (trader-door.md 5.2), read when first shown
+    /// The HUD's hint static (`hud-scope` 13, TODO(#180)), read when first shown
     /// and again for another layout.
     quick_info: Option<QuickInfo>,
     /// The game's scripts, once the platform started them
@@ -1379,12 +1379,6 @@ impl App {
             Some(Phase::Level { level, .. }) => level.take_body_events(),
             _ => Vec::new(),
         };
-        // The doors' sounds of this frame (trader-door.md 2.5), taken the
-        // same way.
-        let door_sounds = match &mut self.phase {
-            Some(Phase::Level { level, .. }) => level.take_door_sounds(),
-            _ => Vec::new(),
-        };
         let Some(sounds) = audio.sounds() else {
             // No sound system: the scripts' sounds play nothing (script API
             // T, as with the sound system disabled).
@@ -1503,11 +1497,6 @@ impl App {
                         )
                     {
                         fatal = Some(e);
-                    }
-                }
-                if let Some(level_sounds) = &self.level_sounds {
-                    for sound in &door_sounds {
-                        level_sounds.door(sounds, sound);
                     }
                 }
                 // What the scripts' sounds asked this frame (script API T),
@@ -2537,10 +2526,10 @@ impl App {
                 ..
             }) => {
                 let mut scene = level.scene(resolution);
-                // trader-door.md 5.2, 5.3: the HUD's hint while the player
+                // `hud-scope` 13 (TODO(#180)): the HUD's hint while the player
                 // has one, under the intro and the loading image. Not
                 // while the inventory or the PDA shows (our choice: whether
-                // the HUD hides it then is unestablished, 6; #740).
+                // the HUD hides it then is unestablished; #740).
                 let windows = inventory.as_ref().is_some_and(|i| i.is_open())
                     || pda.as_ref().is_some_and(|p| p.is_open());
                 if let Some((id, start)) = level.doors().hint().filter(|_| !windows) {

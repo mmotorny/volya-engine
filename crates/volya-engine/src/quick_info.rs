@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Maksym Motorny
 // SPDX-License-Identifier: BSD-3-Clause
 
-//! The HUD's hint static `quick_info` (docs/behavior/trader-door.md 5.2,
-//! 5.3): `maingame.xml`'s element, shown exactly while the player has a
+//! The HUD's hint static `quick_info` (docs/behavior/hud-scope.md 13,
+//! `hud-pickup-hint`, whose spec is TODO(#180)): `maingame.xml`'s element, shown exactly while the player has a
 //! hint, its colour animation started again whenever the picked object
 //! changes (docs/formats/colour-animations.md 4).
 
@@ -18,7 +18,7 @@ use volya_engine_formats::ui::layout::{StaticDesc, require};
 use volya_engine_formats::ui::{Color, ColorDefs, Resolution, flag_attr};
 use volya_engine_formats::xml::Document;
 
-/// The HUD's layout file (5.2; `_16` at wide resolutions, `ui-layout`).
+/// The HUD's layout file (`hud-scope` 13; `_16` at wide resolutions, `ui-layout`).
 pub const FILE: &str = "maingame.xml";
 /// The sprites' layer.
 pub const LAYER: &str = "hud quick info";
@@ -148,7 +148,7 @@ mod tests {
         assert!(q.fits(Resolution::new(1024, 768)));
     }
 
-    /// 5.2, 5.3: the text fades in over a second from when the door came
+    /// `hud-scope` 13 (TODO(#180)): the text fades in over a second from when the door came
     /// under the crosshair, and holds.
     #[test]
     fn fades_in_once_from_its_start() {

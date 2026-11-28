@@ -337,11 +337,12 @@ export const tests = {
   "the trader's door: turned to it from the start, running forward stops at it and the HUD shows the door-locked hint; Use plays the servomotor at it and leaves it locked": async () => {
     needsGame();
     let s = await until((s) => s.phase === "level" && !s.intro && !s.menu, "the level's controls");
-    // docs/behavior/trader-door.md: the locked door, 1.7 m from the start,
+    // The locked door (its scheme `ph_door@locked` holds its hinge with
+    // the motor 10000 / 1, script API Y 11), 1.7 m from the start,
     // is behind the start view: turned half round with the right arrow (π
     // rad/s), the run meets it within a metre and a half.
     const door = s.level.doors.find((d) => d.name === "trader_door");
-    assertEqual([door?.section, door?.locked, door?.tip], ["ph_door@locked", true, "tip_door_locked"], "the door's scheme");
+    assertEqual([door?.motor, door?.tip], [[10000, 1], "tip_door_locked"], "the door's scheme");
     const down = (code) => document.body.dispatchEvent(new KeyboardEvent("keydown", { code, bubbles: true, cancelable: true }));
     const up = (code) => document.body.dispatchEvent(new KeyboardEvent("keyup", { code, bubbles: true, cancelable: true }));
     const yaw = s.level.yaw;
@@ -369,17 +370,18 @@ export const tests = {
     const ran = flat(p, start);
     assert(ran > 0.5 && ran < 1.5, `stopped ${ran.toFixed(2)} m from where the run started (the door's face is about 1.1 m away)`);
     assertEqual(s.level.player.hint, "tip_door_locked", "the player's hint");
-    // 5.2: the HUD's hint static draws it.
+    // The HUD's hint static draws it (`hud-scope` 13).
     const frame = await volya.call("menu_scene", { width: 1024, height: 768 });
     const glyphs = frame.sprites.filter((g) => g.layer === "hud quick info");
     assert(glyphs.length >= 10, `${glyphs.length} glyphs of the hint`);
-    // 2.5: Use (F, its default key) plays device\door_servomotor at the
-    // door, leaves it locked, and the run still stops at it.
+    // Use (F, its default key) plays device\door_servomotor at the door
+    // (use-action.md 11.1), leaves it locked, and the run still stops at it.
     await doorSound(false);
     key("KeyF");
     const servo = await doorSound();
     s = await state();
-    assertEqual([s.level.doors[0].section, s.level.doors[0].locked, s.level.player.hint], ["ph_door@locked", true, "tip_door_locked"], "the door after Use");
+    const after = s.level.doors.find((d) => d.name === "trader_door");
+    assertEqual([after.motor, after.tip, s.level.player.hint], [[10000, 1], "tip_door_locked", "tip_door_locked"], "the door after Use");
     const near = flat(servo.position, s.level.player.position);
     assert(!servo.two_d && !servo.looped && near < 3, `the sound 3D at the door: ${JSON.stringify(servo)}, ${near.toFixed(2)} m from the player`);
     down("KeyW");

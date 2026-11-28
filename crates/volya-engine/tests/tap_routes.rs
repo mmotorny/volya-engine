@@ -74,7 +74,7 @@ fn routes_on_the_start_level() {
     let tree = DbVfs::open_game(&root, Some("mods")).unwrap();
     let data = GameData::read(&tree, None, SIZE).unwrap();
     let mut level = LevelScreen::load(&tree, &data, 0).unwrap();
-    // The trader's door is locked at the start (trader-door.md, #874): the
+    // The trader's door is locked at the start (its door scheme): the
     // routes start 1 m past its leaf, on the side away from the start.
     let leaf = level.doors().boxes()[0];
     let start = level.player().state().position;

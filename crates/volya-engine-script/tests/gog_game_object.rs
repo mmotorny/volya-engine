@@ -302,8 +302,9 @@ fn string_in(bytes: &[u8], text: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|w| w == needle)
 }
 
-/// The trader door's record in `spawns\all.spawn` (trader-door.md 1: the
-/// `trader_door` whose logic file is `esc_trader_door.ltx`), with its object
+/// The trader door's record in `spawns\all.spawn` (physics-shells.md 10
+/// and script-api-configuration-and-files.md 9: the `trader_door` whose
+/// logic file is `esc_trader_door.ltx`), with its object
 /// index, and how many records have section `trigger`.
 fn spawn_records(tree: &dyn Vfs, system: &Config) -> ((u32, ObjectRecord), usize) {
     let file = read(tree, "gamedata/spawns/all.spawn").unwrap();

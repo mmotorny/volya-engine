@@ -223,7 +223,9 @@ impl Scripts {
     /// A section without the key binds nothing; a name that finds no
     /// function goes to the message routine, which does nothing; a script
     /// error is fatal (`LUA error: <text>`, D 1.2) and stops the state.
-    fn bind(&mut self, id: u16) -> Result<(), OverrideFailure> {
+    /// `binding`, when given, is called instead of the section's
+    /// (TODO(#1120): the fake of the player's binding).
+    fn bind(&mut self, id: u16, binding: Option<&[u8]>) -> Result<(), OverrideFailure> {
         let registered = self.registered()?;
         let objects = std::rc::Rc::clone(&registered.objects);
         let files = std::rc::Rc::clone(&registered.files);
@@ -234,14 +236,17 @@ impl Scripts {
             };
             (object.section.clone().unwrap_or_default(), object.handle)
         };
-        let name = {
-            let files = files.borrow();
-            match files.system.get(&cp1251::decode(&section), SCRIPT_BINDING) {
-                None => return Ok(()),
-                Some(value) => value.unwrap_or("").trim().to_owned(),
+        let name = match binding {
+            Some(name) => name.to_vec(),
+            None => {
+                let files = files.borrow();
+                let name = match files.system.get(&cp1251::decode(&section), SCRIPT_BINDING) {
+                    None => return Ok(()),
+                    Some(value) => value.unwrap_or("").trim().to_owned(),
+                };
+                cp1251::encode(&name).unwrap_or_else(|| name.as_bytes().to_vec())
             }
         };
-        let name = cp1251::encode(&name).unwrap_or_else(|| name.as_bytes().to_vec());
         let handle = handle.map_or(Value::Nil, Value::Object);
         let results = self
             .guarded(|lua| lua.call_kept(ENTRY, &["bind".into(), Value::String(name), handle]))?;
@@ -267,13 +272,15 @@ impl Scripts {
     /// when the spawn data carries a client-data block, and last
     /// `net_spawn(data)`, whose result is returned (true without a
     /// binder). The engine's own steps between them are its own.
+    /// `binding`, when given, is called instead of the section's.
     pub(super) fn spawn_binder(
         &mut self,
         id: u16,
         data: Value,
         reader: Option<Value>,
+        binding: Option<&[u8]>,
     ) -> Result<bool, OverrideFailure> {
-        self.bind(id)?;
+        self.bind(id, binding)?;
         let section = self
             .game_objects()?
             .borrow()

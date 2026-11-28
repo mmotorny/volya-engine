@@ -1006,7 +1006,7 @@ impl Scripts {
             return Ok(ok);
         };
         self.finish_spawn(id)?;
-        let bound = self.spawn_binder(id, data, reader)?;
+        let bound = self.spawn_binder(id, data, reader, None)?;
         let class = objects.borrow().get(id).map(|o| o.class);
         if class != Some(ObjectClass::Named("CPhysicObject")) {
             // TODO(#1019): gap 1, the simplest reading: the other client
@@ -1041,6 +1041,19 @@ impl Scripts {
         class: ObjectClass,
         data: SpawnData,
     ) -> Result<EnginePart, OverrideFailure> {
+        self.spawn_engine_object_with_binding(class, data, None)
+    }
+
+    /// [`Scripts::spawn_engine_object`] bound by the function `binding`
+    /// names instead of its section's `script_binding`, when given
+    /// (TODO(#1120): the fake of the player's binding, until
+    /// `bind_stalker.actor_init` runs).
+    pub fn spawn_engine_object_with_binding(
+        &mut self,
+        class: ObjectClass,
+        data: SpawnData,
+        binding: Option<&[u8]>,
+    ) -> Result<EnginePart, OverrideFailure> {
         let objects = self.game_objects()?;
         let (token, id) = {
             let mut o = objects.borrow_mut();
@@ -1057,7 +1070,7 @@ impl Scripts {
             .into());
         };
         let handle = self.finish_spawn(id)?;
-        self.spawn_binder(id, Value::Number(f64::from(token)), None)?;
+        self.spawn_binder(id, Value::Number(f64::from(token)), None, binding)?;
         Ok(handle)
     }
 

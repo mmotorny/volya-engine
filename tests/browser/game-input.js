@@ -1734,7 +1734,7 @@ export const tests = {
     // 2.5: the use plays the servomotor and leaves the door locked.
     await doorSound();
     s = await state();
-    assertEqual([s.level.doors[0].locked, s.level.player.hint], [true, "tip_door_locked"], "the door after the touch Use");
+    assertEqual([s.level.doors.find((d) => d.name === "trader_door").tip, s.level.player.hint], ["tip_door_locked", "tip_door_locked"], "the door after the touch Use");
     await doorSound(false);
     // The gamepad's d-pad right (button 15 of the standard mapping).
     const pad = { index: 0, mapping: "standard", axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
@@ -1749,7 +1749,7 @@ export const tests = {
     } finally {
       navigator.getGamepads = getGamepads;
     }
-    assertEqual([s.level.doors[0].locked, s.level.player.hint], [true, "tip_door_locked"], "the door after the d-pad right");
+    assertEqual([s.level.doors.find((d) => d.name === "trader_door").tip, s.level.player.hint], ["tip_door_locked", "tip_door_locked"], "the door after the d-pad right");
     // Turned back to the start view, nothing has a hint.
     const back = s.level.yaw;
     down("ArrowLeft");

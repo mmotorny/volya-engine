@@ -184,8 +184,10 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
         .map(|o| {
             let binding = system.get(o.record.header.section.as_str(), "script_binding");
             let binding = binding.flatten().map(|b| b.trim().to_owned());
-            let door = level.doors().holds(o.id);
-            (o.id, binding.filter(|b| !b.is_empty() && !door))
+            // The doors, and the player under the fake of its binding
+            // (#1120).
+            let runs = level.doors().holds(o.id) || o.id == 0;
+            (o.id, binding.filter(|b| !b.is_empty() && !runs))
         })
         .collect();
     let door = (sim.level_list())
@@ -201,7 +203,8 @@ fn a_new_games_calls_into_scripts_before_the_first_frame() {
     drop(sim);
     let scripts = app.game_scripts().unwrap();
     // TODO(#1077): every one, once the interface their binders call is
-    // implemented; now those without a binding function and the doors.
+    // implemented; now those without a binding function, the doors and the
+    // player.
     let expected: Vec<u16> = (online.iter())
         .filter(|(_, b)| b.is_none())
         .map(|&(id, _)| id)
@@ -321,51 +324,34 @@ end
         "the door's updates"
     );
 
-    // Script API O 5, 6.1 and 10 in the app's level frames: the door's
-    // fast call (ours, standing in for the scheme's `close_door`) runs once
-    // a frame until it returns true; the player's use action on the door
-    // raises its `use_object` on the binder's `use_callback`, as its update
-    // sets it (here wrapped to record the arguments).
+    // Script API O 5, 6.1 and 10 in the app's level frames: the door
+    // scheme's fast call (`close_door`) ran until the door was closed; the
+    // player's use action on the door raises its `use_object` on the
+    // binder's `use_callback`, as its update sets it (here wrapped to
+    // record the arguments).
+    assert_eq!(scripts.scripts().level_calls().unwrap(), 0);
     scripts
         .scripts()
         .exec(
             "=door_calls",
             br#"
-door_calls = { fast = 0 }
-function door_calls_set(d)
-  local b = d:binded_object()
-  b.use_callback = function(self, obj, who)
-    door_calls.used = { rawequal(self, b), obj:id(), who and who:id() }
+local binder = bind_physic_object.generic_physics_binder
+local use = binder.use_callback
+binder.use_callback = function(self, obj, who)
+  if obj:name() == "trader_door" then
+    door_used = { rawequal(self, obj:binded_object()), obj:id(), who and who:id() }
   end
-  d:set_callback(callback.use_object, b.use_callback, b)
-  d:set_fastcall(function(v) v.fast = v.fast + 1; return v.fast == 3 end, door_calls)
+  return use(self, obj, who)
 end
 function door_calls_read()
-  local u = door_calls.used
-  if not u then return door_calls.fast end
-  return door_calls.fast, u[1], u[2], u[3]
+  if not door_used then return nil end
+  return door_used[1], door_used[2], door_used[3]
 end
 "#,
         )
         .unwrap();
-    scripts
-        .scripts()
-        .call("door_calls_set", &[Value::Object(handle)])
-        .unwrap();
-    assert_eq!(scripts.scripts().level_calls().unwrap(), 1);
-    for _ in 0..5 {
-        step(&mut app, &mut input);
-    }
-    let scripts = app.game_scripts().unwrap();
-    assert_eq!(
-        scripts.scripts().call("door_calls_read", &[]).unwrap(),
-        [Value::Number(3.0)],
-        "the fast call, three frames"
-    );
-    assert_eq!(scripts.scripts().level_calls().unwrap(), 0);
 
-    // Facing the leaf from 0.6 m in front of it (trader-door.md 2.5), a
-    // use.
+    // Facing the leaf from 0.6 m in front of it, a use.
     let level = app.level_mut().unwrap();
     let leaf = level.doors().boxes()[0];
     let start = level.player().state().position;
@@ -406,12 +392,9 @@ end
     assert_eq!(
         scripts.scripts().call("door_calls_read", &[]).unwrap(),
         [
-            Value::Number(3.0),
             Value::Boolean(true),
             Value::Number(f64::from(door)),
-            // TODO(#1077): the player's handle, once its binder runs; the
-            // player isn't in the scripts yet, so nil (O 3.2).
-            Value::Nil,
+            Value::Number(0.0),
         ],
         "the door's use callback: the binder, the door, the user"
     );
@@ -495,8 +478,7 @@ end
 
     // Script API P over the game's own portions: a give to the player
     // through the scripts' story (as a dialog's effect gives it) is the
-    // level's, and the scripts see it a frame later. TODO(#1077): through
-    // the player's `give_info_portion` once its binder lets it spawn.
+    // level's, and the scripts see it a frame later.
     let scripts = app.game_scripts().unwrap();
     (scripts.scripts().give_to_player("esc_trader_can_leave")).unwrap();
     step(&mut app, &mut input);
