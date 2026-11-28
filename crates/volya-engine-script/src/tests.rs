@@ -262,6 +262,49 @@ mod game_object {
     }
 }
 
+/// Object binders' checks, one test per section of
+/// docs/behavior/script-api-object-binders.md (all of them run in
+/// [`selftest`] too, on every target).
+mod object_binder {
+    use crate::selftest::object_binder as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn the_class() {
+        section(checks::class);
+    }
+
+    #[test]
+    fn the_binding() {
+        section(checks::binding);
+    }
+
+    #[test]
+    fn bind_object_and_binded_object() {
+        section(checks::bind_object);
+    }
+
+    #[test]
+    fn spawning() {
+        section(checks::spawning);
+    }
+
+    #[test]
+    fn update_and_saving() {
+        section(checks::update_and_saving);
+    }
+
+    #[test]
+    fn release_and_destroying() {
+        section(checks::destroying);
+    }
+}
+
 /// The value types' checks, one test per section of
 /// docs/behavior/script-api-value-types-and-math.md (all of them run in
 /// [`selftest`] too, on every target).

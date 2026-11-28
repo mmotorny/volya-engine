@@ -175,7 +175,8 @@ fn state() -> Result<State, String> {
         ),
     ];
     for (class, data) in spawned {
-        s.spawn_engine_object(class, data).map_err(|e| e.message)?;
+        s.spawn_engine_object(class, data)
+            .map_err(|e| e.to_string())?;
     }
     Ok(State {
         s,

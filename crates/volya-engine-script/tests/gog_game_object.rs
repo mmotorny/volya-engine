@@ -523,7 +523,8 @@ fn shipped_uses_of_game_object_basics() {
         stand_ins.entry(name).or_insert_with(|| vec![0]);
     }
     for (name, counts) in stand_ins {
-        if ours.contains(name) {
+        // `object_binder` is spec L's, registered with this spec's names.
+        if ours.contains(name) || name == "object_binder" {
             continue;
         }
         let mut class = EngineClass::new(name);
@@ -578,7 +579,9 @@ fn shipped_uses_of_game_object_basics() {
     let player = SpawnData {
         id: 0,
         name: b"actor".to_vec(),
-        section: b"actor".to_vec(),
+        // A section without `script_binding`: the player's binder (spec L)
+        // needs names of specs this test doesn't register.
+        section: b"test_actor_without_binding".to_vec(),
         class_id: class_id(b"O_ACTOR"),
         story_id: -1,
         custom_data: Vec::new(),

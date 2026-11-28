@@ -182,6 +182,17 @@ pub struct ObjectMaker {
 }
 
 impl ObjectMaker {
+    /// A copy of the part of object argument `value` if it is a `T`;
+    /// `None` for anything else.
+    pub fn get<T: Any + Clone>(&self, value: &Value) -> Option<T> {
+        let Value::Object(EnginePart(id)) = value else {
+            return None;
+        };
+        let part = self.state.part(*id).ok()?;
+        let part = part.try_borrow().ok()?;
+        part.downcast_ref::<T>().cloned()
+    }
+
     /// A new object of engine class `class` holding `part`, owned by the
     /// script side and collected like a constructed one
     /// ([`Objects::new_object`]).
@@ -489,7 +500,7 @@ impl From<Error> for OverrideFailure {
 }
 
 /// The message the engine's error handler doesn't log (5.3).
-const NOT_LOGGED: &str = "cannot resume dead coroutine";
+pub(crate) const NOT_LOGGED: &str = "cannot resume dead coroutine";
 
 impl Lua {
     /// Opens the class system, as the binding library's opening does for

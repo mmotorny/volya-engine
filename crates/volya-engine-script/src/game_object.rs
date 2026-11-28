@@ -7,7 +7,8 @@
 //! zone, use and trade members and its constants ([`members`]), the class
 //! `hit`, the class `CGameObject` with the overrides the engine calls, the
 //! engine client classes (with the unlisted `CPhysicObject`) and
-//! `explosive` ([`engine_classes`]).
+//! `explosive` ([`engine_classes`]); object binders (script API L,
+//! [`object_binder`]).
 //!
 //! What scripts read and change is [`GameObjects`]: the engine objects as
 //! scripts see them ([`GameObject`], made from their spawn data,
@@ -21,6 +22,7 @@
 
 mod engine_classes;
 pub mod members;
+pub mod object_binder;
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -492,6 +494,8 @@ pub struct GameObject {
     spawn_ini: Option<EnginePart>,
     /// Its `CGameObject`, for an object spawned through one.
     client: Option<EnginePart>,
+    /// Its attached binder (spec L 4).
+    binder: Option<EnginePart>,
 }
 
 impl GameObject {
@@ -546,6 +550,7 @@ impl GameObject {
             handle: None,
             spawn_ini: None,
             client: None,
+            binder: None,
         }
     }
 
@@ -807,6 +812,7 @@ impl Scripts {
         for class in engine_classes::classes(&ctx) {
             self.register_class(class)?;
         }
+        object_binder::install(self, &ctx)?;
         self.game_object_state = Some(Registered {
             objects: ctx.objects,
             services: ctx.services,
@@ -844,13 +850,44 @@ impl Scripts {
     /// object (3) with its handle and, for non-empty custom data, its
     /// `spawn_ini()` configuration. `data` reaches scripts as a token
     /// standing for spec J's server object (TODO(#1029)).
+    ///
+    /// Then the binder's part of spawning (spec L 5.1,
+    /// [`object_binder`]): the binding and the attached binder's calls,
+    /// after `net_Spawn` returns (so an override's code after its base call
+    /// runs before them, TODO(#1053)). Its `net_spawn` result is the
+    /// spawning's, except for `CPhysicObject`, which always succeeds (L 6).
+    /// A spawning that fails after making the object destroys it and logs
+    /// `! Failed to spawn entity '<section>'` (L 5.1).
     pub fn spawn(&mut self, client: EnginePart, data: SpawnData) -> Result<bool, OverrideFailure> {
+        self.spawn_with(client, data, None)
+    }
+
+    /// [`Scripts::spawn`] from spawn data carrying a client-data block
+    /// (sav.md 8): after the object reads its own state from the block,
+    /// its binder's `load(reader)` reads on (spec L 5.1 step 5). `reader`
+    /// is spec I's reader over the block.
+    pub fn spawn_saved(
+        &mut self,
+        client: EnginePart,
+        data: SpawnData,
+        reader: Value,
+    ) -> Result<bool, OverrideFailure> {
+        self.spawn_with(client, data, Some(reader))
+    }
+
+    fn spawn_with(
+        &mut self,
+        client: EnginePart,
+        data: SpawnData,
+        reader: Option<Value>,
+    ) -> Result<bool, OverrideFailure> {
         let objects = self.game_objects()?;
         let token = objects.borrow_mut().pend(data);
+        let data = Value::Number(f64::from(token));
         let result = self.dispatch(
             client,
             "net_Spawn",
-            &[Value::Number(f64::from(token))],
+            std::slice::from_ref(&data),
             Conversion::Value,
         );
         let spawned = objects
@@ -859,35 +896,64 @@ impl Scripts {
             .remove(&token)
             .and_then(|(_, id)| id);
         let result = result?;
-        if let Some(id) = spawned {
-            self.finish_spawn(id)?;
+        let mut ok = !matches!(result, Value::Nil | Value::Boolean(false));
+        let Some(id) = spawned else {
+            return Ok(ok);
+        };
+        self.finish_spawn(id)?;
+        let bound = self.spawn_binder(id, data, reader)?;
+        let class = objects.borrow().get(id).map(|o| o.class);
+        if class != Some(ObjectClass::Named("CPhysicObject")) {
+            // TODO(#1019): gap 1, the simplest reading: the other client
+            // classes pass the result on, as `CGameObject` does.
+            ok &= bound;
         }
-        Ok(!matches!(result, Value::Nil | Value::Boolean(false)))
+        if !ok {
+            let section = objects
+                .borrow()
+                .get(id)
+                .and_then(|o| o.section.clone())
+                .unwrap_or_default();
+            self.destroy_object(id)?;
+            let services = Rc::clone(&self.registered()?.services);
+            services.borrow_mut().console.log_mut().message(&format!(
+                "! Failed to spawn entity '{}'",
+                cp1251::decode(&section)
+            ));
+        }
+        Ok(ok)
     }
 
     /// Spawns an engine object of `class` that no `CGameObject` stands for
     /// (the engine's own kinds, as the player's object): the engine object
-    /// (3) with its handle, which is returned.
+    /// (3) with its handle, which is returned, then the binder's part of
+    /// spawning (spec L 5.1), whose result it ignores (TODO(#1019): gap 1,
+    /// the simplest reading: these kinds' spawning reaches the general one;
+    /// whether a false result fails it is their spec's). The binder's
+    /// `net_spawn` gets the spawn data's token.
     pub fn spawn_engine_object(
         &mut self,
         class: ObjectClass,
         data: SpawnData,
-    ) -> Result<EnginePart, Error> {
+    ) -> Result<EnginePart, OverrideFailure> {
         let objects = self.game_objects()?;
-        let id = {
+        let (token, id) = {
             let mut o = objects.borrow_mut();
             let token = o.pend(data);
             let id = o.spawn_pending(token, class, &self.factory, None);
             o.pending.remove(&token);
-            id
+            (token, id)
         };
         let Some(id) = id else {
             return Err(Error {
                 kind: ErrorKind::Api,
                 message: "an object of that id exists".into(),
-            });
+            }
+            .into());
         };
-        self.finish_spawn(id)
+        let handle = self.finish_spawn(id)?;
+        self.spawn_binder(id, Value::Number(f64::from(token)), None)?;
+        Ok(handle)
     }
 
     /// The handle and `spawn_ini()` object of a new engine object. The
@@ -946,12 +1012,17 @@ impl Scripts {
     }
 
     /// Destroys engine object `id` (it goes offline or is removed, 2.1):
-    /// its handle and its `spawn_ini()` object are released, so members
-    /// called on a handle scripts still hold fail (our choice: the spec
-    /// has it unestablished), and its `CGameObject` no longer stands for
-    /// it. `false` if there is no such object.
-    pub fn destroy_object(&mut self, id: u16) -> Result<bool, Error> {
+    /// its attached binder gets `net_destroy()` and is deleted (spec L
+    /// 5.6), then its handle and its `spawn_ini()` object are released, so
+    /// members called on a handle scripts still hold fail (our choice: the
+    /// spec has it unestablished), and its `CGameObject` no longer stands
+    /// for it. `false` if there is no such object.
+    pub fn destroy_object(&mut self, id: u16) -> Result<bool, OverrideFailure> {
         let objects = self.game_objects()?;
+        if objects.borrow().get(id).is_none() {
+            return Ok(false);
+        }
+        self.destroy_binder(id)?;
         let Some(object) = objects.borrow_mut().objects.remove(&id) else {
             return Ok(false);
         };
