@@ -109,10 +109,16 @@ The masks are fixed (set when the world is made) [P3]. Bits 0x40 and 0x80 are wr
 small-object keys have **no effect** [P5]. Bit 0x2 is read only by the pass (1.1, item 3) [P5]; neither the ray
 pass nor the level pass applies the filter [P11, P1].
 
-**Ignore characters (0x20).** A shell can carry a mark "ignore characters once at rest"; when such a shell comes
-to rest (all its bodies switched off, `world` 4.4) it gets bit 0x20, and nothing clears it. A death shell gets
-the mark when activated in single play, and bit 0x20 at once in one state of the dying character (meaning
-**unestablished**) (PH-15) [P10]. Which other shells get the mark is **unestablished**.
+**Ignore characters (0x20).** A shell can carry a mark "ignore characters once at rest". A shell is made without
+it, and only a death shell gets it: when activated in single play; nothing else gives a shell the mark [P10, R1,
+R2]. A shell carrying the mark gets bit 0x20 each time, after a step in which it was active, none of its bodies is
+left switched on (`world` 4.4), so also when it comes to rest again after being woken; it gets it too when it is
+switched off as a whole (as below the floor, `world` 4.5), when it is taken out of the world (deactivated), and
+when one of its elements is given a state with its body switched off while that body is on [R4]. Being activated
+switched off (`root` 3.1) does not give it: such a shell gets bit 0x20 only once it has been woken and then comes
+to rest or is switched off [R4]. Whether code outside the physics part of the game library runs that routine too
+is **unestablished**. Besides, a death shell gets bit 0x20 at once in one state of the dying character (meaning
+**unestablished**) (PH-15) [P10]. Bit 0x20 is set in no other way, and nothing clears it [R3, R6].
 
 In the data `[collide]` reaches the class only as `shells` 5.2 states (`ignore_static` 704 records,
 `not_collide_parts` 39 models, `ignore_ragdoll` 3 records); `small_object` keys change nothing (above).
@@ -348,7 +354,16 @@ first geometries, so contact normals point from the movable body towards the pla
 the other object's pass (that object active and earlier in the active objects) the order and the normal's sign
 are reversed. Its contact rules for movable bodies (the touch flag, traction 1, the normal softening) are PH-8's
 (`door` 3.3, `step`). It has no motion rays [P9]. The liquid damping reaches it (2.4: through its pre-step)
-[C5].
+[C5]. Its class word never gets 0x8, 0x20 or 0x200 (only shells' setters write them) [R3, R6].
+
+**Material.** Its four shapes get material index 0 (`default`) when the body is made (`cform` 5.1) [M1]. The
+actor's spawn then, in one routine, (re)builds the body and gives its four shapes the material named by the
+`material` key of the actor's section, looked up by name without regard to case (a section without the key is a
+fatal error) [M1 – M3]: `config\creatures\actor.ltx`, section `actor`, `material = creatures\actor` (index 53)
+[M5]. The material is kept with the body's settings, and a later rebuild of the body through those settings
+gives it again [M1, M2]; nothing else sets the shapes' material [M4]. So the body carries `creatures\actor` from
+the spawn on (**believed**: no step runs between the two parts of that routine). `creatures\actor`: friction 0.8,
+damping 1, spring 0.8; not bouncy, not pass-through, not liquid [M5]. This settles `cform` 5.1's open point.
 
 ## 6. Which bodies a contact joins (summary)
 
@@ -364,11 +379,12 @@ What the game does, from the data and sections 1 – 6:
 
 1. **Classes.** The door object's shell: 0x4 (made), 0x2 (`ignore_static`, with its fixed bone `link`), no group
    number (its model has no user data, `shells` 10); the player's body: 0x4 | 0x10. The filter passes [P3, T1].
-   **Disputed in review:** established only for the bits set when the two are made. Whether the door's shell
-   carries the "ignore characters once at rest" mark (1.3) is **unestablished** (1.3 leaves open which shells
-   besides death shells get it); with it, the door would get bit 0x20 once at rest and the filter would
-   exclude the player's body (bit 0x10) from then on, so 2. below holds only without that mark.
-   The door's shell never meets the level; its frame element has no geometry (`root` 1.3), so the leaf's box is
+   Neither word changes later: the door's shell (of the ordinary shell kind [R5]) never gets the "ignore
+   characters once at rest" mark, which only death shells get (1.3), so it never gets bit 0x20, whether it rests
+   from the start (`root` 3.1), has been woken or has come to rest again; 0x8 is not set in single play; the
+   player's body never gets 0x8, 0x20 or 0x200 (section 5) [R1 – R6]. So the filter passes at every step, and the
+   closed door at rest blocks the player's body from the moment its shell is entered in the index, as an active
+   door does (2. below). The door's shell never meets the level; its frame element has no geometry (`root` 1.3), so the leaf's box is
    its only geometry.
 2. **When.** The door's shell starts at rest (`root` 3.1) with its "to be collided" mark set; every step in
    which the player's box overlaps the door's (the outer sphere's reach included), the player's pass collides
@@ -378,9 +394,10 @@ What the game does, from the data and sections 1 – 6:
 3. **Geometry.** Bottom, head and outer spheres against the leaf's box: library sphere–box, at most 1 contact each;
    torso cylinder against the box: the game's cylinder–box, up to 3 contacts (4.3). Normals from the leaf
    towards the player's shape.
-4. **Properties.** Materials `default` (the player's, `cform` 5.1) and `objects\large_metal_trash`: μ = 1,
-   the world's softness (ERP 0.375, CFM 1.5625 × 10⁻⁶ at `h` = 0.01 before the player's rules), no bounce
-   (`default` is not bouncy), not pass-through, not liquid [T1]. Friction becomes infinite only if one of the
+4. **Properties.** Materials `creatures\actor` (the player's, section 5) and `objects\large_metal_trash`:
+   μ = 0.8; `k = h × 0.8 × 1 × S`, `d = 1 × 1 × D`, so ERP 0.3243 and CFM 1.689 × 10⁻⁶ at `h` = 0.01 (before the
+   player's rules); no bounce (`creatures\actor` is not bouncy), not pass-through, not liquid [T1, M5].
+   Friction becomes infinite only if one of the
    player's shapes holds a crossed-triangle record from the floor (3.3).
 5. **Handling.** The player's shapes' callbacks (the outer sphere's), then the player's body rules (PH-8);
    kept contacts join the player's body and the leaf's body, in the player's group; the door's group merges in
@@ -395,23 +412,26 @@ player's rules of PH-8.
 ## 8. Unestablished and believed
 
 - The spatial index's box and ray query tests (1.1, 1.4).
-- Which objects set class bit 0x100, which shells get the "ignore characters once at rest" mark besides death
-  shells, the character state that sets 0x20 at once (1.3); which other objects get the ray mark (1.4).
+- Which objects set class bit 0x100, the character state that sets 0x20 at once, whether code outside the
+  physics part of the game library runs the routine giving a marked shell bit 0x20 (1.3); which other objects get
+  the ray mark (1.4).
 - The ray–cylinder test (1.4).
 - The level: the triangle overlap tests (3.2); the crossing candidates' rules and the second record's choice
   (3.3); the box's cross-axis contact point and code-0 per-vertex depths (3.4); the cylinder's ordinary contacts
   (3.4); which geometries carry triangle callbacks.
 - Cylinder–box's 0.70710677 test quantity; cylinder–cylinder and cylinder–plane (4.3).
 - **Believed**: geometries offset from their body sit in geometry transforms (4.1); the liquid rule's 10⁻⁷ test
-  is on `k` (2.4); the object box's radius serves the index (1.1).
+  is on `k` (2.4); the object box's radius serves the index (1.1); no step runs inside the actor's spawn routine
+  that sets the player's material (5).
 
 ## 9. Provenance
 
 - Date: 2026-11-27.
 - Edition: S.T.A.L.K.E.R.: Shadow of Chernobyl, Russian edition (GOG), archives `gamedata.db0` …
   `gamedata.dbd` (merged view); binary `bin\xrGame.dll`.
-- Data examined: `gamemtl.xr` (materials `default`, `objects\large_metal_trash`), the trader's door record and
-  model (through the trader-door checks' readers).
+- Data examined: `gamemtl.xr` (materials `default`, `objects\large_metal_trash`, `creatures\actor`),
+  `config\creatures\actor.ltx` (section `actor`), the trader's door record and model (through the trader-door
+  checks' readers).
 - Public material: ODE 0.5.0 as released (its source, `include/ode/contact.h`, the collision utilities and
   `contrib/dCylinder/dCylinder.cpp`).
 - Analysis: static analysis of `bin\xrGame.dll` (headless decompilation and instruction listings with Ghidra) of
@@ -420,11 +440,10 @@ player's rules of PH-8.
   record and force, the motion rays and the ray geometry, the level geometry kind and its colliders for spheres,
   boxes and cylinders (query, triangle cache, front side, crossed-triangle records, per-triangle contacts,
   push-out contacts), the cylinder kind and its colliders, the death shell's and missiles' class settings;
-  constants read from the binary. No execution or debugging; the game was not run. The checks in
+  the "ignore characters once at rest" mark (its one setter and every call through its slot), the routine giving
+  bit 0x20 and its callers, every write of the class word, the shell kind of a type-3 physics object; the
+  player's body's material (its setter and every call through its slot, the section's material key, the actor's
+  spawn); constants read from the binary. No execution or debugging; the game was not run. The checks in
   `checks/physics-contacts/` reproduce every fact.
 - No leaked source code, derived projects or third-party documentation of the engine were used.
 
-## Gaps found in review
-
-- The player's material after its body is made (`physics-scope` 2 assigns it to PH-4; `cform` 5.1 leaves it open): section 7.4 uses the material at creation, `default`, without establishing whether it changes later.
-- Whether the trader's door shell has the "ignore characters once at rest" mark, and whether a shell that starts switched off (`root` 3.1) or comes to rest again after waking gets bit 0x20 by it.
