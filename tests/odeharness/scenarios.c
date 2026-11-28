@@ -1411,6 +1411,466 @@ static void s_angular_mass (void)
   }
 }
 
+/* ---- the review gaps of physics-harness-3.md (#944) ---- */
+
+/* a signed permutation of the axes, of determinant 1: column c of the
+** identity's column perm[c] times sign[c] */
+static void signed_permutation (int *perm, float *sign)
+{
+  static const int perms[6][3] = {{0, 1, 2}, {1, 2, 0}, {2, 0, 1}, {0, 2, 1}, {2, 1, 0}, {1, 0, 2}};
+  int p = (int) (next () % 6);
+  for (int k = 0; k < 3; k++) {
+    perm[k] = perms[p][k];
+    sign[k] = (next () & 1) ? -1.0f : 1.0f;
+  }
+  /* the last three permutations are odd */
+  if ((p >= 3) != (sign[0] * sign[1] * sign[2] < 0)) sign[2] = -sign[2];
+}
+
+/* R's columns permuted and signed (exact), the fourth column zero: from the
+** identity when R is NONE */
+static void permute_columns (dReal *out, const dReal *R)
+{
+  int perm[3];
+  float sign[3];
+  signed_permutation (perm, sign);
+  memset (out, 0, 12 * 4);
+  for (int r = 0; r < 3; r++)
+    for (int c = 0; c < 3; c++) {
+      float x = R ? R[r * 4 + perm[c]] : (float) (r == perm[c]);
+      out[r * 4 + c] = sign[c] < 0 ? -x : x;
+    }
+}
+
+/* a multiple of 1/8 in [lo/8, hi/8] */
+static float eighths (int lo, int hi)
+{
+  return (float) (lo + (int) (next () % (uint32_t) (hi - lo + 1))) * 0.125f;
+}
+
+/* capped cylinder-box where the segment's initial derivative of the squared
+** distance is a zero (2.2: its start inside the box's slabs, or its
+** direction along the box's axes): sizes and positions in eighths, lengths
+** 0 among them, the cylinder's centre inside the box or around it. Kinds:
+** 0 both at rotations of exact entries (signed permutations), the centre
+** inside; 1 the same, inside, on the faces or up to two half-sides beyond;
+** 2 the same with length 0; 3 the box at exact entries, the cylinder at a
+** general rotation, the centre inside; 4 both general, the centre inside;
+** 5 the box general, the cylinder along one of its axes (its rotation's
+** columns permuted), inside or beyond. Each case: both geometries as read
+** back, the contacts at most 1 and at most 8 asked for, then at most 1 with
+** the box first (its kind plus 16) */
+static void s_ccylinder_box (void)
+{
+  dGeomID ccyl = H->dCreateCCylinder (0, 0.3f, 1), box = H->dCreateBox (0, 1, 1, 1);
+  for (int i = 0; i < 6000; i++) {
+    int k = i % 6;
+    float hx = eighths (1, 16), hy = eighths (1, 16), hz = eighths (1, 16);
+    H->dGeomBoxSetLengths (box, hx, hy, hz);
+    float radius = eighths (1, 6), length = k == 2 ? 0 : eighths (0, 16);
+    H->dGeomCCylinderSetParams (ccyl, radius, length);
+    float bx = eighths (-80, 80), by = eighths (-80, 80), bz = eighths (-80, 80);
+    H->dGeomSetPosition (box, bx, by, bz);
+    dReal Rb[12], Rc[12];
+    if (k < 4) permute_columns (Rb, NONE);
+    else posed_rotation (Rb);
+    H->dGeomSetRotation (box, Rb);
+    if (k == 3 || k == 4) posed_rotation (Rc);
+    else permute_columns (Rc, k == 5 ? Rb : NONE);
+    H->dGeomSetRotation (ccyl, Rc);
+    /* the centre's offset from the box's, in eighths, in the box's frame */
+    int half[3] = {(int) (hx * 4), (int) (hy * 4), (int) (hz * 4)};
+    float o[3];
+    for (int e = 0; e < 3; e++) {
+      int reach = k == 1 || k == 2 || k == 5 ? 3 * half[e] : half[e];
+      o[e] = eighths (-reach, reach);
+    }
+    if (k >= 4) {
+      float x = Rb[0] * o[0] + Rb[1] * o[1] + Rb[2] * o[2];
+      float y = Rb[4] * o[0] + Rb[5] * o[1] + Rb[6] * o[2];
+      float z = Rb[8] * o[0] + Rb[9] * o[1] + Rb[10] * o[2];
+      o[0] = x, o[1] = y, o[2] = z;
+    }
+    H->dGeomSetPosition (ccyl, bx + o[0], by + o[1], bz + o[2]);
+    rec_geom_state (ccyl);
+    rec_geom_state (box);
+    for (int max = 1; max <= 8; max += 7) collide_posed (ccyl, box, (uint32_t) k, max, -1);
+    collide_posed (box, ccyl, (uint32_t) k + 16, 1, -1);
+  }
+  H->dGeomDestroy (ccyl);
+  H->dGeomDestroy (box);
+}
+
+/* the joint kinds of joints-posed */
+enum {
+  J_BALL, J_HINGE, J_SLIDER, J_UNIVERSAL, J_HINGE2, J_FIXED, J_FIXED_POSE, J_AMOTOR, J_EULER,
+  J_KINDS
+};
+
+/* a joint's getters (`kind' as joints-posed's), one record: ball the two
+** anchors; hinge the two anchors, the axis, the angle and its rate; slider
+** the axis, the position and its rate; universal the two anchors, the two
+** axes, the two angles and their rates; hinge-2 the two anchors, the two
+** axes, angle 1 and the two rates; angular motor the mode, the axis count,
+** then per axis its relative body, the axis and the angle; fixed none */
+static void rec_joint_getters (dJointID j, int kind)
+{
+  dReal v[32], t[4];
+  int n = 0;
+#define GET3(f) do { memset (t, 0, sizeof t); H->f (j, t); memcpy (v + n, t, 12); n += 3; } while (0)
+  switch (kind) {
+  case J_BALL:
+    GET3 (dJointGetBallAnchor);
+    GET3 (dJointGetBallAnchor2);
+    break;
+  case J_HINGE:
+    GET3 (dJointGetHingeAnchor);
+    GET3 (dJointGetHingeAnchor2);
+    GET3 (dJointGetHingeAxis);
+    v[n++] = H->dJointGetHingeAngle (j);
+    v[n++] = H->dJointGetHingeAngleRate (j);
+    break;
+  case J_SLIDER:
+    GET3 (dJointGetSliderAxis);
+    v[n++] = H->dJointGetSliderPosition (j);
+    v[n++] = H->dJointGetSliderPositionRate (j);
+    break;
+  case J_UNIVERSAL:
+    GET3 (dJointGetUniversalAnchor);
+    GET3 (dJointGetUniversalAnchor2);
+    GET3 (dJointGetUniversalAxis1);
+    GET3 (dJointGetUniversalAxis2);
+    v[n++] = H->dJointGetUniversalAngle1 (j);
+    v[n++] = H->dJointGetUniversalAngle2 (j);
+    v[n++] = H->dJointGetUniversalAngle1Rate (j);
+    v[n++] = H->dJointGetUniversalAngle2Rate (j);
+    break;
+  case J_HINGE2:
+    GET3 (dJointGetHinge2Anchor);
+    GET3 (dJointGetHinge2Anchor2);
+    GET3 (dJointGetHinge2Axis1);
+    GET3 (dJointGetHinge2Axis2);
+    v[n++] = H->dJointGetHinge2Angle1 (j);
+    v[n++] = H->dJointGetHinge2Angle1Rate (j);
+    v[n++] = H->dJointGetHinge2Angle2Rate (j);
+    break;
+  case J_AMOTOR:
+  case J_EULER:
+    /* not dJointGetAMotorAngleRate: 0.5.0 leaves it unimplemented */
+    v[n++] = from_bits ((uint32_t) H->dJointGetAMotorMode (j));
+    v[n++] = from_bits ((uint32_t) H->dJointGetAMotorNumAxes (j));
+    for (int a = 0; a < 3; a++) {
+      v[n++] = from_bits ((uint32_t) H->dJointGetAMotorAxisRel (j, a));
+      memset (t, 0, sizeof t);
+      H->dJointGetAMotorAxis (j, a, t);
+      memcpy (v + n, t, 12);
+      n += 3;
+      v[n++] = H->dJointGetAMotorAngle (j, a);
+    }
+    break;
+  default:
+    break;
+  }
+#undef GET3
+  rec_floats (T_JOINT, v, (uint32_t) n);
+}
+
+/* three uniform components, not normalised */
+static void rand_direction (dReal *d)
+{
+  float x = uni (-1, 1), y = uni (-1, 1), z = uni (-1, 1);
+  d[0] = x, d[1] = y + 0.01f, d[2] = z;
+}
+
+/* the joint setters and getters at general rotations (5.1 rule 1, 5.2):
+** per case a world of its own and one joint, the kinds in turn (ball,
+** hinge, slider, universal, hinge-2, fixed by dJointSetFixed, fixed by
+** dJointSetFixedQuaternionPos, angular motor in user mode with three axes,
+** in Euler mode), attached to two bodies (0), to one with the world second
+** (1) or to one given second, the world first (2; hinge-2 always two, its
+** setters need both); the bodies at rotations of rand_rotation's kind, the
+** setters with an anchor near the first body and general axes, limits on
+** half the cases. Per case: the kind, attachment and stepper (1 for the
+** exact), the setters' inputs (anchor, two directions, a quaternion and a
+** position), the bodies, the getters; then the bodies moved (turned by up
+** to 0.2 more about their axes, shifted, given velocities), the bodies and
+** the getters again; then one step and the bodies, the joint's feedback and
+** the getters after */
+static void s_joints_posed (void)
+{
+  for (int i = 0; i < 2700; i++) {
+    int kind = i % J_KINDS, attach = (i / J_KINDS) % 3, exact = (i / (3 * J_KINDS)) & 1;
+    int limits = (i / (6 * J_KINDS)) & 1;
+    if (kind == J_HINGE2) attach = 0;
+    dWorldID w = game_world ();
+    dBodyID b[2];
+    float axis_angle[2][4];
+    for (int k = 0; k < 2; k++) {
+      b[k] = H->dBodyCreate (w);
+      dMass m;
+      float total = uni (2, 40), lx = uni (0.2f, 1), ly = uni (0.2f, 1), lz = uni (0.2f, 1);
+      H->dMassSetBoxTotal (&m, total, lx, ly, lz);
+      H->dBodySetMass (b[k], &m);
+      float x = uni (-3, 3), y = uni (1, 6), z = uni (-3, 3);
+      H->dBodySetPosition (b[k], x, y, z);
+      float ax = uni (-1, 1), ay = uni (-1, 1), az = uni (-1, 1), an = uni (-3.1f, 3.1f);
+      axis_angle[k][0] = ax, axis_angle[k][1] = ay, axis_angle[k][2] = az + 0.01f;
+      axis_angle[k][3] = an;
+      dReal R[12];
+      memset (R, 0, sizeof R);
+      H->dRFromAxisAndAngle (R, axis_angle[k][0], axis_angle[k][1], axis_angle[k][2], axis_angle[k][3]);
+      H->dBodySetRotation (b[k], R);
+    }
+    dBodyID first = attach == 2 ? NONE : b[0];
+    dBodyID second = attach == 0 ? b[1] : attach == 2 ? b[0] : NONE;
+    dReal in[16];
+    memset (in, 0, sizeof in);
+    {
+      const dReal *p0 = H->dBodyGetPosition (b[0]);
+      float x = uni (-0.5f, 0.5f), y = uni (-0.5f, 0.5f), z = uni (-0.5f, 0.5f);
+      in[0] = p0[0] + x, in[1] = p0[1] + y, in[2] = p0[2] + z;
+    }
+    rand_direction (in + 3);
+    rand_direction (in + 6);
+    {
+      float ax = uni (-1, 1), ay = uni (-1, 1), az = uni (-1, 1), an = uni (-3.1f, 3.1f);
+      H->dQFromAxisAndAngle (in + 9, ax, ay, az + 0.01f, an);
+      float x = uni (-3, 3), y = uni (1, 6), z = uni (-3, 3);
+      in[13] = x, in[14] = y, in[15] = z;
+    }
+    uint32_t head[3] = {(uint32_t) kind, (uint32_t) attach, (uint32_t) exact};
+    rec (T_FLAG, head, 3);
+    rec_floats (T_VEC, in, 16);
+    dJointID j;
+    switch (kind) {
+    case J_BALL:
+      j = H->dJointCreateBall (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetBallAnchor (j, in[0], in[1], in[2]);
+      break;
+    case J_HINGE:
+      j = H->dJointCreateHinge (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetHingeAnchor (j, in[0], in[1], in[2]);
+      H->dJointSetHingeAxis (j, in[3], in[4], in[5]);
+      if (limits) {
+	H->dJointSetHingeParam (j, dParamLoStop, -0.1f);
+	H->dJointSetHingeParam (j, dParamHiStop, 0.1f);
+	H->dJointSetHingeParam (j, dParamBounce, 0.3f);
+      }
+      break;
+    case J_SLIDER:
+      j = H->dJointCreateSlider (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetSliderAxis (j, in[3], in[4], in[5]);
+      if (limits) {
+	H->dJointSetSliderParam (j, dParamLoStop, -0.05f);
+	H->dJointSetSliderParam (j, dParamHiStop, 0.05f);
+      }
+      break;
+    case J_UNIVERSAL:
+      j = H->dJointCreateUniversal (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetUniversalAnchor (j, in[0], in[1], in[2]);
+      H->dJointSetUniversalAxis1 (j, in[3], in[4], in[5]);
+      H->dJointSetUniversalAxis2 (j, in[6], in[7], in[8]);
+      break;
+    case J_HINGE2:
+      j = H->dJointCreateHinge2 (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetHinge2Anchor (j, in[0], in[1], in[2]);
+      H->dJointSetHinge2Axis1 (j, in[3], in[4], in[5]);
+      H->dJointSetHinge2Axis2 (j, in[6], in[7], in[8]);
+      H->dJointSetHinge2Param (j, dParamSuspensionERP, 0.4f);
+      H->dJointSetHinge2Param (j, dParamSuspensionCFM, 0.01f);
+      if (limits) {
+	H->dJointSetHinge2Param (j, dParamLoStop, -0.1f);
+	H->dJointSetHinge2Param (j, dParamHiStop, 0.1f);
+      }
+      break;
+    case J_FIXED:
+      j = H->dJointCreateFixed (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetFixed (j);
+      break;
+    case J_FIXED_POSE:
+      /* with two bodies it does nothing (physics-library.md 5.2) */
+      j = H->dJointCreateFixed (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetFixedQuaternionPos (j, in + 9, in + 13);
+      break;
+    case J_AMOTOR: {
+      /* axes global, relative to the first body and to the second; one
+      ** relative to an absent body global instead (0.5.0 asserts on it) */
+      j = H->dJointCreateAMotor (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetAMotorMode (j, dAMotorUser);
+      H->dJointSetAMotorNumAxes (j, 3);
+      int rel1 = attach == 2 ? 0 : 1, rel2 = attach == 1 ? 0 : 2;
+      H->dJointSetAMotorAxis (j, 0, 0, in[6], in[7], in[8]);
+      H->dJointSetAMotorAxis (j, 1, rel1, in[3], in[4], in[5]);
+      H->dJointSetAMotorAxis (j, 2, rel2, in[5], in[3], in[4]);
+      H->dJointSetAMotorAngle (j, 0, 0.25f);
+      H->dJointSetAMotorAngle (j, 1, -0.5f);
+      H->dJointSetAMotorParam (j, dParamVel, 1);
+      H->dJointSetAMotorParam (j, dParamFMax, 20);
+      H->dJointSetAMotorParam (j, dParamGroup + dParamVel, -2);
+      H->dJointSetAMotorParam (j, dParamGroup + dParamFMax, 10);
+      if (limits) {
+	H->dJointSetAMotorParam (j, 2 * dParamGroup + dParamLoStop, -0.1f);
+	H->dJointSetAMotorParam (j, 2 * dParamGroup + dParamHiStop, 0.1f);
+      }
+      break;
+    }
+    default:
+      /* Euler mode: axis 0 relative to the first body, axis 2 to the
+      ** second (global when it is absent) */
+      j = H->dJointCreateAMotor (w, 0);
+      H->dJointAttach (j, first, second);
+      H->dJointSetAMotorMode (j, dAMotorEuler);
+      H->dJointSetAMotorAxis (j, 0, attach == 2 ? 0 : 1, in[3], in[4], in[5]);
+      H->dJointSetAMotorAxis (j, 2, attach == 1 ? 0 : 2, in[6], in[7], in[8]);
+      H->dJointSetAMotorParam (j, dParamVel, 1);
+      H->dJointSetAMotorParam (j, dParamFMax, 20);
+      if (limits) {
+	H->dJointSetAMotorParam (j, 2 * dParamGroup + dParamLoStop, -0.1f);
+	H->dJointSetAMotorParam (j, 2 * dParamGroup + dParamHiStop, 0.1f);
+      }
+      break;
+    }
+    static dJointFeedback fb;
+    memset (&fb, 0, sizeof fb);
+    H->dJointSetFeedback (j, &fb);
+    rec_body (b[0]);
+    rec_body (b[1]);
+    rec_joint_getters (j, kind);
+    for (int k = 0; k < 2; k++) {
+      float turn = uni (-0.2f, 0.2f);
+      dReal R[12];
+      memset (R, 0, sizeof R);
+      H->dRFromAxisAndAngle (R, axis_angle[k][0], axis_angle[k][1], axis_angle[k][2],
+			     axis_angle[k][3] + turn);
+      H->dBodySetRotation (b[k], R);
+      const dReal *p = H->dBodyGetPosition (b[k]);
+      float x = uni (-0.1f, 0.1f), y = uni (-0.1f, 0.1f), z = uni (-0.1f, 0.1f);
+      H->dBodySetPosition (b[k], p[0] + x, p[1] + y, p[2] + z);
+      float lx = uni (-1, 1), ly = uni (-1, 1), lz = uni (-1, 1);
+      H->dBodySetLinearVel (b[k], lx, ly, lz);
+      float ax = uni (-2, 2), ay = uni (-2, 2), az = uni (-2, 2);
+      H->dBodySetAngularVel (b[k], ax, ay, az);
+    }
+    rec_body (b[0]);
+    rec_body (b[1]);
+    rec_joint_getters (j, kind);
+    if (exact) H->dWorldStep (w, STEP);
+    else H->dWorldQuickStep (w, STEP);
+    rec_body (b[0]);
+    rec_body (b[1]);
+    rec_floats (T_FEEDBACK, (const dReal *) &fb, 16);
+    rec_joint_getters (j, kind);
+    H->dWorldDestroy (w);
+  }
+}
+
+/* a positive float, uniform in [lo, hi) or of an exponent in [emin, emax] */
+static float positive (float lo, float hi, int emin, int emax)
+{
+  if (next () & 1) return uni (lo, hi);
+  return from_bits (bits (spread (emin, emax)) & 0x7FFFFFFF);
+}
+
+/* the density mass forms and dMassAdjust (7.2, 7.3): per case its form (0
+** dMassSetSphere, 1 dMassSetBox, 2 dMassSetCappedCylinder, 3
+** dMassSetCylinder, 4 dMassSetCylinderTotal) and inputs (the form, the
+** density or total, the direction as an integer, three sizes: a sphere's
+** radius; a box's lengths; a cylinder's radius and length), the dMass;
+** every third case the mass then rotated and translated, recorded; then a
+** new total (recorded) and the dMass after dMassAdjust */
+static void s_mass_density (void)
+{
+  static const float special[][4] = {
+    {1, 1, 1, 1}, {1000, 0.5f, 2, 0.25f}, {0.5f, 0.3f, 0, 1}, {7850, 0.01f, 5, 0.1f},
+    {2, 2, 0.1f, 3}, {0.25f, 0.25f, 0.75f, 0.5f}
+  };
+  int nspecial = (int) (sizeof special / sizeof special[0]);
+  for (int i = 0; i < 5000; i++) {
+    int form = i % 5, dir = 1 + (i / 5) % 3;
+    float a[4];
+    if (i / 5 < nspecial) memcpy (a, special[i / 5], sizeof a);
+    else {
+      a[0] = positive (0.1f, 3000, -4, 12);
+      a[1] = positive (0.05f, 1, -8, 2);
+      a[2] = positive (0, 3, -8, 3);
+      a[3] = positive (0.05f, 2, -8, 2);
+    }
+    dReal in[6] = {from_bits ((uint32_t) form), a[0], from_bits ((uint32_t) dir), a[1], a[2], a[3]};
+    rec_floats (T_VEC, in, 6);
+    dMass m;
+    memset (&m, 0, sizeof m);
+    switch (form) {
+    case 0: H->dMassSetSphere (&m, a[0], a[1]); break;
+    case 1: H->dMassSetBox (&m, a[0], a[1], a[2], a[3]); break;
+    case 2: H->dMassSetCappedCylinder (&m, a[0], dir, a[1], a[2]); break;
+    case 3: H->dMassSetCylinder (&m, a[0], dir, a[1], a[2]); break;
+    default: H->dMassSetCylinderTotal (&m, a[0], dir, a[1], a[2]); break;
+    }
+    rec_mass (&m);
+    if (i % 3 == 2) {
+      dReal R[12];
+      posed_rotation (R);
+      H->dMassRotate (&m, R);
+      float x = uni (-0.5f, 0.5f), y = uni (-0.5f, 0.5f), z = uni (-0.5f, 0.5f);
+      H->dMassTranslate (&m, x, y, z);
+      rec_mass (&m);
+    }
+    dReal total = positive (1, 200, -4, 12);
+    rec_floats (T_VEC, &total, 1);
+    H->dMassAdjust (&m, total);
+    rec_mass (&m);
+  }
+}
+
+/* dBodySetQuaternion's normalisation (7.5) where a component times the
+** reciprocal length falls below the normal range: two large components
+** (ABOUT_Y's cosine and sine, both times a scale from 0.75 to 4) and two
+** tiny ones written (exponents -128 to -119, the lowest two denormal, signs
+** varied, one sometimes zero), the large pair at components (0, 2), (1, 3),
+** (0, 1) or (2, 3). Per case: the quaternion, then the quaternion and
+** rotation read back */
+static void s_set_quaternion (void)
+{
+  static const float scale[] = {1, 2, 3, 4, 1.5f, 0.75f, 2.5f, 3.5f};
+  static const int place[4][4] = {{0, 2, 1, 3}, {1, 3, 0, 2}, {0, 1, 2, 3}, {2, 3, 0, 1}};
+  dWorldID w = game_world ();
+  dBodyID b = H->dBodyCreate (w);
+  for (int i = 0; i < 3000; i++) {
+    float c = ABOUT_Y[i % 6][0], s = ABOUT_Y[i % 6][1];
+    float f = (i / 6) % 9 == 8 ? uni (0.75f, 4) : scale[(i / 6) % 9];
+    uint32_t t[2];
+    for (int k = 0; k < 2; k++) {
+      int e = -128 + (int) (next () % 10);
+      uint32_t mant = next () & 0x7FFFFFu;
+      t[k] = e >= -126 ? (uint32_t) (e + 127) << 23 | mant : (mant | 0x800000u) >> (-126 - e);
+      if (next () & 1) t[k] |= 0x80000000u;
+    }
+    if ((i / 54) % 4 == 1) t[0] = 0;
+    if ((i / 54) % 4 == 2) t[1] = 0;
+    const int *at = place[(i / 216) % 4];
+    dReal q[4];
+    q[at[0]] = c * f;
+    q[at[1]] = s * f;
+    q[at[2]] = from_bits (t[0]);
+    q[at[3]] = from_bits (t[1]);
+    rec_floats (T_VEC, q, 4);
+    H->dBodySetQuaternion (b, q);
+    dReal v[16];
+    memcpy (v, H->dBodyGetQuaternion (b), 4 * 4);
+    memcpy (v + 4, H->dBodyGetRotation (b), 12 * 4);
+    rec_floats (T_ROT, v, 16);
+  }
+  H->dWorldDestroy (w);
+}
+
 typedef struct Scenario {
   const char *name;
   void (*run) (void);
@@ -1451,6 +1911,13 @@ static const Scenario SCENARIOS[] = {
   {"quaternion", s_quaternion, 0, 13},
   {"rel-force", s_rel_force, 0, 23},
   {"angular-mass", s_angular_mass, 0, 24},
+  /* the review gaps of docs/behavior/physics-harness-3.md (#944) */
+  {"ccylinder-box", s_ccylinder_box, 0, 25},
+  {"joints-posed", s_joints_posed, 0, 26},
+  {"mass-density", s_mass_density, 0, 27},
+  {"set-quaternion", s_set_quaternion, 0, 28},
+  {"set-rotation-nodaz", s_set_rotation, 1, 22},
+  {"set-quaternion-nodaz", s_set_quaternion, 1, 28},
 };
 
 int volya_ode_scenario_count (void)

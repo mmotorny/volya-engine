@@ -82,6 +82,8 @@ enum {
   dParamSuspensionCFM, dParamGroup = 0x100
 };
 
+enum { dAMotorUser = 0, dAMotorEuler = 1 };
+
 /* The library's functions the scenarios call: X(return type, name, params). */
 #define VOLYA_ODE_API(X) \
   X(dWorldID, dWorldCreate, (void)) \
@@ -216,7 +218,41 @@ enum {
   X(void, dGeomPlaneSetParams, (dGeomID, dReal, dReal, dReal, dReal)) \
   X(void, dGeomPlaneGetParams, (dGeomID, dReal *)) \
   X(void, dGeomRayGet, (dGeomID, dReal *, dReal *)) \
-  X(dReal, dGeomRayGetLength, (dGeomID))
+  X(dReal, dGeomRayGetLength, (dGeomID)) \
+  X(void, dJointGetBallAnchor, (dJointID, dReal *)) \
+  X(void, dJointGetBallAnchor2, (dJointID, dReal *)) \
+  X(void, dJointGetHingeAnchor, (dJointID, dReal *)) \
+  X(void, dJointGetHingeAnchor2, (dJointID, dReal *)) \
+  X(void, dJointGetHingeAxis, (dJointID, dReal *)) \
+  X(void, dJointGetSliderAxis, (dJointID, dReal *)) \
+  X(dReal, dJointGetSliderPositionRate, (dJointID)) \
+  X(void, dJointGetUniversalAnchor, (dJointID, dReal *)) \
+  X(void, dJointGetUniversalAnchor2, (dJointID, dReal *)) \
+  X(void, dJointGetUniversalAxis1, (dJointID, dReal *)) \
+  X(void, dJointGetUniversalAxis2, (dJointID, dReal *)) \
+  X(dReal, dJointGetUniversalAngle1, (dJointID)) \
+  X(dReal, dJointGetUniversalAngle2, (dJointID)) \
+  X(dReal, dJointGetUniversalAngle1Rate, (dJointID)) \
+  X(dReal, dJointGetUniversalAngle2Rate, (dJointID)) \
+  X(void, dJointGetHinge2Anchor, (dJointID, dReal *)) \
+  X(void, dJointGetHinge2Anchor2, (dJointID, dReal *)) \
+  X(void, dJointGetHinge2Axis1, (dJointID, dReal *)) \
+  X(void, dJointGetHinge2Axis2, (dJointID, dReal *)) \
+  X(dReal, dJointGetHinge2Angle1, (dJointID)) \
+  X(dReal, dJointGetHinge2Angle1Rate, (dJointID)) \
+  X(dReal, dJointGetHinge2Angle2Rate, (dJointID)) \
+  X(void, dJointSetAMotorAngle, (dJointID, int, dReal)) \
+  X(int, dJointGetAMotorMode, (dJointID)) \
+  X(int, dJointGetAMotorNumAxes, (dJointID)) \
+  X(int, dJointGetAMotorAxisRel, (dJointID, int)) \
+  X(void, dJointGetAMotorAxis, (dJointID, int, dReal *)) \
+  X(dReal, dJointGetAMotorAngle, (dJointID, int)) \
+  X(void, dMassSetSphere, (dMass *, dReal, dReal)) \
+  X(void, dMassSetBox, (dMass *, dReal, dReal, dReal, dReal)) \
+  X(void, dMassSetCappedCylinder, (dMass *, dReal, int, dReal, dReal)) \
+  X(void, dMassSetCylinder, (dMass *, dReal, int, dReal, dReal)) \
+  X(void, dMassSetCylinderTotal, (dMass *, dReal, int, dReal, dReal)) \
+  X(void, dMassAdjust, (dMass *, dReal))
 
 #define VOLYA_ODE_FIELD(ret, name, params) ret (*name) params;
 
