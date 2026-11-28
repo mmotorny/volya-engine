@@ -43,6 +43,7 @@ pub const SECTIONS: &[(&str, Check)] = &[
     ("6 money", money),
     ("7 ammunition", ammunition),
     ("8 other item members", other_items),
+    ("8.4 best_weapon", best_weapon),
     ("9 worked example", worked_example),
 ];
 
@@ -137,7 +138,8 @@ eat_radiation = 0\r\nwounds_heal_perc = 0\r\neat_portions_num = 1\r\n\
 [weapon]\r\ninv_weight = 3\r\nscope_status = 0\r\ngrenade_launcher_status = 0\r\n\
 silencer_status = 0\r\n\
 [wpn_ak74]:weapon\r\nclass = WP_PM\r\nslot = 2\r\nammo_mag_size = 30\r\nammo_class = ammo_545, ammo_545_ap\r\n\
-[wpn_knife]:weapon\r\nclass = W_KNIFE\r\nslot = 1\r\n\
+ef_weapon_type = 6\r\n\
+[wpn_knife]:weapon\r\nclass = W_KNIFE\r\nslot = 1\r\nef_weapon_type = 1\r\n\
 [ammo_545]\r\nclass = AMMO\r\ninv_weight = 0.2\r\nbox_size = 30\r\n\
 [grenade]\r\nclass = G_F1\r\ninv_weight = 0.3\r\nslot = 3\r\n\
 [artefact]\r\nclass = ARTEFACT\r\ninv_weight = 0.5\r\nbelt = true\r\ndefault_to_ruck = false\r\n\
@@ -751,7 +753,7 @@ pub fn ammunition() -> Result<(), String> {
         "ammo",
         "local rifle, knife = obj(107), obj(108)\n\
          eq(rifle:get_ammo_in_magazine(), 30, 'a full magazine')\n\
-         raises(function() rifle:get_ammo_total() end, '#1154', 'a box of its type')\n\
+         eq(rifle:get_ammo_total(), 60, 'a box of its type at its box size')\n\
          eq(knife:get_ammo_total(), 0, 'no box of its type: the magazine')\n\
          eq(stalker:get_ammo_total(), 0, 'not a weapon')\n\
          rifle:set_ammo_elapsed(45)\n\
@@ -760,7 +762,54 @@ pub fn ammunition() -> Result<(), String> {
          eq(rifle:get_ammo_in_magazine(), 0, 'unloaded')\n\
          knife:unload_magazine()\n\
          eq(box:get_ammo_in_magazine(), 0, 'other objects')",
+    )?;
+    // 7.5: the spawn data's rounds, at most the box size.
+    t.s.spawn_ammunition(109, 12).map_err(message)?;
+    t.lua(
+        "spawned",
+        "eq(obj(107):get_ammo_total(), 12, 'the spawn data rounds')",
+    )?;
+    t.s.spawn_ammunition(109, 31).map_err(message)?;
+    t.lua(
+        "above",
+        "eq(obj(107):get_ammo_total(), 30, 'at most the box size')",
     )
+}
+
+/// 8.4: with no enemy, the carried weapons by type, kept while usable.
+pub fn best_weapon() -> Result<(), String> {
+    let mut t = state()?;
+    t.lua("none", "eq(stalker:best_weapon(), nil, 'no weapon')")?;
+    t.take(STALKER, 107)?;
+    t.lua(
+        "rifle",
+        "eq(stalker:best_weapon():id(), 107, 'its only weapon')",
+    )?;
+    t.take(STALKER, 108)?;
+    t.lua(
+        "kept",
+        "eq(stalker:best_weapon():id(), 107, 'kept while usable')\n\
+         obj(107):unload_magazine()\n\
+         eq(stalker:best_weapon():id(), 108, 'no rounds: chosen again')",
+    )?;
+    t.take(STALKER, 109)?;
+    t.lua(
+        "rounds",
+        "eq(obj(107):get_ammo_total(), 30, 'a box')\n\
+         eq(stalker:best_weapon():id(), 108, 'the knife is kept')",
+    )?;
+    let mut u = state()?;
+    for item in [108, 107] {
+        u.take(STALKER, item)?;
+    }
+    u.lua(
+        "type",
+        "eq(stalker:best_weapon():id(), 107, 'the greater type')",
+    )?;
+    if let Some(e) = (u.objects.borrow_mut().get_mut(STALKER)).and_then(|o| o.entity.as_mut()) {
+        e.health = 0.0;
+    }
+    u.lua("dead", "eq(stalker:best_weapon(), nil, 'health 0')")
 }
 
 /// 8.
@@ -777,9 +826,8 @@ pub fn other_items() -> Result<(), String> {
          eq(box:attachable_item_enabled(), false, 'not an item')\n\
          eq(box:is_inv_box_empty(), true, 'an empty box')\n\
          eq(stalker:is_inv_box_empty(), false, 'not a box')\n\
-         raises(function() stalker:best_item() end, '#1154', 'a fighter')\n\
+         eq(stalker:best_item(), nil, 'a fighter: an empty item memory')\n\
          eq(box:best_item(), nil, 'not a fighter')\n\
-         raises(function() stalker:best_weapon() end, '#1154', 'a live stalker')\n\
          eq(dog:best_weapon(), nil, 'not a stalker')",
     )?;
     let events = t.inventories().borrow().events().to_vec();

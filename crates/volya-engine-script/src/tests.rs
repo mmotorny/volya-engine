@@ -1589,6 +1589,11 @@ mod inventory {
     }
 
     #[test]
+    fn best_weapon() {
+        section(checks::best_weapon);
+    }
+
+    #[test]
     fn the_worked_example() {
         section(checks::worked_example);
     }

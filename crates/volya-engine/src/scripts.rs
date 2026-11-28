@@ -868,6 +868,11 @@ pub fn spawn_client_object(
         {
             scripts.scripts().set_owner_money(id, t.money)?;
         }
+        // An ammunition item's rounds are its spawn data's (script API S
+        // 7.5).
+        if let volya_engine_formats::object::Object::Ammunition(a) = &object.record.object {
+            scripts.scripts().spawn_ammunition(id, a.rounds_left)?;
+        }
         let owner = carrier.filter(|&c| {
             let o = scripts.objects().borrow();
             o.get(c)

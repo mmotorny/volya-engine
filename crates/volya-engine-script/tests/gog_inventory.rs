@@ -366,3 +366,64 @@ fn the_traders_supplies_in_sorted_order() {
         ]
     );
 }
+
+const NOVICE: u16 = 20;
+
+/// 8.6 with no enemy, on the shipped sections: a novice's `wpn_pm` with
+/// one full `ammo_9x18_fmj` box counts its magazine and the box's 20
+/// rounds (7.5) and is its best weapon; a `wpn_bm16` with an
+/// `ammo_12x70_buck` box counts the box's 10, and has the greater type
+/// but is not chosen while the pistol stays usable.
+#[test]
+fn a_campfire_novices_best_weapon() {
+    let Some((mut scripts, _objects)) = started() else {
+        return;
+    };
+    let s = scripts.scripts();
+    let stalker = ObjectClass::Named("CAI_Stalker");
+    let character = b"volya_test_character";
+    (s.spawn_engine_object(stalker, spawn_data(NOVICE, character, b"AI_STL_S"))).unwrap();
+    let ammo = ObjectClass::Unnamed(class_id(b"AMMO"));
+    let items: [(u16, ObjectClass, &[u8], &[u8]); 4] = [
+        (21, ObjectClass::Named("CWeaponPM"), b"wpn_pm", b"WP_PM"),
+        (22, ammo, b"ammo_9x18_fmj", b"AMMO"),
+        (
+            23,
+            ObjectClass::Named("CWeaponBM16"),
+            b"wpn_bm16",
+            b"WP_BM16",
+        ),
+        (24, ammo, b"ammo_12x70_buck", b"AMMO"),
+    ];
+    for (id, class, section, class_name) in items {
+        (s.spawn_engine_object(class, spawn_data(id, section, class_name))).unwrap();
+    }
+    s.exec(
+        "=volya_test_weapon",
+        b"function volya_test_total(w) return w:get_ammo_total() end\n\
+          function volya_test_best(npc) local w = npc:best_weapon() return w and w:id() or -1 end",
+    )
+    .unwrap();
+    let total = |s: &mut Scripts, id: u16| {
+        let args = [handle(s, id)];
+        s.call("volya_test_total", &args).unwrap()
+    };
+    let best = |s: &mut Scripts| {
+        let args = [handle(s, NOVICE)];
+        s.call("volya_test_best", &args).unwrap()
+    };
+    s.take_item(NOVICE, 21).unwrap();
+    s.spawn_ammunition(22, 20).unwrap();
+    s.take_item(NOVICE, 22).unwrap();
+    assert_eq!(
+        total(s, 21),
+        [Value::Number(28.0)],
+        "8 in the magazine, 20 in the box"
+    );
+    assert_eq!(best(s), [Value::Number(21.0)], "the pistol, type 5");
+    s.take_item(NOVICE, 23).unwrap();
+    s.spawn_ammunition(24, 10).unwrap();
+    s.take_item(NOVICE, 24).unwrap();
+    assert_eq!(total(s, 23), [Value::Number(10.0)], "the buckshot box");
+    assert_eq!(best(s), [Value::Number(21.0)], "kept while usable");
+}

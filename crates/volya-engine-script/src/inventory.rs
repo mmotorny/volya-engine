@@ -127,6 +127,11 @@ pub struct Inventories {
     /// The state of the items no inventory holds, made on first need.
     loose: BTreeMap<u16, InventoryItem>,
     marks: BTreeMap<u16, Marks>,
+    /// The ammunition items' rounds (7.5), once set from their spawn data;
+    /// an item without an entry holds its box size.
+    rounds: BTreeMap<u16, u16>,
+    /// The stalkers' best-weapon state (8.4).
+    best_weapons: BTreeMap<u16, BestWeapon>,
     events: Vec<Event>,
     /// The low 32 bits of the processor's performance counter, which
     /// seeds `buy_supplies`' generators (5.6 step 4): the engine sets it.
@@ -196,7 +201,30 @@ impl Inventories {
         }
         self.loose.remove(&id);
         self.marks.remove(&id);
+        self.rounds.remove(&id);
+        self.best_weapons.remove(&id);
+        // A destroyed best weapon is none (our choice: the spec keeps an
+        // object, not its absence).
+        for b in self.best_weapons.values_mut() {
+            if b.weapon == Some(id) {
+                b.weapon = None;
+            }
+        }
     }
+}
+
+/// A stalker's best-weapon state (8.4). Its remembered pick-ups are never
+/// set: only steps 3 and 4 set them, from the item memory, which stays
+/// empty while no fighter perceives (TODO(#1211)).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct BestWeapon {
+    weapon: Option<u16>,
+    /// The stored rating.
+    rating: f32,
+    /// The mark "chosen": clear when made (believed), and only a change of
+    /// the enemy choice's enemy clears it, which none makes here
+    /// (TODO(#1211)).
+    chosen: bool,
 }
 
 /// What the members share.
@@ -797,7 +825,7 @@ fn raw(ctx: &Context, maker: &ObjectMaker, args: &[Value]) -> Results {
             if !c.is_item(id) {
                 return whole(0);
             }
-            ammo_total(c, id)
+            whole(ammo_total(c, id)?)
         }
         "set_ammo_elapsed" => {
             let n = integer(number(args, 0, op)?);
@@ -845,27 +873,19 @@ fn raw(ctx: &Context, maker: &ObjectMaker, args: &[Value]) -> Results {
                 || class_kind(&c.system, object).is_some_and(|(_, class)| class == "O_INVBOX");
             boolean(inv_box && !c.objects.iter().any(|o| o.parent == Some(id)))
         }
-        "best_item" => {
-            if !c.object(id)?.kinds.has(Kinds::FIGHTER) {
-                return one(Value::Nil);
-            }
-            Err(unestablished("best_item: the item memory's choice"))
-        }
+        // 8.3: no fighter perceives, so every item memory's list stays
+        // empty and its selection none (TODO(#1211)).
+        "best_item" => one(Value::Nil),
         "best_weapon" => {
             let object = c.object(id)?;
             if !object.kinds.has(Kinds::STALKER) || health(object) <= 0.0 {
                 return one(Value::Nil);
             }
-            Err(unestablished("best_weapon: the weapon rating and choice"))
+            let weapon = best_weapon(c, id)?;
+            one(c.handle(weapon))
         }
         _ => Err(format!("inventory: unknown operation {op}")),
     }
-}
-
-/// The script error of a member whose outcome the spec leaves
-/// unestablished.
-fn unestablished(what: &str) -> String {
-    format!("{what} is unestablished (#1154)")
 }
 
 /// The handles of `ids` as a list.
@@ -1129,19 +1149,60 @@ fn magazine(item: &InventoryItem) -> u32 {
     }
 }
 
+/// A weapon section's ammunition types (7.2): the comma-separated items of
+/// its `ammo_class`, spaces around them dropped (believed); none without
+/// the key.
+fn ammunition_types(system: &Config, section: &str) -> Vec<String> {
+    (system.get(section, "ammo_class").flatten())
+        .map(|v| {
+            (v.split(','))
+                .map(|t| t.trim().to_owned())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A section's `ef_weapon_type`, unsigned: 4,294,967,295 when absent
+/// (8.5).
+fn weapon_type(system: &Config, section: &str) -> u32 {
+    (system.get(section, "ef_weapon_type").flatten()).map_or(u32::MAX, |v| value::int(v) as u32)
+}
+
+/// An ammunition item's box size (7.5): its section's `box_size`, read as
+/// an integer and kept as 16 bits; a missing key is fatal (ltx-config.md
+/// 11).
+fn box_size(ctx: &Context, system: &Config, section: &str) -> Result<u16, String> {
+    let s = (system.section(section))
+        .ok_or_else(|| ctx.failed_check("ammunition", &format!("no section [{section}]")))?;
+    let v = s
+        .read("box_size")
+        .map_err(|e| ctx.failed_check("ammunition", &e.to_string()))?;
+    Ok(value::int(v) as u16)
+}
+
+/// Ammunition item `item`'s rounds now (7.5): those its spawn data set,
+/// else its box size. Nothing here takes rounds from a box or fills one
+/// (no weapon loads or unloads keeping them), and the server's update data
+/// never reaches the scripts.
+fn rounds(c: &Call, item: &InventoryItem) -> Result<u16, String> {
+    match c.state.rounds.get(&item.id) {
+        Some(&n) => Ok(n),
+        None => box_size(c.ctx, &c.system, &item.config.section),
+    }
+}
+
 /// `get_ammo_total()` (7.2): the magazine, plus the rounds of the holder's
-/// ammunition items in its belt and backpack of the weapon's
-/// `ammo_class` types, whose current rounds are unestablished (a script
-/// error); the holder's further count is unestablished: none.
-fn ammo_total(c: &mut Call, id: u16) -> Results {
+/// ammunition items in its belt and backpack of the weapon's ammunition
+/// types, each at its rounds now; the holder's further count is
+/// unestablished: none.
+fn ammo_total(c: &mut Call, id: u16) -> Result<u32, String> {
     let item = c.item(id)?.clone();
     if !is_weapon(&item) {
-        return whole(0);
+        return Ok(0);
     }
-    let total = magazine(&item);
-    let types: Vec<String> = (c.system.get(&item.config.section, "ammo_class").flatten())
-        .map(|v| v.split(',').map(|t| t.trim().to_owned()).collect())
-        .unwrap_or_default();
+    let mut total = magazine(&item);
+    let types = ammunition_types(&c.system, &item.config.section);
     if let Some(holder) = c.state.holder(id) {
         let inventory = &c.state.owners[&holder].inventory;
         for i in &inventory.items {
@@ -1149,11 +1210,64 @@ fn ammo_total(c: &mut Call, id: u16) -> Results {
                 && i.config.class_id.kind() == Kind::Ammunition
                 && types.contains(&i.config.section)
             {
-                return Err(unestablished("get_ammo_total: an ammunition item's rounds"));
+                total = total.wrapping_add(u32::from(rounds(c, i)?));
             }
         }
     }
-    whole(total)
+    Ok(total)
+}
+
+/// Whether item `id` is usable (8.4): a weapon whose `get_ammo_total()` is
+/// not 0 or that has no ammunition types.
+fn usable(c: &mut Call, id: u16) -> Result<bool, String> {
+    let item = c.item(id)?;
+    if !is_weapon(item) {
+        return Ok(false);
+    }
+    let section = item.config.section.clone();
+    Ok(ammunition_types(&c.system, &section).is_empty() || ammo_total(c, id)? != 0)
+}
+
+/// Stalker `id`'s best weapon brought up to date (8.4). No enemy is ever
+/// chosen here (`best_enemy()` nil, TODO(#1131)): the keep needs no
+/// rating, the carried weapons are valued by their type, and the item
+/// memory the later steps walk is empty (TODO(#1211)).
+fn best_weapon(c: &mut Call, id: u16) -> Result<Option<u16>, String> {
+    let state = c.state.best_weapons.get(&id).copied().unwrap_or_default();
+    // Step 1: with no enemy, kept while usable.
+    if state.chosen
+        && let Some(weapon) = state.weapon
+        && c.objects.get(weapon).is_some()
+        && usable(c, weapon)?
+    {
+        return Ok(Some(weapon));
+    }
+    // Step 2.
+    let mut best = BestWeapon {
+        weapon: None,
+        rating: 0.0,
+        chosen: true,
+    };
+    let items: Vec<u16> = c.owner(id)?.inventory.items.iter().map(|i| i.id).collect();
+    for item in items {
+        if !usable(c, item)? {
+            continue;
+        }
+        let kind = |c: &Call, i: u16| {
+            let section = (c.state.item(i)).map(|i| i.config.section.clone());
+            weapon_type(&c.system, &section.unwrap_or_default())
+        };
+        let v = kind(c, item) as f32;
+        let taken = v - best.rating >= 0.00001
+            || ((v - best.rating).abs() < 0.00001
+                && best.weapon.is_none_or(|b| kind(c, item) > kind(c, b)));
+        if taken {
+            best.weapon = Some(item);
+            best.rating = v;
+        }
+    }
+    c.state.best_weapons.insert(id, best);
+    Ok(best.weapon)
 }
 
 /// `enable_attachable_item(b)` (8.1).
@@ -1263,6 +1377,22 @@ impl Scripts {
         let objects = ctx.objects.borrow();
         let mut state = ctx.state.borrow_mut();
         let r = make_owner(&ctx, &objects, &mut state, &system, owner).map(|o| o.money = money);
+        r.map_err(|m| self.stop_with(m))
+    }
+
+    /// Ammunition item `item` is spawned with `rounds_left` in its spawn
+    /// data (7.5): its rounds become that, a value above its box size the
+    /// box size. A section without `box_size` is fatal.
+    pub fn spawn_ammunition(&mut self, item: u16, rounds_left: u16) -> Result<(), Error> {
+        let ctx = self.inventory_context()?;
+        let system = ctx.system();
+        let section = (ctx.objects.borrow().get(item))
+            .and_then(section_of)
+            .unwrap_or_default();
+        let r = box_size(&ctx, &system, &section).map(|size| {
+            let mut state = ctx.state.borrow_mut();
+            state.rounds.insert(item, rounds_left.min(size));
+        });
         r.map_err(|m| self.stop_with(m))
     }
 
