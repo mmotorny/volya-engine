@@ -10,7 +10,14 @@ Priorities, in order. Work items are tracked in GitHub issues and milestones.
 
 ## Large systems
 
-Work that needs a large system not yet built (physics, character motions and AI, dialogs and trade) waits until that system is implemented, rather than being stubbed piecemeal; its scope stays recorded in the specs and its issues are blocked by the system's.
+Work that needs a large system not yet built waits until that system is implemented, rather than being stubbed piecemeal; its scope stays recorded in the specs and its issues are blocked by the system's.
+
+The large systems, in order (decided by the user):
+
+1. Physics.
+2. The script API (docs/behavior/script-api-scope.md): first the slice the trader's door runs on (its door scheme from the shipped scripts), each spec implemented as it's approved; then the rest in the scope's order.
+3. Dialogs and trade.
+4. Characters, monsters, their motions and AI.
 
 ## Fidelity against the original
 
