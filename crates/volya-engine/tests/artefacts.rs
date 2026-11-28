@@ -213,15 +213,25 @@ fn first_level_artefacts_from_game_data() {
     assert_eq!(a.state, State::Lying);
     assert!(a.section.light.is_none() && !a.light_on);
     assert!(!level.lights().get(a.record.unwrap()).unwrap().active);
-    // M2: *X*'s row 3, the effect point at bone 0, the placed sphere.
-    assert!(near(a.position(), [-244.8165, -13.1585, -33.6452], 1e-4));
+    // M2: *X*'s row 3, the effect point at bone 0, the placed sphere, at
+    // the stored position raised by its height correction as it comes
+    // online (bit 0x80 set: object-visual-and-transform.md 4.1, 4.3); x
+    // and z stay.
+    let p = a.position();
+    let up = p[1] + 13.1585;
+    let sim = level.simulation().unwrap();
+    let online = sim.by_name("esc_af_medusa").unwrap().record.header.position;
+    assert_eq!(online, p, "the record's position");
+    drop(sim);
+    assert!(up.abs() < 0.5, "{p:?}");
+    assert!(near(p, [-244.8165, -13.1585 + up, -33.6452], 1e-4));
     assert!(
-        near(a.point(), [-244.8057, -13.1224, -33.6349], 1e-4),
+        near(a.point(), [-244.8057, -13.1224 + up, -33.6349], 1e-4),
         "{:?}",
         a.point()
     );
     let (c, r) = a.placed_sphere();
-    assert!(near(c, [-244.7696, -13.0158, -33.6089], 1e-4), "{c:?}");
+    assert!(near(c, [-244.7696, -13.0158 + up, -33.6089], 1e-4), "{c:?}");
     assert!((r - 0.23).abs() < 1e-4, "{r}");
     // Its effect: the group `artefact_gravi`, playing.
     assert_eq!(a.effects.len(), 1);

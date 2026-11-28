@@ -63,7 +63,13 @@ fn the_worked_example() {
             .find(|i| i.name == "escape_trader")
             .unwrap();
         let x = trader.transform;
-        near3(row(&x, 3), [-244.6927, -24.958, -133.96], 1e-3, "trader");
+        // At his online height (object-visual-and-transform.md 4.5).
+        near3(
+            row(&x, 3),
+            [-244.6927, -24.864_836, -133.96],
+            1e-3,
+            "trader",
+        );
         let player = screen.player().state().position;
         near3(
             [player[0], 0.0, player[2]],
@@ -122,7 +128,8 @@ fn the_worked_example() {
         });
         near3(
             world,
-            [-244.789, -23.799, -133.989],
+            // Raised with him by his online height (object-visual-and-transform.md 4.5).
+            [-244.789, -23.799 + 0.0932, -133.989],
             1e-3,
             "head in the world",
         );
