@@ -21,6 +21,7 @@ pub mod dialogs_and_trade;
 pub mod entry_points;
 pub mod files;
 pub mod game_object;
+pub mod inventory;
 mod loading;
 pub mod movement_sight_and_memory;
 pub mod object_binder;
@@ -90,6 +91,9 @@ pub fn check() -> Result<(), String> {
         fail(e);
     }
     if let Err(e) = dialogs_and_trade::check() {
+        fail(e);
+    }
+    if let Err(e) = inventory::check() {
         fail(e);
     }
     if let Err(e) = time::check() {

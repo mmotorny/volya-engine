@@ -462,6 +462,13 @@ pub(crate) struct Registered {
     ctx: Context,
 }
 
+impl Registered {
+    /// The dialogs and trade's state, for script API S's trade test.
+    pub(crate) fn shared_state(&self) -> Rc<RefCell<DialogsAndTrade>> {
+        Rc::clone(&self.ctx.state)
+    }
+}
+
 /// The text of a list entry (`files` 6); an entry without text is the
 /// empty text (TODO(#1071), as DG-2's lists).
 fn entry(e: &Option<String>) -> &str {

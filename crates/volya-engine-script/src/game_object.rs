@@ -693,6 +693,8 @@ pub struct GameObjects {
     spawning: HashMap<EnginePart, u32>,
     /// The engine's state for objects about to spawn, by id.
     prepared: HashMap<u16, EngineState>,
+    /// Script API S's inventories, living as long as the objects.
+    inventories: Rc<RefCell<crate::inventory::Inventories>>,
 }
 
 /// What the engine gives an object as it spawns beyond its spawn data
@@ -713,6 +715,11 @@ pub struct EngineState {
 impl GameObjects {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The inventories of the objects (script API S).
+    pub fn inventories(&self) -> Rc<RefCell<crate::inventory::Inventories>> {
+        Rc::clone(&self.inventories)
     }
 
     pub fn get(&self, id: u16) -> Option<&GameObject> {
@@ -1216,6 +1223,7 @@ impl Scripts {
             return Ok(false);
         };
         self.forget_callbacks(id, object.kinds)?;
+        self.forget_inventory_object(id);
         if let Some(handle) = object.handle {
             objects.borrow_mut().handles.remove(&handle);
             self.lua_mut().release_engine_object(handle)?;

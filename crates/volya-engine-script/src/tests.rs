@@ -1510,3 +1510,86 @@ mod movement_sight_and_memory {
         section(checks::absent);
     }
 }
+
+/// The inventory's checks, one test per section of
+/// docs/behavior/script-api-inventory.md (all of them run in [`selftest`]
+/// too, on every target).
+mod inventory {
+    use crate::selftest::inventory as checks;
+
+    fn section(f: fn() -> Result<(), String>) {
+        if let Err(failures) = f() {
+            panic!("{failures}");
+        }
+    }
+
+    #[test]
+    fn what_is_registered() {
+        section(checks::registered);
+    }
+
+    #[test]
+    fn items() {
+        section(checks::items);
+    }
+
+    #[test]
+    fn iterate_inventory() {
+        section(checks::iterate_inventory);
+    }
+
+    #[test]
+    fn inventory_for_each() {
+        section(checks::inventory_for_each);
+    }
+
+    #[test]
+    fn slots() {
+        section(checks::slots);
+    }
+
+    #[test]
+    fn activate_slot() {
+        section(checks::activate_slot);
+    }
+
+    #[test]
+    fn drop_and_transfer() {
+        section(checks::drop_and_transfer);
+    }
+
+    #[test]
+    fn dropped_marks() {
+        section(checks::dropped_marks);
+    }
+
+    #[test]
+    fn eat() {
+        section(checks::eat);
+    }
+
+    #[test]
+    fn buy_supplies() {
+        section(checks::buy_supplies);
+    }
+
+    #[test]
+    fn money() {
+        section(checks::money);
+    }
+
+    #[test]
+    fn ammunition() {
+        section(checks::ammunition);
+    }
+
+    #[test]
+    fn other_item_members() {
+        section(checks::other_items);
+    }
+
+    #[test]
+    fn the_worked_example() {
+        section(checks::worked_example);
+    }
+}

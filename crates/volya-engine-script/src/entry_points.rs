@@ -167,7 +167,7 @@ impl Startup {
     }
 
     /// The engine interface of the specs implemented (B, F, H, M, P, R, T, Y,
-    /// K, J, V, G3; A, C and E [`Scripts::new`] registers).
+    /// K, J, V, G3, S; A, C and E [`Scripts::new`] registers).
     fn register_interface(&self, scripts: &mut Scripts) -> Result<(), Error> {
         scripts.register_engine_services(Rc::clone(&self.services))?;
         scripts
@@ -190,7 +190,8 @@ impl Startup {
             Rc::clone(&self.window_files),
             Rc::clone(&self.trees),
             self.aliases.clone(),
-        )
+        )?;
+        scripts.register_inventory()
     }
 }
 

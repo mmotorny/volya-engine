@@ -29,6 +29,7 @@ pub mod entry_points;
 mod ffi;
 pub mod files;
 pub mod game_object;
+pub mod inventory;
 mod libc;
 pub mod loader;
 pub mod object_factory;
