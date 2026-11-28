@@ -734,17 +734,30 @@ impl Simulation {
         self.objects.slots.shrink_to_fit();
         let ids: Vec<u16> = self.objects.keys().copied().collect();
         for id in ids {
-            let top = self.top_level(id);
-            let on_level = self
+            let keeps = self
                 .objects
-                .get(&top)
-                .is_some_and(|o| self.on_current_level(o.game_vertex()));
-            if let Some(o) = self.objects.get_mut(&id)
-                && !on_level
-                && !o.keeps_client_data()
-            {
-                o.record.header.client_data.clear();
-            }
+                .get(&id)
+                .is_some_and(SimObject::keeps_client_data);
+            self.client_data_rule(id, keeps);
+        }
+    }
+
+    /// The client-data rule of sav.md 8 for object `id`: its client data
+    /// is discarded unless its top-level container is on the current level
+    /// or `keeps` (its kind's answer: the shipped scripts' classes', which
+    /// the post-registration step asks without scripts, or the scripts'
+    /// own `keep_saved_data_anyway`).
+    pub fn client_data_rule(&mut self, id: u16, keeps: bool) {
+        let top = self.top_level(id);
+        let on_level = self
+            .objects
+            .get(&top)
+            .is_some_and(|o| self.on_current_level(o.game_vertex()));
+        if let Some(o) = self.objects.get_mut(&id)
+            && !on_level
+            && !keeps
+        {
+            o.record.header.client_data.clear();
         }
     }
 

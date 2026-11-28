@@ -16,6 +16,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use shipped_scripts::{FSGAME, GameTrees};
+use volya_engine_core::character_identity::trader_like_mut;
 use volya_engine_core::config::{self, Config, PathAliases};
 use volya_engine_core::console::{Console, ConsoleFiles};
 use volya_engine_core::simulation::graph::Graph;
@@ -34,7 +35,7 @@ use volya_engine_script::loader::Prefix;
 use volya_engine_script::object_factory::CreatedObject;
 use volya_engine_script::services::EngineServices;
 use volya_engine_script::simulation::AlifeSimulator;
-use volya_engine_script::simulation_objects::{CLASSES, classes, dispatched};
+use volya_engine_script::simulation_objects::{CLASSES, Creation, classes, dispatched};
 use volya_engine_script::story::Story;
 
 /// A class of the listing (`scripts\lua_help.script`): its bases, member
@@ -333,6 +334,24 @@ fn a_new_games_and_a_loads_objects_through_the_factory() {
     let mut sim = new_simulation();
     sim.new_game(&spawn_file, &system, &mut |_, _| Ok(5), None)
         .unwrap();
+    // The New Game without identities leaves the characters' communities
+    // unset (character-identity.md 4.2), which their registration reads:
+    // `stalker`'s position in `[game_relations] communities` instead.
+    let communities = system
+        .get("game_relations", "communities")
+        .flatten()
+        .unwrap();
+    let names: Vec<&str> = communities.split(',').map(str::trim).step_by(2).collect();
+    let position = names.iter().position(|&n| n == "stalker").unwrap() as i32;
+    let ids: Vec<u16> = sim.objects().map(|o| o.id).collect();
+    for id in ids {
+        let record = &mut sim.object_mut(id).unwrap().record;
+        if let Some(t) = trader_like_mut(record)
+            && !(0..names.len() as i32).contains(&t.community)
+        {
+            t.community = position;
+        }
+    }
     let find = |sim: &Simulation, f: &dyn Fn(&ObjectRecord) -> bool| {
         sim.objects().find(|o| f(&o.record)).map(|o| o.id).unwrap()
     };
@@ -346,18 +365,24 @@ fn a_new_games_and_a_loads_objects_through_the_factory() {
     let ammo_section = sim.object(ammo).unwrap().record.header.section.to_string();
     let records: Vec<ObjectRecord> = sim.objects().map(|o| o.record.clone()).collect();
     let count = records.len();
+    // The game's patrol paths, as the app gives them at a New Game.
+    g.level().borrow_mut().patrol_paths = Some(Rc::new(sim.paths.clone()));
     alife.borrow_mut().simulation = Some(sim);
 
     let held = g.scripts().simulation_objects().unwrap();
     let objects = || held.clone();
     let start = std::time::Instant::now();
-    g.scripts().create_simulation_objects(&system).unwrap();
+    g.scripts()
+        .create_simulation_objects(&system, Creation::NewGame)
+        .unwrap();
     let ms = start.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(objects().borrow().held_count(), count, "one per object");
     let terrain_part = objects().borrow().held(terrain).unwrap();
+    // The smart terrain registered and set up (its `STATE_Read` read its
+    // configuration, its `on_register` ran).
     let want = [
-        Value::Boolean(false),
-        Value::Boolean(false),
+        Value::Boolean(true),
+        Value::Boolean(true),
         Value::Boolean(true),
         Value::Boolean(false),
         Value::Boolean(true),
@@ -367,7 +392,9 @@ fn a_new_games_and_a_loads_objects_through_the_factory() {
     let ids = [terrain, stalker, ammo];
     assert_eq!(objects_as_scripts_get_them(&mut g, ids), want, "New Game");
     // Made once.
-    g.scripts().create_simulation_objects(&system).unwrap();
+    g.scripts()
+        .create_simulation_objects(&system, Creation::NewGame)
+        .unwrap();
     assert_eq!(objects().borrow().held(terrain), Some(terrain_part));
 
     // Script API K's `release` of the (offline) stalker: their server objects
@@ -389,7 +416,9 @@ fn a_new_games_and_a_loads_objects_through_the_factory() {
     let mut loaded = new_simulation();
     loaded.load(records, &system).unwrap();
     alife.borrow_mut().simulation = Some(loaded);
-    g.scripts().create_simulation_objects(&system).unwrap();
+    g.scripts()
+        .create_simulation_objects(&system, Creation::Load)
+        .unwrap();
     assert_eq!(objects().borrow().held_count(), count, "loaded");
     assert_eq!(objects_as_scripts_get_them(&mut g, ids), want, "load");
     eprintln!(

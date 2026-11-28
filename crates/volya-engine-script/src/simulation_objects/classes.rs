@@ -21,6 +21,7 @@ use volya_engine_formats::object::{Kind, Object, ObjectRecord, TraderLike};
 use super::{Context, SimulationObject, truth};
 use crate::Value;
 use crate::classes::{EngineClass, Objects, Operand};
+use crate::data_streams::NetPacket;
 use crate::files::{IniFile, config_from_text};
 use crate::game_object::game_bytes;
 use crate::object_factory::ObjectFactory;
@@ -823,16 +824,26 @@ fn add_member(
             })
         }
         "STATE_Read" => {
-            let read = |o: &mut SimulationObject, _: &[Value]| {
-                if let Some(record) = o.pending.take() {
-                    o.record = Some(record);
+            // The engine's own reads the engine's state: the packet's read
+            // position then where the scripted additions start (sav.md
+            // 7.5), for the script part to read on.
+            let read = |o: &mut SimulationObject, objects: &Objects, args: &[Value]| {
+                if let Some(pending) = o.pending.take() {
+                    let packet = args.first().unwrap_or(&Value::Nil);
+                    if let Some(Operand::Other(mut p)) = objects.get::<NetPacket>(packet) {
+                        p.read_position = pending.scripted_additions;
+                        objects.set(packet, p);
+                    }
+                    if o.simulation.is_none() {
+                        o.record = Some(pending.record);
+                    }
                 }
                 Ok(Vec::new())
             };
             if owner == "cse_abstract" {
-                c.method_with_default(name, read, pure_virtual(ctx, "STATE_Read"))
+                c.method_with_objects_and_default(name, read, pure_virtual(ctx, "STATE_Read"))
             } else {
-                c.overridable(name, read)
+                c.overridable_with_objects(name, read)
             }
         }
         "STATE_Write" => {

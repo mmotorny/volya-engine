@@ -819,18 +819,37 @@ end
     assert_eq!(loaded, [Value::from("table"), "table".into()]);
     // The New Game's objects were made through the object factory (spec C
     // 6.1): `alife()` gives the `esc_lager` smart terrain's script object,
-    // its fields as `se_smart_terrain`'s constructor set them, and the same
-    // object for the trader its binder was given.
+    // and the same object for the trader its binder was given. Script API
+    // J 5.1, 5.3, 5.4: the smart terrain read its configuration in its
+    // `STATE_Read` and was registered (`on_register`), and the campfire's
+    // stalkers were registered and spawned.
     let made = scripts
         .scripts()
         .exec(
             "=t",
             b"local sim = alife() local t = sim:object('esc_lager')\n\
-              return t.registred, t:clsid() == clsid.smart_terrain, \
-              sim:object('escape_trader'):clsid() == clsid.script_trader",
+              local stalkers = 0\n\
+              for i = 1, 65534 do\n\
+                local s = sim:object(i)\n\
+                if s and s:clsid() == clsid.script_stalker \
+                   and string.find(s:name(), '^esc_lager') then\n\
+                  stalkers = stalkers + 1\n\
+                end\n\
+              end\n\
+              return t.registred, t.initialized, t:clsid() == clsid.smart_terrain, \
+              sim:object('escape_trader'):clsid() == clsid.script_trader, stalkers",
         )
         .unwrap();
-    assert_eq!(made, [Value::Boolean(false), true.into(), true.into()]);
+    assert_eq!(
+        made,
+        [
+            Value::Boolean(true),
+            true.into(),
+            true.into(),
+            true.into(),
+            7.0.into()
+        ]
+    );
     eprintln!(
         "scripts: startup {startup_ms:.1} ms, game scripts' pool {} K; the New Game's frames \
          with calls into scripts {script_ms:.1} ms, the pool after it {} K",

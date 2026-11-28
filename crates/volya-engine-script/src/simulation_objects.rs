@@ -32,6 +32,7 @@ use volya_engine_formats::cp1251;
 use volya_engine_formats::object::{Kind, ObjectRecord};
 
 use crate::classes::{Conversion, EnginePart, OverrideFailure};
+use crate::data_streams::NetPacket;
 use crate::files::FileSystem;
 use crate::game_object::game_bytes;
 use crate::loader::Scripts;
@@ -84,7 +85,7 @@ pub struct SimulationObject {
     /// The `spawn_ini()` configuration, made at the first call (3.2).
     spawn_ini: Option<Rc<Config>>,
     /// The state the engine's `STATE_Read` takes (5.1).
-    pending: Option<ObjectRecord>,
+    pending: Option<Pending>,
     ran: Ran,
 }
 
@@ -188,6 +189,24 @@ impl SimulationObject {
             None => self.record.as_ref().map_or(0xFFFF, |r| r.header.id),
         }
     }
+}
+
+/// What the engine's `STATE_Read` takes (5.1): the state it reads, and the
+/// packet's read position where the scripted additions start (sav.md 7.5),
+/// at which it leaves the packet.
+#[derive(Clone)]
+pub(crate) struct Pending {
+    pub record: ObjectRecord,
+    pub scripted_additions: u32,
+}
+
+/// How the simulation's objects came to be (offline-simulation.md 8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Creation {
+    /// A New Game's, from the spawn file's records and their supplies (8.1).
+    NewGame,
+    /// A load's, from the save's records (8.2).
+    Load,
 }
 
 /// A simulation object's state as a member reads it.
@@ -329,23 +348,6 @@ fn object_or_nil(part: Option<EnginePart>) -> Value {
     part.map_or(Value::Nil, Value::Object)
 }
 
-/// The data size field of spawn packet `spawn` (sav.md 7.2), which counts
-/// itself: what `STATE_Read` is passed (3.2).
-fn data_size(spawn: &[u8]) -> Option<u16> {
-    let u16_at = |i: usize| Some(u16::from_le_bytes([*spawn.get(i)?, *spawn.get(i + 1)?]));
-    let mut i = 2;
-    for _ in 0..2 {
-        i += spawn.get(i..)?.iter().position(|&b| b == 0)? + 1;
-    }
-    // Game type, the byte after it, position, angles, respawn time, id,
-    // parent id, phantom id, flags, version, script version.
-    i += 2 + 24 + 2 * 7;
-    i += 2 + usize::from(u16_at(i)?);
-    // Spawn id.
-    i += 2;
-    u16_at(i)
-}
-
 impl Scripts {
     /// Registers the classes of section 2 with their members (section 3):
     /// after the game object basics, whose services and files they share,
@@ -473,34 +475,45 @@ impl Scripts {
     }
 
     /// The engine reads the spawn packet of `part` (5.1): its `STATE_Read`
-    /// with the packet at the object state and its data size (3.2). The
-    /// engine's own implementation takes `record` as the object's state.
-    /// `packet` is the packet as scripts read it, the caller's value (spec
-    /// I's engine packet, [`Scripts::new_packet`]; TODO(#1219): the
-    /// engine's own implementation reads it to the script part).
+    /// with the packet `record` writes (sav.md 7.2), an engine packet (spec
+    /// I, [`Scripts::new_packet`]) positioned at the object state, and its
+    /// data size (3.2). The engine's own implementation takes `record` as
+    /// the object's state (unless the object stands for the simulation's,
+    /// whose state it is) and leaves the packet where the scripted
+    /// additions start (sav.md 7.5), from where a script class's override
+    /// reads its own. The packet is released once the call returns.
     pub fn read_state(
         &mut self,
         part: EnginePart,
         record: ObjectRecord,
-        packet: Value,
     ) -> Result<(), OverrideFailure> {
-        let (spawn, _) = record.write().map_err(|e| api(e.to_string()))?;
-        let size = data_size(&spawn).ok_or_else(|| api("a spawn packet without a data size"))?;
-        self.simulation_object(part, |o| o.pending = Some(record))?;
+        let spawn = record
+            .write_spawn_packet()
+            .map_err(|e| api(e.to_string()))?;
+        // The data size counts itself (sav.md 7.2).
+        let size = spawn.bytes.len() - spawn.object_state + 2;
+        let mut packet = NetPacket::holding(&spawn.bytes)
+            .ok_or_else(|| api("a spawn packet larger than a packet's buffer"))?;
+        packet.read_position = spawn.object_state as u32;
+        let packet = self.new_packet(packet)?;
+        let pending = Pending {
+            record,
+            scripted_additions: spawn.scripted_additions as u32,
+        };
+        self.simulation_object(part, |o| o.pending = Some(pending))?;
         let result = self.simulation_call(
             part,
             "STATE_Read",
-            &[packet, Value::Number(f64::from(size))],
+            &[Value::Object(packet), Value::Number(size as f64)],
             Conversion::Nothing,
         );
         self.simulation_object(part, |o| o.pending = None)?;
+        self.release_stream(packet)?;
         result.map(drop)
     }
 
     /// The engine sets the state of `part` without its `STATE_Read`: the
-    /// state the engine holds for an object it made itself, or (until the
-    /// engine hands scripts spec I's packets, TODO(#1219)) for a scripted one,
-    /// whose scripts' own state additions are then not read.
+    /// state the engine holds for an object it made itself.
     pub fn set_simulation_state(
         &mut self,
         part: EnginePart,
@@ -567,14 +580,30 @@ impl Scripts {
         self.boolean_call(part, "keep_saved_data_anyway")
     }
 
+    /// Whether `part` is a dynamic object (`cse_alife_dynamic_object`
+    /// or derived from it), the classes with `on_spawn`,
+    /// `on_before_register`, `on_register`, `on_unregister` and
+    /// `keep_saved_data_anyway` (3.4): an object of another class gets none
+    /// of these calls (our reading: it has no such method).
+    fn dynamic(&self, part: EnginePart) -> Result<bool, Error> {
+        let class = self.simulation_object(part, |o| o.class)?;
+        Ok(classes::derives(class, "cse_alife_dynamic_object"))
+    }
+
     /// `on_spawn()` (5.4): once for an object the simulation creates.
     pub fn on_spawn(&mut self, part: EnginePart) -> Result<(), OverrideFailure> {
+        if !self.dynamic(part)? {
+            return Ok(());
+        }
         self.simulation_call(part, "on_spawn", &[], Conversion::Nothing)
             .map(drop)
     }
 
     /// `on_before_register()` (5.3): first in the object's registration.
     pub fn on_before_register(&mut self, part: EnginePart) -> Result<(), OverrideFailure> {
+        if !self.dynamic(part)? {
+            return Ok(());
+        }
         self.simulation_call(part, "on_before_register", &[], Conversion::Nothing)
             .map(drop)
     }
@@ -585,6 +614,9 @@ impl Scripts {
     /// call returns (our placement: the original asks within the base
     /// call).
     pub fn on_register(&mut self, part: EnginePart) -> Result<bool, OverrideFailure> {
+        if !self.dynamic(part)? {
+            return Ok(false);
+        }
         self.simulation_object(part, |o| o.ran.on_register = false)?;
         self.simulation_call(part, "on_register", &[], Conversion::Nothing)?;
         Ok(self.simulation_object(part, |o| std::mem::take(&mut o.ran.on_register))?)
@@ -594,6 +626,9 @@ impl Scripts {
     /// map spots of the object's id (believed); done after the call returns
     /// (our placement).
     pub fn on_unregister(&mut self, part: EnginePart) -> Result<(), OverrideFailure> {
+        if !self.dynamic(part)? {
+            return Ok(());
+        }
         self.simulation_object(part, |o| o.ran.on_unregister = false)?;
         self.simulation_call(part, "on_unregister", &[], Conversion::Nothing)?;
         let (ran, id) =
@@ -737,32 +772,68 @@ impl Scripts {
     }
 
     /// The New Game's or the load's objects created through the object
-    /// factory (spec C 6.1; offline-simulation.md 8.1 step 3.1, 8.2): the
-    /// server object of each object of spec K's simulation, in creation
-    /// order (a New Game's in increasing spawn index, a load's in
-    /// increasing id), held by the engine from then on: a script entry's
+    /// factory (spec C 6.1; offline-simulation.md 8.1 step 3, 8.2), with
+    /// spec J's calls: the server object of each object of spec K's
+    /// simulation, held by the engine from then on, a script entry's
     /// initialised (2.2), an engine entry's the engine's own object of its
-    /// kind's class ([`engine_class`]). Each object's state is the
-    /// simulation's. The scripts' `STATE_Read` and the registration calls
-    /// (5.1, 5.3, 5.4) are not made (TODO(#1219): until spec I's packets
-    /// let scripts read their state; the shipped smart terrains' scripts
-    /// read their configuration there). Objects already held are kept.
-    pub fn create_simulation_objects(&mut self, system: &Config) -> Result<(), Error> {
+    /// kind's class ([`engine_class`]), each standing for the simulation's
+    /// object (its state the simulation's). In creation order: a New Game's
+    /// records in increasing spawn index, each followed by its supplies
+    /// (8.1 step 3.4), a load's objects in increasing id. Each object made
+    /// from a record (a New Game's spawn record, a save's record) reads its
+    /// packet (`STATE_Read`, 5.1); each then gets `on_before_register` (its
+    /// registration, 5.3); at a New Game each gets `on_spawn` (5.4), a
+    /// supply right after its registration, a record once its supplies
+    /// are made. Then the post-registration step (8.1 step 4, sav.md 11.2
+    /// step 7): `on_register` for each in increasing id, the engine's own
+    /// applying the client-data rule (sav.md 8) with the object's
+    /// `keep_saved_data_anyway`. The core simulation has registered every
+    /// object first (our placement: the original makes and registers each
+    /// as it creates the object from its record). Objects already held are
+    /// kept and get no calls. A script error in a call is fatal (spec A
+    /// 5.3).
+    pub fn create_simulation_objects(
+        &mut self,
+        system: &Config,
+        creation: Creation,
+    ) -> Result<(), OverrideFailure> {
         let ctx = self.simulation_context()?;
         let alife =
             (ctx.alife.clone()).ok_or_else(|| api("the simulation registry isn't registered"))?;
-        let mut order: Vec<(u32, u16, String)> = {
+        // (group, a supply, id, section).
+        let mut order: Vec<(u32, bool, u16, String)> = {
             let a = alife.borrow();
             let sim = (a.simulation.as_ref()).ok_or_else(|| api("there is no simulation"))?;
+            // A supply's group is the spawn index of the record it was
+            // created after: its outermost carrier's.
+            let group = |mut id: u16| {
+                for _ in 0..sim.len() {
+                    let Some(o) = sim.object(id) else { break };
+                    if let Some(index) = o.spawn_index {
+                        return index;
+                    }
+                    id = o.record.header.parent_id;
+                }
+                u32::MAX
+            };
             sim.objects()
                 .map(|o| {
-                    let index = o.spawn_index.unwrap_or(u32::MAX);
-                    (index, o.id, o.record.header.section.to_string())
+                    let section = o.record.header.section.to_string();
+                    match creation {
+                        Creation::NewGame => {
+                            let supply = o.spawn_index.is_none();
+                            (group(o.id), supply, o.id, section)
+                        }
+                        Creation::Load => (0, false, o.id, section),
+                    }
                 })
                 .collect()
         };
-        order.sort_unstable_by_key(|&(index, id, _)| (index, id));
-        for (_, id, section) in order {
+        order.sort_unstable_by_key(|&(group, supply, id, _)| (group, supply, id));
+        let mut made = Vec::new();
+        // A New Game's record whose `on_spawn` waits for its supplies.
+        let mut record_spawned = None;
+        for (_, supply, id, section) in order {
             if ctx.state.borrow().held.contains_key(&id) {
                 continue;
             }
@@ -772,6 +843,39 @@ impl Scripts {
                 o.record = None;
                 o.simulation = Some((id, Rc::clone(&alife)));
             })?;
+            if !supply {
+                if let Some(part) = record_spawned.take() {
+                    self.on_spawn(part)?;
+                }
+                let record = {
+                    let a = alife.borrow();
+                    let sim = a.simulation.as_ref().expect("checked");
+                    sim.object(id).map(|o| o.record.clone())
+                };
+                let record = record.ok_or_else(|| api("the simulation has no such object"))?;
+                self.read_state(held.part, record)?;
+            }
+            self.on_before_register(held.part)?;
+            if creation == Creation::NewGame {
+                if supply {
+                    self.on_spawn(held.part)?;
+                } else {
+                    record_spawned = Some(held.part);
+                }
+            }
+            made.push((id, held.part));
+        }
+        if let Some(part) = record_spawned {
+            self.on_spawn(part)?;
+        }
+        made.sort_unstable_by_key(|&(id, _)| id);
+        for (id, part) in made {
+            if self.on_register(part)? {
+                let keeps = self.keep_saved_data_anyway(part)?;
+                if let Some(sim) = alife.borrow_mut().simulation.as_mut() {
+                    sim.client_data_rule(id, keeps);
+                }
+            }
         }
         Ok(())
     }
@@ -811,8 +915,10 @@ impl Scripts {
     /// (its id), for the online object spawning from it to get (spec M
     /// 10.2, spec L 5.1): the one [`Scripts::create_simulation_objects`]
     /// made, or one made now as it makes them; its state the simulation's
-    /// object's when spec K's simulation holds it, else set to `record`
-    /// each time (without its scripts' `STATE_Read`, TODO(#1219)).
+    /// object's when spec K's simulation holds it, else `record`: read by a
+    /// new one (`STATE_Read`, 5.1), set on a held one each time. (Spec K's
+    /// objects get theirs from [`Scripts::create_simulation_objects`]; one
+    /// made here gets no registration calls, TODO(#1253).)
     pub fn server_object_for(
         &mut self,
         system: &Config,
@@ -845,6 +951,8 @@ impl Scripts {
                     o.simulation = Some((id, alife));
                 })?;
             }
+            // A new one reads it (5.1).
+            None if held.is_none() => self.read_state(part, record.clone())?,
             None => self.set_simulation_state(part, record.clone())?,
         }
         Ok(part)
@@ -880,20 +988,28 @@ impl Scripts {
         Ok(())
     }
 
-    /// Releases every server object the engine holds (the simulation ends:
-    /// the level is left or a New Game starts over it), in increasing id.
-    pub fn release_server_objects(&mut self) -> Result<(), Error> {
+    /// The simulation is destroyed (the level is left or a New Game starts
+    /// over it): each server object the engine holds, in increasing id
+    /// (the registry's order, offline-simulation.md 6.1), gets its
+    /// `on_unregister` (5.5) and is released, while the simulation still
+    /// holds its object. Those of objects that already left it (spec K's
+    /// `release`) are released without the call (TODO(#1252)). A script
+    /// error in a call is fatal (spec A 5.3).
+    pub fn release_server_objects(&mut self) -> Result<(), OverrideFailure> {
         let Ok(state) = self.simulation_objects() else {
             return Ok(());
         };
-        let held: Vec<Held> = {
+        let (held, gone): (Vec<(u16, Held)>, Vec<u16>) = {
             let mut s = state.borrow_mut();
-            s.released.clear();
+            let gone = std::mem::take(&mut s.released);
             let mut held: Vec<(u16, Held)> = s.held.drain().collect();
             held.sort_unstable_by_key(|&(id, _)| id);
-            held.into_iter().map(|(_, h)| h).collect()
+            (held, gone)
         };
-        for h in held {
+        for (id, h) in held {
+            if !gone.contains(&id) {
+                self.on_unregister(h.part)?;
+            }
             self.release_held(h)?;
         }
         Ok(())

@@ -580,7 +580,7 @@ fn create(ctx: &Context, name: &str, o: &Objects, args: &[Value]) -> Results {
         // For an online parent before it is handed to the server (7.2).
         a.rounds_left = count;
     }
-    // Step 4 (spec J's script calls, 7.4: TODO(#1219)); the supplies of
+    // Step 4 (spec J's script calls, 7.4: TODO(#1253)); the supplies of
     // step 5 are not created (TODO(#1221)).
     sim.register_created(record, None, &system)
         .map_err(|e| ctx.failed_check(name, &e.to_string(), &[]))?;
@@ -667,7 +667,7 @@ fn release(ctx: &Context, o: &Objects, args: &[Value]) -> Results {
         return Ok(Vec::new());
     }
     // 4.3: an object whose story id has no entry gives a log line. Spec J's
-    // `on_unregister` comes first (7.4): TODO(#1219).
+    // `on_unregister` comes first (7.4): TODO(#1252).
     let mut missing = Vec::new();
     let mut stack = vec![id];
     while let Some(x) = stack.pop() {

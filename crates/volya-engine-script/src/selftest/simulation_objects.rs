@@ -85,7 +85,7 @@ function flesh:STATE_Write(packet)
 end
 function flesh:STATE_Read(packet, size)
   cse_alife_monster_base.STATE_Read(self, packet, size)
-  note("STATE_Read " .. tostring(packet) .. " " .. size .. " " .. self:name())
+  note("STATE_Read " .. packet:r_tell() .. " " .. size .. " " .. self:name())
 end
 function flesh:on_death(killer)
   cse_alife_monster_base.on_death(self, killer)
@@ -157,6 +157,8 @@ fn state() -> Result<State, String> {
         .map_err(|e| e.message)?;
     let objects = Rc::new(RefCell::new(GameObjects::new()));
     s.register_game_object_basics(objects, Rc::clone(&services), files)
+        .map_err(|e| e.message)?;
+    s.register_data_streams(Rc::clone(&services))
         .map_err(|e| e.message)?;
     s.register_simulation_objects().map_err(|e| e.message)?;
     s.load_globals().map_err(|e| e.message)?;
@@ -512,17 +514,19 @@ eq(f:section_name(), "flesh", "section_name")
 eq(pcall(f.name, f), false, "the state isn't read yet")
 "#,
     )?;
-    t.s.read_state(flesh, flesh_record(7, 0.5)?, Value::Nil)
+    t.s.read_state(flesh, flesh_record(7, 0.5)?)
         .map_err(|e| e.to_string())?;
-    let size = flesh_record(7, 0.5)?
-        .write()
-        .map(|(spawn, _)| spawn.len())
+    let spawn = flesh_record(7, 0.5)?
+        .write_spawn_packet()
         .map_err(|e| e.to_string())?;
+    // The engine's own leaves the packet where the scripted additions
+    // start (none for this class id: its end); the data size counts itself.
+    let size = spawn.bytes.len() - spawn.object_state + 2;
     let notes = taken(&mut t)?;
-    ensure(
-        notes.starts_with("STATE_Read nil ") && notes.ends_with(" flesh"),
-        || format!("STATE_Read's override and arguments: {notes} (packet {size} bytes)"),
-    )?;
+    let want = format!("STATE_Read {} {size} flesh", spawn.bytes.len());
+    ensure(notes == want, || {
+        format!("STATE_Read's override and arguments: {notes}, not {want}")
+    })?;
     let clsid =
         t.s.object_factory()
             .number(class_id(b"AI_FLESH"))
@@ -723,7 +727,7 @@ pub fn dispatch() -> Result<(), String> {
 pub fn engine_calls() -> Result<(), String> {
     let mut t = state()?;
     let flesh = make(&mut t, "flesh", "flesh")?;
-    t.s.read_state(flesh, flesh_record(7, 0.5)?, Value::Nil)
+    t.s.read_state(flesh, flesh_record(7, 0.5)?)
         .map_err(|e| e.to_string())?;
     taken(&mut t)?;
     // 5.1: STATE_Write's base call writes the engine's state.

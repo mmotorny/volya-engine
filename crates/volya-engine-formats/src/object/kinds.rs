@@ -1032,6 +1032,29 @@ impl Object {
         })
     }
 
+    /// Writes the scripted state additions (section 7.5) alone to `s`:
+    /// nothing for a kind or class id without them. Every kind that has them
+    /// writes them last in its object state.
+    pub(super) fn write_scripted_additions(&self, s: &mut Writer) -> io::Result<()> {
+        match self {
+            Self::Stalker(o) => write_opt(s, &o.script, CharacterScript::write),
+            Self::Monster(o) => write_opt(s, &o.script, CharacterScript::write),
+            Self::Anomaly(o) => write_opt(s, &o.script, ArtefactSpawnScript::write),
+            Self::VisualAnomaly(o) => write_opt(s, &o.script, ArtefactSpawnScript::write),
+            Self::SmartZone(o) => match &o.script {
+                SmartZoneScript::None => Ok(()),
+                SmartZoneScript::SmartTerrain(t) => t.write(s),
+                SmartZoneScript::Respawn(ids) => {
+                    s.u8(u8::try_from(ids.len())
+                        .map_err(|_| invalid("more than 255 spawned objects"))?);
+                    ids.iter().for_each(|&id| s.u16(id));
+                    Ok(())
+                }
+            },
+            _ => Ok(()),
+        }
+    }
+
     /// Writes the object state to `s` and the update data to `u`.
     pub(super) fn write(&self, s: &mut Writer, u: &mut Writer) -> io::Result<()> {
         match self {
@@ -1044,7 +1067,7 @@ impl Object {
             }
             Self::Monster(o) => {
                 o.state.write(s)?;
-                write_opt(s, &o.script, CharacterScript::write)?;
+                self.write_scripted_additions(s)?;
                 o.update.write(u);
             }
             Self::CrowOrPhantom(o) => {
@@ -1123,14 +1146,14 @@ impl Object {
             Self::Zone(o) => o.write(s)?,
             Self::Anomaly(o) => {
                 o.anomaly.write(s)?;
-                write_opt(s, &o.script, ArtefactSpawnScript::write)?;
+                self.write_scripted_additions(s)?;
             }
             Self::VisualAnomaly(o) => {
                 o.anomaly.write(s)?;
                 o.visual.write(s)?;
                 s.string(&o.idle_animation)?;
                 s.string(&o.attack_animation)?;
-                write_opt(s, &o.script, ArtefactSpawnScript::write)?;
+                self.write_scripted_additions(s)?;
             }
             Self::TorridZone(o) => {
                 o.zone.write(s)?;
@@ -1151,15 +1174,7 @@ impl Object {
             Self::Restrictor(o) => o.write(s)?,
             Self::SmartZone(o) => {
                 o.restrictor.write(s)?;
-                match &o.script {
-                    SmartZoneScript::None => {}
-                    SmartZoneScript::SmartTerrain(t) => t.write(s)?,
-                    SmartZoneScript::Respawn(ids) => {
-                        s.u8(u8::try_from(ids.len())
-                            .map_err(|_| invalid("more than 255 spawned objects"))?);
-                        ids.iter().for_each(|&id| s.u16(id));
-                    }
-                }
+                self.write_scripted_additions(s)?;
             }
             Self::TeamBase(o) => {
                 o.restrictor.write(s)?;

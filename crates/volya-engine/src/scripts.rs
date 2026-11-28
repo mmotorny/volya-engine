@@ -48,6 +48,7 @@ use crate::script::loader::{Prefix, Trees};
 use crate::script::object_factory::{CreatedObject, GameTypeKind, Sides};
 use crate::script::services::EngineServices;
 use crate::script::simulation::Event as SimulationEvent;
+use crate::script::simulation_objects::Creation;
 use crate::script::story::{Icon, SharedInfoPortions, Story};
 use crate::script::window_files::WindowFiles;
 use crate::script::{Error, ErrorKind};
@@ -213,8 +214,8 @@ pub fn new_game(scripts: &GameScripts) {
 /// over it): every object the scripts still see is destroyed, its binder
 /// getting `net_destroy()` (spec L 5.6; TODO(#1019): gap 2, the simplest
 /// reading), the game's story forgotten, then the level's call list
-/// emptied, none of it called (spec O 6.5), the server objects the
-/// objects spawned from released (script API J), the default trade
+/// emptied, none of it called (spec O 6.5), the simulation's server
+/// objects unregistered and released (script API J 5.5), the default trade
 /// parameters dropped (script API R 5.2), the game clock gone (script
 /// API H), the creatures' sound state forgotten (script API T) and the
 /// player's screen effects (script API U). A script error is fatal.
@@ -245,10 +246,13 @@ pub fn level_ended(scripts: &mut GameScripts) -> Result<(), Error> {
     // (script API U 2.4).
     scripts.effects_and_weather().borrow_mut().level_ended();
     scripts.scripts().clear_level_calls()?;
-    // Script API K: `alife()` is nil until the next level's simulation; script
-    // API Q's relations registry, ranking and statistics go with it.
+    // Script API J 5.5: the simulation's objects unregistered and their
+    // server objects released while it still holds them; then script API
+    // K's `alife()` is nil until the next level's simulation, script API
+    // Q's relations registry, ranking and statistics going with it.
+    let released = scripts.scripts().release_server_objects();
+    released.map_err(|f| override_fatal(scripts, f))?;
     scripts.simulation().borrow_mut().end();
-    scripts.scripts().release_server_objects()?;
     // Script API N 6.5: the spawn manager's table emptied and the level
     // gone, with the game's patrol paths.
     scripts.scripts().end_level()?;
@@ -302,16 +306,25 @@ pub struct ClientSpawning<'a> {
 /// which made the New Game's simulation (offline-simulation.md 8.1): the
 /// simulation shared with the scripts' `alife()` from here on (script API
 /// K), and every object's server object created through the object
-/// factory (spec C 6.1, script API J 2.2; our placement: the original makes
-/// each as it creates the object from its record, the simulation here
-/// creates them all first). A script error is fatal.
+/// factory with script API J's calls: each reads its packet, is
+/// registered and spawned, then each gets `on_register` (spec C 6.1,
+/// script API J 2.2, 5.1, 5.3, 5.4; our placement: the original makes each
+/// as it creates the object from its record, the simulation here creates
+/// them all first). A script error is fatal.
 pub fn creating_new_game(
     scripts: &mut GameScripts,
     loading: &mut Loading,
     data: &GameData,
 ) -> Result<(), Error> {
     loading.share_simulation(Rc::clone(scripts.simulation()));
-    scripts.scripts().create_simulation_objects(&data.system)
+    // Script API N: the game's patrol paths, the simulation's from the
+    // spawn file, which the registration calls read (`patrol`; our
+    // placement, as at the level's spawning).
+    let paths =
+        (scripts.simulation().borrow().simulation.as_ref()).map(|s| Rc::new(s.paths.clone()));
+    scripts.level().borrow_mut().patrol_paths = paths;
+    let created = (scripts.scripts()).create_simulation_objects(&data.system, Creation::NewGame);
+    created.map_err(|f| override_fatal(scripts, f))
 }
 
 /// `st_client_spawning` (3.3 step 11.4), after the caption's own work

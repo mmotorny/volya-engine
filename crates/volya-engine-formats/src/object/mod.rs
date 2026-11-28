@@ -282,6 +282,18 @@ fn message(r: &mut Reader, expected: u16, what: &str) -> io::Result<()> {
     }
 }
 
+/// A spawn packet as [`ObjectRecord::write_spawn_packet`] writes it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpawnPacket {
+    /// The packet, without its `u16` length.
+    pub bytes: Vec<u8>,
+    /// Where the object state starts.
+    pub object_state: usize,
+    /// Where the scripted state additions start: the end of the engine's
+    /// state (the packet's end for a record without additions).
+    pub scripted_additions: usize,
+}
+
 /// One object record, typed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectRecord {
@@ -481,6 +493,24 @@ impl ObjectRecord {
         let update = update.into_inner();
         length16(update.len(), "update packet")?;
         Ok((spawn, update))
+    }
+
+    /// The spawn packet [`Self::write`] writes, with where its object state
+    /// starts (after the data size, section 7.2) and where the scripted
+    /// state additions start (section 7.5: appended after the engine's
+    /// state, the object state ending the packet).
+    pub fn write_spawn_packet(&self) -> io::Result<SpawnPacket> {
+        let (bytes, _) = self.write()?;
+        let mut state = Writer::new();
+        self.object.write(&mut state, &mut Writer::new())?;
+        let mut additions = Writer::new();
+        self.object.write_scripted_additions(&mut additions)?;
+        let end = bytes.len();
+        Ok(SpawnPacket {
+            object_state: end - state.into_inner().len(),
+            scripted_additions: end - additions.into_inner().len(),
+            bytes,
+        })
     }
 
     pub fn kind(&self) -> Kind {

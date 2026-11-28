@@ -557,3 +557,33 @@ fn writer_rejects_records_no_reader_can_parse() {
     g.update_flag = 0;
     assert!(fails(&r));
 }
+
+/// Where a spawn packet's object state and scripted additions start
+/// (sections 7.2, 7.5): the additions last, none for a kind without them.
+#[test]
+fn spawn_packets_mark_the_object_state_and_the_scripted_additions() {
+    let restrictor = bytes(|w| {
+        object_block(w);
+        write_shapes(
+            w,
+            &[Shape::Sphere {
+                centre: [0.0; 3],
+                radius: 2.0,
+            }],
+        )
+        .unwrap();
+        w.u8(3);
+    });
+    let empty = update(&[]);
+    let terrain = spawn("smart_terrain", 6, &[&restrictor[..], &[0, 0, 0]].concat());
+    let r = ObjectRecord::parse(&terrain, &empty, "SMRTTRRN", true).unwrap();
+    let p = r.write_spawn_packet().unwrap();
+    assert_eq!(p.bytes, terrain);
+    assert_eq!(p.object_state, terrain.len() - restrictor.len() - 3);
+    assert_eq!(p.scripted_additions, terrain.len() - 3);
+    let zone = spawn("zone", 7, &restrictor);
+    let r = ObjectRecord::parse(&zone, &empty, "SMRTZONE", true).unwrap();
+    let p = r.write_spawn_packet().unwrap();
+    assert_eq!(p.object_state, zone.len() - restrictor.len());
+    assert_eq!(p.scripted_additions, zone.len());
+}

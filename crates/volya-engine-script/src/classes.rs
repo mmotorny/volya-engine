@@ -322,6 +322,24 @@ impl EngineClass {
         self
     }
 
+    /// A method that reads or writes the engine parts of object arguments
+    /// ([`Objects`]), whose member and default implementation differ, as
+    /// for [`EngineClass::method_with_default`].
+    pub fn method_with_objects_and_default<T: Any>(
+        mut self,
+        name: &str,
+        call: impl Fn(&mut T, &Objects, &[Value]) -> Result<Vec<Value>, String> + 'static,
+        default: impl Fn(&mut T, &[Value]) -> Result<Vec<Value>, String> + 'static,
+    ) -> Self {
+        self.methods.push(Method {
+            name: name.to_owned(),
+            call: Rc::new(move |part, objects, args| call(downcast_mut(part)?, objects, args)),
+            default: Some(part_fn(default)),
+            object: false,
+        });
+        self
+    }
+
     /// A method that reads the engine parts of object arguments or gives
     /// objects as results ([`Objects`]), `call` being both the member and
     /// the default implementation, as for [`EngineClass::overridable`].
